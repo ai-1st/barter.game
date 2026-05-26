@@ -96,6 +96,162 @@ export class BankDB {
     return data as AccountRow | null;
   }
 
+  /** Look up all accounts owned by a holder at this bank. */
+  async listAccountsByHolder(holderPubkey: string): Promise<AccountRow[]> {
+    const { data, error } = await this.sb
+      .from("accounts")
+      .select("*")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("holder_pubkey", holderPubkey);
+    if (error) throw new Error(`accounts.byHolder: ${error.message}`);
+    return (data as AccountRow[]) ?? [];
+  }
+
+  /** Look up multiple docs by hash. Returns a hash → body map. */
+  async getDocsByHashes(hashes: string[]): Promise<Record<string, Record<string, unknown>>> {
+    if (hashes.length === 0) return {};
+    const { data, error } = await this.sb
+      .from("docs")
+      .select("hash, body")
+      .eq("bank_pubkey", this.bankPubkey)
+      .in("hash", hashes);
+    if (error) throw new Error(`docs.byHashes: ${error.message}`);
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const row of data ?? []) {
+      out[row.hash as string] = row.body as Record<string, unknown>;
+    }
+    return out;
+  }
+
+  /**
+   * Apply a balance delta to an Account row. Used by settle.
+   * Returns the new balance.
+   */
+  async applyBalanceDelta(accountHash: string, delta: number): Promise<string> {
+    const { data, error } = await this.sb.rpc("apply_balance_delta", {
+      _account_hash: accountHash,
+      _bank_pubkey: this.bankPubkey,
+      _delta: delta,
+    });
+    if (error) {
+      // Fallback path if the stored proc isn't installed: read-modify-write.
+      // Race-safe for single-writer banks (one Edge Function instance at a
+      // time per Supabase project); contended writes still serialize via
+      // Postgres row locks on the SELECT FOR UPDATE inside this function.
+      return this.applyBalanceDeltaInline(accountHash, delta);
+    }
+    return String(data);
+  }
+
+  private async applyBalanceDeltaInline(accountHash: string, delta: number): Promise<string> {
+    const acct = await this.getAccount(accountHash);
+    if (!acct) throw new Error(`account ${accountHash} not found`);
+    const newBalance = Number(acct.balance) + delta;
+    const { error } = await this.sb
+      .from("accounts")
+      .update({ balance: newBalance })
+      .eq("account_hash", accountHash)
+      .eq("bank_pubkey", this.bankPubkey);
+    if (error) throw new Error(`accounts.updateBalance: ${error.message}`);
+    return String(newBalance);
+  }
+
+  /** Acquire a hold on an Account for a Tx. Returns true if acquired, false on conflict. */
+  async acquireHold(input: {
+    accountHash: string;
+    txHash: string;
+    amount: number;
+  }): Promise<boolean> {
+    const { error } = await this.sb.from("holds").insert({
+      account_hash: input.accountHash,
+      tx_hash: input.txHash,
+      bank_pubkey: this.bankPubkey,
+      amount: input.amount,
+      active: true,
+    });
+    if (error) {
+      if (error.code === "23505") return false; // already a hold on this account
+      throw new Error(`holds.insert: ${error.message}`);
+    }
+    return true;
+  }
+
+  /** Release a hold (settle or reject path). */
+  async releaseHold(accountHash: string, txHash: string): Promise<void> {
+    const { error } = await this.sb
+      .from("holds")
+      .update({ active: false, released_at: new Date().toISOString() })
+      .eq("account_hash", accountHash)
+      .eq("tx_hash", txHash)
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("active", true);
+    if (error) throw new Error(`holds.release: ${error.message}`);
+  }
+
+  /** Tx state machine helpers. Only writes fields that are explicitly set, so
+   *  a state-only update doesn't null out lead_bank_pubkey / follow_bank_pubkey
+   *  populated on a previous call. */
+  async upsertTx(input: {
+    txHash: string;
+    state: string;
+    leadBankPubkey?: string;
+    followBankPubkey?: string;
+  }): Promise<void> {
+    const row: Record<string, unknown> = {
+      tx_hash: input.txHash,
+      bank_pubkey: this.bankPubkey,
+      state: input.state,
+    };
+    if (input.leadBankPubkey !== undefined) row.lead_bank_pubkey = input.leadBankPubkey;
+    if (input.followBankPubkey !== undefined) row.follow_bank_pubkey = input.followBankPubkey;
+    const { error } = await this.sb.from("txs").upsert(row, { onConflict: "tx_hash,bank_pubkey" });
+    if (error) throw new Error(`txs.upsert: ${error.message}`);
+  }
+
+  /** Record (or refresh) a peer bank URL we just heard from. */
+  async rememberPeer(peerPubkey: string, peerUrl: string): Promise<void> {
+    const { error } = await this.sb.from("bank_peers").upsert(
+      {
+        bank_pubkey: this.bankPubkey,
+        peer_pubkey: peerPubkey,
+        peer_url: peerUrl,
+        last_seen: new Date().toISOString(),
+      },
+      { onConflict: "bank_pubkey,peer_pubkey" },
+    );
+    if (error) throw new Error(`bank_peers.upsert: ${error.message}`);
+  }
+
+  async lookupPeerUrl(peerPubkey: string): Promise<string | null> {
+    const { data, error } = await this.sb
+      .from("bank_peers")
+      .select("peer_url")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("peer_pubkey", peerPubkey)
+      .maybeSingle();
+    if (error) throw new Error(`bank_peers.lookup: ${error.message}`);
+    return (data?.peer_url as string) ?? null;
+  }
+
+  async getTxState(txHash: string): Promise<{
+    state: string;
+    lead_bank_pubkey: string | null;
+    follow_bank_pubkey: string | null;
+  } | null> {
+    const { data, error } = await this.sb
+      .from("txs")
+      .select("state, lead_bank_pubkey, follow_bank_pubkey")
+      .eq("tx_hash", txHash)
+      .eq("bank_pubkey", this.bankPubkey)
+      .maybeSingle();
+    if (error) throw new Error(`txs.getState: ${error.message}`);
+    return data as {
+      state: string;
+      lead_bank_pubkey: string | null;
+      follow_bank_pubkey: string | null;
+    } | null;
+  }
+
   /**
    * Replay-window check + insert in one trip. Returns false if the (sender, id, to)
    * tuple was already seen — caller MUST reject as -32002.

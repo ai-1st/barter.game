@@ -2,97 +2,129 @@
 
 A federated mutual-credit ledger. Be your own bank.
 
-Status: **Weekend 1** of the v1 build (see `~/.gstack/projects/barter.game/xo-main-design-20260526-145322.md`).
+## What's live (v1)
 
-## What ships in this commit (W1)
+Two banks deployed on Supabase, multi-tenant Postgres backing both. Real ed25519-signed JSON-RPC. Real cross-bank `propose → approve → hold → confirm → settle` end-to-end, with the lead/follow risk model from the design doc.
 
-- **`packages/protocol`** — pure-TS protocol library. No I/O.
-  - `canonical.ts` — RFC 8785 JSON canonicalization. Hand-rolled, no npm-shim drift between Deno and Bun.
-  - `crypto.ts` — ed25519 sign/verify, base58 encode/decode, SHA-256, ULIDs, hash-and-sign helpers.
-  - `schemas.ts` — `Promise`, `Pocket`, `Account`, `Record`, `Tx`, `Signature` types + runtime validators.
-  - `invite.ts` — `barter://` invite string format with self-validating signatures.
-- **`apps/cli`** — `barter` CLI skeleton (`--help`, `--version`, command stubs for W2+).
-- **`supabase/`** — Edge Function scaffold + `bank-alice` Hello World that loads its private key from `BANK_ALICE_PRIV_KEY`, publishes its pubkey at `/.well-known/barter-bank.json`, and signs a challenge on `GET /`.
-- **Cross-runtime canonical-JSON test** — 13 golden vectors that pass under both Bun (`vitest`-style) AND Deno (`Deno.test`). This is the load-bearing parity test the eng review flagged as W1's hard deliverable.
+- **bank-alice** — `https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-alice` (pubkey `FHkPndqnmsjkgUQfFPdeNmLQ8zy8yeGf99LELUJzKUYE`)
+- **bank-bob** — `https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-bob` (pubkey `3cHkSsLHwGpfcX3GcnV7b9vmrajtqPXxXwXVyFYGy6YD`)
 
-## Repo structure
+## Run the demo
+
+```bash
+git clone https://github.com/ai-1st/barter.game.git
+cd barter.game
+bun install
+./scripts/demo.sh
+```
+
+This script provisions two fresh CLI profiles (Alice, Bob), mints a Promise on each bank, opens mutual accounts, runs a cross-bank trade, and shows the resulting balances. Output is human-readable and self-narrating.
+
+End state of the demo trade:
+
+| Holder | Promise | Bank | Balance |
+| --- | --- | --- | --- |
+| Alice | "1 logo" | bank-alice (issuer) | **-1** |
+| Bob | "1 logo" | bank-alice | **+1** |
+| Bob | "1 hour" | bank-bob (issuer) | **-1** |
+| Alice | "1 hour" | bank-bob | **+1** |
+
+Sum per promise = 0. The math binds the two banks together.
+
+## Architecture
+
+```
+                  Alice's CLI                               Bob's CLI
+                  ----------                                --------
+                  ed25519 keys                              ed25519 keys
+                  ~/.barter/profile.json                    ~/.barter/profile.json
+                       │                                          │
+                       │ signed JSON-RPC                          │ signed JSON-RPC
+                       ▼                                          ▼
+       ┌───────────────────────┐                  ┌───────────────────────┐
+       │  bank-alice           │                  │  bank-bob             │
+       │  Edge Function (Deno) │ ◄── peer RPC ──► │  Edge Function (Deno) │
+       │  BANK_ALICE_PRIV_KEY  │                  │  BANK_BOB_PRIV_KEY    │
+       └───────────────────────┘                  └───────────────────────┘
+                       │                                          │
+                       └────────────┬─────────────────────────────┘
+                                    ▼
+                       Supabase Postgres (multi-tenant)
+                       docs, accounts, holds, txs, replay_window, bank_peers
+                       Every row scoped by `bank_pubkey`.
+```
+
+## Repo layout
 
 ```
 barter.game/
-├── packages/
-│   └── protocol/                # @barter.game/protocol
-│       ├── src/
-│       │   ├── canonical.ts
-│       │   ├── crypto.ts
-│       │   ├── schemas.ts
-│       │   ├── invite.ts
-│       │   └── index.ts
-│       ├── test/                # Bun-side tests
-│       └── test-deno/           # Deno-side parity tests
-├── apps/
-│   └── cli/                     # barter CLI
+├── packages/protocol/             @barter.game/protocol (canonical, crypto, schemas, invite)
+├── apps/cli/                      barter CLI (init, mint, open, trade, confirm, settle, inbox)
 ├── supabase/
 │   ├── config.toml
-│   ├── functions/
-│   │   └── bank-alice/          # Hello World Edge Function
-│   └── .env.local               # Local dev secrets (gitignored)
+│   ├── migrations/                docs + accounts + holds + txs + replay_window + bank_peers
+│   └── functions/
+│       ├── _shared/
+│       │   ├── protocol/          (synced from packages/protocol/src via scripts/sync-protocol.ts)
+│       │   └── bank/              db, rpc envelope, handlers, peer client
+│       ├── bank-alice/index.ts
+│       └── bank-bob/index.ts
 ├── scripts/
-│   └── genkey.ts                # ed25519 keypair generator
-├── docs/legacy/                 # Original protocol notes
-└── TODOS.md                     # v1.5+ deferred items
+│   ├── genkey.ts                  generate an ed25519 keypair for a new bank
+│   ├── sync-protocol.ts           sync protocol code into _shared/ before deploy
+│   └── demo.sh                    the full v1 demo (mint → open → trade → settle)
+├── docs/legacy/                   original protocol notes
+└── TODOS.md                       v1.5+ deferred items
+```
+
+## CLI reference
+
+```
+barter init --bank <url>
+barter mint <name> [--integer] [--due YYYY-MM-DD] [--limit N]
+barter open <promise-hash> --bank <issuer-url> [--pocket <hash>]
+barter trade --give <hash>:N --get <hash>:N \
+             --my-give-account <h> --peer-give-account <h> \
+             --peer-get-account <h> --my-get-account <h> \
+             --peer-pubkey <pubkey> --peer-bank <url>
+barter confirm <tx-hash> [--bank <url>]
+barter settle <tx-hash>
+barter inbox [--bank <url>]
 ```
 
 ## Test the protocol package
 
 ```bash
 bun install
-bun test                              # 61 tests pass (Bun-side)
-bun run test:deno                     # 14 tests pass (Deno-side, same fixtures)
-bun run test:all                      # both
+bun run test:all              # 61 Bun tests + 14 Deno tests, cross-runtime canonical JSON parity
 ```
 
-## Run bank-alice locally (without Docker / Supabase CLI)
-
-```bash
-# Generate a bank private key and stash it in .env.local
-bun run scripts/genkey.ts | sed 's/BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > supabase/.env.local
-
-# Serve the Edge Function directly under Deno (faster than `supabase functions serve`)
-export BANK_ALICE_PRIV_KEY=$(grep BANK_ALICE_PRIV_KEY supabase/.env.local | cut -d= -f2)
-deno run --allow-env --allow-net --allow-read supabase/functions/bank-alice/index.ts
-
-# Probe it
-curl http://127.0.0.1:8000/
-curl http://127.0.0.1:8000/.well-known/barter-bank.json
-```
-
-## Deploy bank-alice to a real Supabase project
+## Deploy your own bank
 
 ```bash
 supabase login
 supabase link --project-ref <your-project-ref>
-
-# Set the bank's private key as a project secret
-bun run scripts/genkey.ts | sed 's/BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/bank-alice.env
-supabase secrets set --env-file /tmp/bank-alice.env
-rm /tmp/bank-alice.env
-
-supabase functions deploy bank-alice
+supabase db push                                       # apply migrations
+bun run scripts/genkey.ts | sed 's/BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/key.env
+supabase secrets set --env-file /tmp/key.env && rm /tmp/key.env
+bun run scripts/sync-protocol.ts                       # copy shared protocol code
+supabase functions deploy bank-alice --no-verify-jwt
 ```
 
-After deploy, the function is at `https://<project-ref>.supabase.co/functions/v1/bank-alice/`.
+## v1 limitations (read before building on this)
 
-## What's next (W2)
+- **No protocol-level rollback.** Lead/follow risk model — if follow abandons after lead settles, lead is out. Social recourse only.
+- **No key recovery.** Lose your key, lose your account.
+- **No key rotation.** Bank keys and user keys are forever in v1.
+- **No cross-bank inbox aggregation.** Each `barter inbox` hits one bank at a time.
+- **CLI-only.** Web UI is a v1.5 deliverable.
+- **`barter doctor` not yet implemented.** Lands in v1.5 per TODOS.md.
+- **Two-CLI integration test harness not yet wired.** Manual end-to-end via `scripts/demo.sh`.
 
-Per the design doc: SQL migrations for `docs`, `accounts`, `holds`, `replay_window`; `mint_promise`, `open_account`, same-bank `propose_trade → approve → hold → settle`; CLI commands for `barter mint`, `barter open`, `barter trade` (same-bank path).
+## Design doc
 
-## v1 constraints (read before you build on this)
-
-- No protocol-level rollback. Lead/follow risk model — if follow abandons, lead is out, social recourse only.
-- No key recovery. Lose your key, lose your account.
-- CLI-only client surface in v1. Web UI is v1.5.
-- 5-7 weekends to ship the full v1 protocol; see the design doc's "Next Steps" section.
+`~/.gstack/projects/barter.game/xo-main-design-20260526-145322.md` (Status: APPROVED).
 
 ## License
 
-MIT (planned; license file lands with v1 release in W6).
+MIT (planned; license file lands with v1 release).

@@ -54,3 +54,6 @@ inspector_port = 8083
 # bank-bob ships in W3.
 [functions.bank-alice]
 verify_jwt = false  # ed25519 signatures verify on the wire; no JWT layer
+
+[functions.bank-bob]
+verify_jwt = false

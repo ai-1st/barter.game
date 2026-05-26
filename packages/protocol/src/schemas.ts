@@ -56,13 +56,18 @@ export type Account = BaseDoc & {
   promise: Base58SHA256;
 };
 
-/** Record: one half of a paired credit/debit accounting entry. */
+/** Record: one half of a paired credit/debit accounting entry.
+ *  v1 relaxes `pair` and `tx` to optional because populating them would
+ *  require a circular hash dance (Tx hashes records that hash the Tx).
+ *  The Tx → record binding lives in Tx.records[] ordering; the bank's
+ *  `txs` table joins state by tx_hash.
+ */
 export type LedgerRecord = BaseDoc & {
   type: "credit" | "debit";
   amount: number;
   account: Base58SHA256;
-  pair: Base58SHA256;
-  tx: Base58SHA256;
+  pair?: Base58SHA256;
+  tx?: Base58SHA256;
 };
 
 /** Tx: groups a set of Records into a barter deal. */
@@ -184,9 +189,13 @@ export function validateRecord(d: unknown): asserts d is LedgerRecord {
   if (typeof r.amount !== "number" || !Number.isFinite(r.amount) || r.amount <= 0) {
     throw new TypeError("record.amount must be a positive finite number");
   }
-  for (const field of ["account", "pair", "tx"]) {
-    if (typeof r[field] !== "string" || !BASE58_RE.test(r[field] as string)) {
-      throw new TypeError(`record.${field} must be a base58 hash`);
+  if (typeof r.account !== "string" || !BASE58_RE.test(r.account)) {
+    throw new TypeError("record.account must be a base58 hash");
+  }
+  // v1 relaxation: pair and tx are optional (see schema comment).
+  for (const field of ["pair", "tx"]) {
+    if (r[field] !== undefined && (typeof r[field] !== "string" || !BASE58_RE.test(r[field] as string))) {
+      throw new TypeError(`record.${field} must be a base58 hash if present`);
     }
   }
 }
