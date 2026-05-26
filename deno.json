@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["deno.ns", "deno.window", "ES2022", "DOM"]
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "packages/*/node_modules",
+    "apps/*/node_modules"
+  ],
+  "test": {
+    "include": ["packages/**/test-deno/*.deno-test.ts"]
+  }
+}

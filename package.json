@@ -1,0 +1,21 @@
+{
+  "name": "barter.game",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "bun --filter '@barter.game/protocol' test",
+    "test:deno": "deno test --allow-read",
+    "test:all": "bun run test && bun run test:deno",
+    "build": "bun --filter '*' build",
+    "typecheck": "bun --filter '*' typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/bun": "latest"
+  }
+}

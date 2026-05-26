@@ -1,0 +1,17 @@
+node_modules
+.DS_Store
+dist
+*.log
+.env
+.env.local
+supabase/.env.local
+coverage
+.vscode
+.idea
+
+# Supabase local
+supabase/.branches
+supabase/.temp
+
+# Deno
+.deno
