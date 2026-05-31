@@ -1,0 +1,43 @@
+[build]
+  base = "."
+  publish = "website/public"
+  command = "cd website && hugo --gc --minify"
+
+[build.environment]
+  HUGO_VERSION = "0.150.1"
+  HUGO_ENABLEGITINFO = "true"
+  GO_VERSION = "1.24.2"
+
+# Redirect barter.games → barter.game (www and apex)
+[[redirects]]
+  from = "https://barter.games/*"
+  to = "https://barter.game/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://www.barter.games/*"
+  to = "https://barter.game/:splat"
+  status = 301
+  force = true
+
+# Redirect www.barter.game → apex barter.game
+[[redirects]]
+  from = "https://www.barter.game/*"
+  to = "https://barter.game/:splat"
+  status = 301
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+[[headers]]
+  for = "/.well-known/barter-bank.json"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, OPTIONS"
