@@ -2,6 +2,7 @@
 // barter.game CLI.
 
 import { runConfirm } from "./commands/confirm.ts";
+import { runDeal } from "./commands/deal.ts";
 import { runInbox } from "./commands/inbox.ts";
 import { runInit } from "./commands/init.ts";
 import { runMint } from "./commands/mint.ts";
@@ -9,7 +10,7 @@ import { runOpen } from "./commands/open.ts";
 import { runSettle } from "./commands/settle.ts";
 import { runTrade } from "./commands/trade.ts";
 
-const VERSION = "0.0.3-w3";
+const VERSION = "0.0.4-nparty";
 
 const HELP = `barter — federated mutual-credit ledger CLI (v${VERSION})
 
@@ -30,16 +31,20 @@ COMMANDS:
         --my-give-account <h> --peer-give-account <h> \\
         --peer-get-account <h> --my-get-account <h> \\
         --peer-pubkey <pubkey> --peer-bank <url>
-      Initiate a cross-bank trade. Lead bank locks both accounts.
+      Bilateral trade (two transfers, one lead bank). Convenience over 'deal'.
+
+  deal <deal-file.json>
+      Propose an N-party deal (any number of banks/holders). The proposing
+      user coordinates: each bank sees only its own legs. Locks every leg.
 
   inbox [--bank <url>]
       List your accounts (with balances) on a bank.
 
-  confirm <tx-hash> [--bank <url>]
-      Sign confirm_receipt for a held Tx.
+  confirm <tx-hash> --bank <url> [--bank <url> ...]
+      Sign confirm_receipt once and post it to every bank you touch.
 
-  settle <tx-hash> [--bank <url>]
-      Lead user triggers settlement once both parties confirmed.
+  settle <tx-hash>
+      Proposer drives the settle cascade from local deal state.
 
   doctor <bank-url>
       Health-check a bank end-to-end.                            (W4)
@@ -67,6 +72,7 @@ async function main(argv: string[]): Promise<number> {
       case "mint":     return await runMint(rest);
       case "open":     return await runOpen(rest);
       case "trade":    return await runTrade(rest);
+      case "deal":     return await runDeal(rest);
       case "inbox":    return await runInbox(rest);
       case "confirm":  return await runConfirm(rest);
       case "settle":   return await runSettle(rest);

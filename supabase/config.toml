@@ -50,10 +50,16 @@ enabled = true
 inspector_port = 8083
 
 # Per-function config. Each bank is a distinct function reading its own
-# BANK_<NAME>_PRIV_KEY from secrets. Add a [functions.bank-bob] block when
-# bank-bob ships in W3.
+# BANK_<NAME>_PRIV_KEY from secrets. ed25519 signatures verify on the wire,
+# so no Supabase JWT layer is needed on any bank.
 [functions.bank-alice]
-verify_jwt = false  # ed25519 signatures verify on the wire; no JWT layer
+verify_jwt = false
 
 [functions.bank-bob]
+verify_jwt = false
+
+[functions.bank-carol]
+verify_jwt = false
+
+[functions.bank-dave]
 verify_jwt = false

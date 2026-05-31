@@ -88,19 +88,7 @@ doc to different bytes, every cryptographic claim collapses. We
 hand-rolled the canonicalizer rather than depend on an npm shim that
 might drift.
 
-## 7. Boil the lake
-
-When the cost of doing the complete thing is near zero, do the complete
-thing. We took three rounds of adversarial spec review, fixed the
-issues inline, and persisted the rest as Reviewer Concerns rather than
-hand-waving them away. We built the test fixture for canonical JSON
-parity in week one even though no client existed to break against it
-yet, because the cost was thirty minutes.
-
-A weekend cadence does not mean shortcuts. It means doing the real thing
-in small pieces, each piece complete.
-
-## 8. The CLI is the protocol's truest surface
+## 7. The CLI is the protocol's truest surface
 
 A clean command-line interface that drives the protocol end to end is
 more honest than any web UI. The CLI shows you the hashes, the
@@ -111,19 +99,7 @@ reconstruct the math.
 The web UI is a polish layer that ships later. The protocol's truth
 lives in the CLI.
 
-## 9. Ship the real thing
-
-We were offered the simpler version many times during design:
-"single-server v1, federation later," "bilateral escrow, not mutual
-credit," "skip the cryptography for the prototype." We declined every
-time. The real thing — federated, cryptographic, mutual credit — is what
-makes the project worth building. The compressed thing would have shipped
-faster and meant nothing.
-
-If the protocol is right, the demo is just one example. If the protocol
-is wrong, no demo can save it.
-
-## 10. Open source so anyone can be a bank
+## 8. Open source so anyone can be a bank
 
 The code is public. The schema is public. The keys are yours. If we
 disappear, you still have the protocol. If you don't like our bank, run

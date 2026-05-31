@@ -94,39 +94,44 @@ update.
 
 ### `txs` — per-Tx state machine
 
-One row per bank that's participating in a Tx. For a cross-bank trade,
-both the lead and follow banks each have their own row with the same
-`tx_hash`.
+One row per bank that's participating in a Tx. Every participating bank keeps
+its own row with the same `tx_hash`, holding **only its own role and
+predecessors** — never the full graph (PROTOCOL.md §2 Visibility).
 
 ```sql
 CREATE TABLE txs (
-  tx_hash             TEXT NOT NULL,
-  bank_pubkey         TEXT NOT NULL,
-  state               TEXT NOT NULL,            -- proposed|approved|held|confirmed|settled|rejected
-  lead_bank_pubkey    TEXT,                     -- bank that received propose_trade from a user
-  follow_bank_pubkey  TEXT,                     -- the peer bank
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  tx_hash       TEXT NOT NULL,
+  bank_pubkey   TEXT NOT NULL,
+  state         TEXT NOT NULL,                  -- approved|held|confirmed|settled|rejected
+  role          TEXT,                           -- 'lead' | 'follow'
+  predecessors  JSONB NOT NULL DEFAULT '[]',    -- bank pubkeys whose settle must be seen first
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (tx_hash, bank_pubkey)
 );
 
 CREATE INDEX txs_by_state ON txs (bank_pubkey, state, updated_at DESC);
 ```
 
-State transitions are owned by the handlers:
+The `lead_bank_pubkey` / `follow_bank_pubkey` columns from the initial schema
+are dropped and replaced by `role` + `predecessors` in migration
+`20260531000000_nparty_txs.sql`. Under the client-orchestrated model a bank
+cannot name "the other bank" (there may be many, and it doesn't see them) — it
+only knows its role and the predecessor banks whose `settle` it must observe.
 
-- `mint_promise` etc. don't touch this table.
-- `propose_trade` inserts at `proposed`, then advances to `approved`,
-  then to `held` (lead bank) or via approve_trade (follow bank).
-- `confirm_receipt` / `forward_confirm` advance to `confirmed` once
-  both user-side `settle`-action sigs are stored.
-- `settle` (lead bank) and `notify_settle` (follow bank) advance to
-  `settled`.
-- `reject` terminates from any pre-settled state.
+State transitions are owned by the handlers (all driven by the client):
 
-**Important**: `upsertTx` is written to only update fields explicitly
-passed in. A state-only update (e.g. `{state: "held"}`) does not null
-out `lead_bank_pubkey` / `follow_bank_pubkey` set on a prior call.
+- `mint_promise` / `open_account` don't touch this table.
+- `propose_leg` inserts at `approved` with this bank's `role` + `predecessors`.
+- `hold_leg` advances to `held`.
+- `confirm_receipt` advances to `confirmed` once **every holder in this bank's
+  own records** has stored a `settle`-action signature.
+- `settle_leg` advances to `settled` after verifying each predecessor's
+  `settle`; `reject_leg` terminates from any pre-`settled` state.
+
+**Important**: `upsertTx` only updates fields explicitly passed in. A state-only
+update (e.g. `{state: "held"}`) does not clobber `role` / `predecessors` set on
+the `propose_leg` call.
 
 ### `holds` — per-(account, tx) lock during in-flight Tx
 

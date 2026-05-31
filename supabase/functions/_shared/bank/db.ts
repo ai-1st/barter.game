@@ -189,23 +189,45 @@ export class BankDB {
   }
 
   /** Tx state machine helpers. Only writes fields that are explicitly set, so
-   *  a state-only update doesn't null out lead_bank_pubkey / follow_bank_pubkey
-   *  populated on a previous call. */
+   *  a state-only update doesn't null out `role` / `predecessors` populated on a
+   *  previous call. Under the client-orchestrated N-party model each bank stores
+   *  its own role (lead|follow) and the predecessor banks it must observe a
+   *  `settle` from before settling its own leg. */
   async upsertTx(input: {
     txHash: string;
     state: string;
-    leadBankPubkey?: string;
-    followBankPubkey?: string;
+    role?: string;
+    predecessors?: string[];
   }): Promise<void> {
     const row: Record<string, unknown> = {
       tx_hash: input.txHash,
       bank_pubkey: this.bankPubkey,
       state: input.state,
     };
-    if (input.leadBankPubkey !== undefined) row.lead_bank_pubkey = input.leadBankPubkey;
-    if (input.followBankPubkey !== undefined) row.follow_bank_pubkey = input.followBankPubkey;
+    if (input.role !== undefined) row.role = input.role;
+    if (input.predecessors !== undefined) row.predecessors = input.predecessors;
     const { error } = await this.sb.from("txs").upsert(row, { onConflict: "tx_hash,bank_pubkey" });
     if (error) throw new Error(`txs.upsert: ${error.message}`);
+  }
+
+  /** Find a stored signature doc by signer + the (hash, action) it carries.
+   *  Used to check confirm/settle attestations without re-walking the doc
+   *  stream by hand. Returns the doc body, or null. */
+  async findActionSig(
+    actorPubkey: string,
+    txHash: string,
+    action: string,
+  ): Promise<Record<string, unknown> | null> {
+    const { data, error } = await this.sb
+      .from("docs")
+      .select("body")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("type", "signature")
+      .eq("pubkey", actorPubkey)
+      .contains("body", { hash: txHash, action })
+      .limit(1);
+    if (error) throw new Error(`docs.findActionSig: ${error.message}`);
+    return data && data[0] ? (data[0].body as Record<string, unknown>) : null;
   }
 
   /** Record (or refresh) a peer bank URL we just heard from. */
@@ -235,21 +257,23 @@ export class BankDB {
 
   async getTxState(txHash: string): Promise<{
     state: string;
-    lead_bank_pubkey: string | null;
-    follow_bank_pubkey: string | null;
+    role: string | null;
+    predecessors: string[];
   } | null> {
     const { data, error } = await this.sb
       .from("txs")
-      .select("state, lead_bank_pubkey, follow_bank_pubkey")
+      .select("state, role, predecessors")
       .eq("tx_hash", txHash)
       .eq("bank_pubkey", this.bankPubkey)
       .maybeSingle();
     if (error) throw new Error(`txs.getState: ${error.message}`);
-    return data as {
-      state: string;
-      lead_bank_pubkey: string | null;
-      follow_bank_pubkey: string | null;
-    } | null;
+    if (!data) return null;
+    const row = data as { state: string; role: string | null; predecessors: unknown };
+    return {
+      state: row.state,
+      role: row.role ?? null,
+      predecessors: Array.isArray(row.predecessors) ? (row.predecessors as string[]) : [],
+    };
   }
 
   /**

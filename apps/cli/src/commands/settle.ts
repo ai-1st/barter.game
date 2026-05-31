@@ -1,38 +1,37 @@
-// `barter settle <tx-hash>` — lead user kicks off settlement on the lead bank.
-// Only meaningful after both confirm_receipts are in. Lead bank applies its
-// balance deltas, signs lead_settle, notifies follow bank.
+// `barter settle <tx-hash>` — the proposer drives the settle cascade.
+//
+// Reads the locally-saved deal state (written by `barter deal` / `barter
+// trade`), then calls settle_leg on each bank in topological order, relaying
+// each bank's settle signature to its downstream followers. Only the proposer
+// has the deal state, so only the proposer can settle.
 
-import { call } from "../client.ts";
 import { loadProfile } from "../profile.ts";
+import { settleCascade } from "../orchestrate.ts";
+import { loadDealState } from "../dealstate.ts";
 
 export async function runSettle(argv: string[]): Promise<number> {
-  let txHash: string | undefined;
-  let bankUrl: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--bank") bankUrl = argv[++i];
-    else if (a && !a.startsWith("--") && !txHash) txHash = a;
-  }
+  const txHash = argv.find((a) => !a.startsWith("--"));
   if (!txHash) {
     process.stderr.write(`barter settle: <tx-hash> required\n`);
     return 1;
   }
   const profile = loadProfile();
-  const url = bankUrl ?? profile.defaultBankUrl;
 
-  const result = (await call(profile, "settle", { tx_hash: txHash }, { bankUrl: url })) as {
-    state: string;
-    applied?: Array<{ accountHash: string; delta: number; newBalance: string }>;
-    warning?: string;
-  };
+  let state;
+  try {
+    state = loadDealState(txHash);
+  } catch (err) {
+    process.stderr.write(`barter settle: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
 
-  process.stdout.write(
-    `settle result for ${txHash}\n` +
-      `  state:    ${result.state}\n` +
-      (result.applied
-        ? `  applied:  ${result.applied.map((a) => `${a.accountHash.slice(0, 8)}... Δ${a.delta} → ${a.newBalance}`).join("\n            ")}\n`
-        : "") +
-      (result.warning ? `  WARNING:  ${result.warning}\n` : ""),
-  );
+  const results = await settleCascade(profile, state);
+
+  let out = `settle cascade for ${txHash}\n`;
+  for (const r of results) {
+    out += `  ${r.bank.slice(0, 12)}…  ${r.state}\n`;
+  }
+  out += `\nall legs settled in order: ${state.order.join(" → ")}\n`;
+  process.stdout.write(out);
   return 0;
 }
