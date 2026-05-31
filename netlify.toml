@@ -1,7 +1,7 @@
 [build]
   base = "."
   publish = "website/public"
-  command = "cd website && hugo --gc --minify"
+  command = "cd website && hugo mod get && hugo --gc --minify"
 
 [build.environment]
   HUGO_VERSION = "0.150.1"
