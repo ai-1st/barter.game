@@ -4,12 +4,8 @@ layout: hextra-home
 ---
 
 {{< hextra/hero-container >}}
-  {{< hextra/hero-headline >}}
-    Be your own bank.
-  {{< /hextra/hero-headline >}}
-  {{< hextra/hero-subtitle >}}
-    A federated mutual-credit ledger. Mint personal currencies, trade them with people you trust, and settle cryptographically — no central authority, no middleman.
-  {{< /hextra/hero-subtitle >}}
+  {{< hextra/hero-headline >}}Be your own bank.{{< /hextra/hero-headline >}}
+  {{< hextra/hero-subtitle >}}A federated mutual-credit ledger. Mint personal currencies, trade them with people you trust, and settle cryptographically — no central authority, no middleman.{{< /hextra/hero-subtitle >}}
 {{< /hextra/hero-container >}}
 
 <div class="hx-mt-12 hx-mb-12">
