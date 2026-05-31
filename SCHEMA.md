@@ -1,4 +1,8 @@
-# Database schema — v1
+# Database schema — v1 (Reference Implementation)
+
+> **This is an implementation detail, not a protocol invariant.** The barter.game v1 protocol ([`PROTOCOL.md`](./PROTOCOL.md) §9) requires certain correctness guarantees — sum-to-zero, at most one active hold per account, atomic state transitions — but it does not mandate Postgres, Supabase, or any specific schema. You may use SQLite, LevelDB, DynamoDB, or a custom store as long as you enforce the same invariants.
+>
+> This document describes the schema used by the v1 reference implementation. Treat it as a working example, not a contract.
 
 barter.game v1 runs on Postgres (managed by Supabase). One database backs
 all banks in a deployment; rows are scoped to a bank by a `bank_pubkey`

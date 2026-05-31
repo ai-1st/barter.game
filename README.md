@@ -67,8 +67,9 @@ See [`ETHOS.md`](./ETHOS.md) for the full set of beliefs.
 ```
 barter.game/
 ├── ETHOS.md              ← the beliefs driving the design
-├── PROTOCOL.md           ← the v1 wire-format spec
-├── SCHEMA.md             ← database tables, columns, invariants
+├── PROTOCOL.md           ← the INVARIANT protocol contract (read this first if building your own)
+├── IMPLEMENTATION.md     ← how *this repo* implements v1 (change anything here for your stack)
+├── SCHEMA.md             ← v1 reference database schema
 ├── TODOS.md              ← the v1.5+ roadmap
 ├── packages/protocol/    ← the @barter.game/protocol library (canonical, crypto, schemas, invites)
 ├── apps/cli/             ← the `barter` CLI: init, mint, open, trade, confirm, settle, inbox
@@ -82,7 +83,8 @@ barter.game/
 │   ├── demo.sh           ← the full v1 demo
 │   ├── genkey.ts         ← generate an ed25519 keypair for a new bank
 │   └── sync-protocol.ts  ← copy protocol code into Edge Function _shared/
-└── docs/legacy/          ← the original notes that informed v1
+├── docs/legacy/          ← the original notes that informed v1
+└── website/              ← Hugo/Hextra static site (see below)
 ```
 
 ## Using the CLI
@@ -192,11 +194,16 @@ for the v1.5+ work.
 
 1. [`ETHOS.md`](./ETHOS.md) — what we believe, why we built it this way (10 minutes)
 2. [`./scripts/demo.sh`](./scripts/demo.sh) — see it work (5 minutes)
-3. [`PROTOCOL.md`](./PROTOCOL.md) — the wire-format contract (45 minutes if you read carefully)
-4. [`SCHEMA.md`](./SCHEMA.md) — the database layer (15 minutes)
-5. `packages/protocol/src/` — the code (an afternoon)
-6. `supabase/functions/_shared/bank/handlers/` — the server-side state machine
-7. [`TODOS.md`](./TODOS.md) — what's next
+3. [`PROTOCOL.md`](./PROTOCOL.md) — the **invariant protocol contract** (45 minutes if you read carefully)
+4. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
+5. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
+6. `packages/protocol/src/` — the code (an afternoon)
+7. `supabase/functions/_shared/bank/handlers/` — the server-side state machine
+8. [`TODOS.md`](./TODOS.md) — what's next
+
+## Building your own implementation?
+
+Read [`PROTOCOL.md`](./PROTOCOL.md) cover to cover. That is the contract. Everything else — Supabase, Edge Functions, Postgres, the CLI, even TypeScript — is a choice we made that you are free to swap out. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) explains our choices so you can learn from them or ignore them. The protocol doesn't care if your bank is written in Rust, Go, or Python, as long as the wire format and invariants match.
 
 ## License
 
