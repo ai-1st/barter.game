@@ -5,8 +5,12 @@
 
 [build.environment]
   HUGO_VERSION = "0.150.1"
+  HUGO_ENV = "production"
   HUGO_ENABLEGITINFO = "true"
   GO_VERSION = "1.24.2"
+
+[context.deploy-preview.environment]
+  HUGO_ENV = "development"
 
 # Redirect barter.games → barter.game (www and apex)
 [[redirects]]
