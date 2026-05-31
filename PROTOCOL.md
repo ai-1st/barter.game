@@ -1,21 +1,12 @@
-# barter.game protocol — v1
+# barter.game protocol — v1 (Invariant Contract)
 
-A federated mutual-credit ledger. A deal is a chain of paired credit/debit
-transfers — one or more holders moving promises among themselves across one or
-more banks — completed via signed JSON-RPC, ending with every participating bank
-agreeing on the new balances.
+> **This document is the protocol contract.** Every implementation of barter.game v1 MUST follow the rules in this file. Where it says "MUST," compatibility depends on it. Where it says "SHOULD," interoperability is smoother if you do. Anything not in this document is an implementation detail — you may change it.
+>
+> If you are building your own bank or client, read this file first, then see `IMPLEMENTATION.md` for how the reference team chose to build it.
 
-The simplest deal is bilateral: two holders at two banks swap. But the same
-machinery covers a single holder moving value inside one bank, a three-party
-ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What
-never changes: a deal is a set of credit/debit pairs, and one or more **lead**
-holders hold first and settle first while everyone else follows. See §2.
+A federated mutual-credit ledger. A deal is a chain of paired credit/debit transfers — one or more holders moving promises among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
-This document is the protocol contract. Where it overlaps `packages/protocol/`
-(canonical JSON, crypto, doc schemas, the wire envelope) the package is
-authoritative and any divergence is a doc bug. The reference handlers in
-`supabase/functions/` implement the full client-orchestrated N-party flow
-(§7.1); the multi-party demo in `scripts/demo.sh` exercises it end to end.
+The simplest deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, and one or more **lead** holders hold first and settle first while everyone else follows. See §2.
 
 ---
 
@@ -23,127 +14,81 @@ authoritative and any divergence is a doc bug. The reference handlers in
 
 barter.game v1 assumes:
 
-- **Users already know their counterparties.** Discovery is out of band
-  (DM, in person, group chat). The protocol does not search for trading
-  partners.
-- **Trust is socially enforced.** If Alice delivers and Bob ghosts, Alice
-  yells at Bob. The protocol records the deal cryptographically; it does
-  not arbitrate.
-- **Bank operators are accountable people.** Anyone can run a bank, but
-  the bank's users have a real relationship with the operator. v1 has no
-  bank-as-a-service for anonymous operators.
+- **Users already know their counterparties.** Discovery is out of band (DM, in person, group chat). The protocol does not search for trading partners.
+- **Trust is socially enforced.** If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate.
+- **Bank operators are accountable people.** Anyone can run a bank, but the bank's users have a real relationship with the operator. v1 has no bank-as-a-service for anonymous operators.
+
+> **Invariant:** These are behavioral assumptions baked into the protocol's risk posture. An implementation that changes them (e.g., adding a reputation system) is no longer barter.game v1 — it is a different protocol.
+
+---
 
 ## 2. Settlement model — lead, follow, and visibility
 
-### Risk — lead and follow
+### 2.1 Risk — lead and follow
 
-A Tx settles as an ordered cascade, not a single atomic flip. Every Tx names a
-**lead set** — one or more (holder, bank) — and the rest are **followers**. The
-lead set holds first and settles first; each follower applies its own balance
-change only after observing the signed `settle` of its predecessor(s) in the
-transfer chain. The follower's own `settle` cites those upstream sigs in
-`Signature.seen` (§5.6), so the cascade is a verifiable chain — every link
-proves the prior link committed.
+A Tx settles as an ordered cascade, not a single atomic flip. Every Tx names a **lead set** — one or more (holder, bank) — and the rest are **followers**. The lead set holds first and settles first; each follower applies its own balance change only after observing the signed `settle` of its predecessor(s) in the transfer chain. The follower's own `settle` cites those upstream sigs in `Signature.seen` (§5.6), so the cascade is a verifiable chain — every link proves the prior link committed.
 
-The lead set is whichever holders must move before anyone downstream can be
-made whole. Three shapes:
+The lead set is whichever holders must move before anyone downstream can be made whole. Three shapes:
 
-- **Bilateral** (the degenerate case): one lead bank, one follow bank. The lead
-  settles first; the follower settles once the client relays it the lead's
-  `settle`.
-- **Ring** (`A → B → C → A`): one lead breaks the cycle by settling first; the
-  settle then propagates `B → C → A` until the ring closes.
-- **Multiple leads**: when a node's inbound depends on more than one giver,
-  *every* such giver must lead. For
+- **Bilateral** (the degenerate case): one lead bank, one follow bank. The lead settles first; the follower settles once the client relays it the lead's `settle`.
+- **Ring** (`A → B → C → A`): one lead breaks the cycle by settling first; the settle then propagates `B → C → A` until the ring closes.
+- **Multiple leads**: when a node's inbound depends on more than one giver, *every* such giver must lead. For
 
   ```
   A → C      B → C      C → D      D → A      D → B
   ```
 
-  C is made whole only once **both** A and B give, so the lead set is `{A, B}`.
-  After A and B settle, C settles `C → D`, then D settles `D → A` and `D → B`,
-  closing both cycles. No single party could safely lead alone — C's downstream
-  move depends on two upstream settles.
+  C is made whole only once **both** A and B give, so the lead set is `{A, B}`. After A and B settle, C settles `C → D`, then D settles `D → A` and `D → B`, closing both cycles. No single party could safely lead alone — C's downstream move depends on two upstream settles.
 
-If any downstream bank refuses to apply (compromise, malice, downtime), every
-participant that already settled is out: their promises moved, the rest of the
-chain didn't. The protocol accepts this risk because the trust model says the
-lead party knows the operators personally. Leads choose to carry it; followers
-choose to wait for upstream proof before moving.
+If any downstream bank refuses to apply (compromise, malice, downtime), every participant that already settled is out: their promises moved, the rest of the chain didn't. The protocol accepts this risk because the trust model says the lead party knows the operators personally. Leads choose to carry it; followers choose to wait for upstream proof before moving.
 
-**No protocol-level timeouts; no signed rollback docs.** The 24-hour
-abandonment sweeper releases stuck locks for hygiene; it is not a
-correctness mechanism.
+> **Invariant:** There is no protocol-level rollback mechanism and no protocol-level timeout. An implementation MAY add a sweeper that releases stuck holds for hygiene, but that is an implementation convenience, not a correctness mechanism.
 
-### Visibility — every bank sees only its own legs
+### 2.2 Visibility — every bank sees only its own legs
 
-**No bank ever sees the whole transaction.** A bank sees only the transfers of
-the promises *it issues* — "this much of my promise leaves holder X; this much
-arrives at holder Y" — and nothing about the other legs.
+**No bank ever sees the whole transaction.** A bank sees only the transfers of the promises *it issues* — "this much of my promise leaves holder X; this much arrives at holder Y" — and nothing about the other legs.
 
-This falls straight out of the issuer-authority rule (§5.3, §9): a transfer of
-promise `P` lives entirely at `P`'s issuer bank (debit and credit are both
-`P`-accounts there), and every record carries `pubkey = P`'s issuer bank. A bank
-only ever holds, locks, applies, and signs records whose `pubkey` is its own.
+This falls straight out of the issuer-authority rule (§5.3, §9): a transfer of promise `P` lives entirely at `P`'s issuer bank (debit and credit are both `P`-accounts there), and every record carries `pubkey = P`'s issuer bank. A bank only ever holds, locks, applies, and signs records whose `pubkey` is its own.
 
-The coordinator is therefore **the proposing client, not a bank.** The client is
-the one party that legitimately knows the whole deal — it designed it — so it
-builds the graph and hands each bank only that bank's slice:
+The coordinator is therefore **the proposing client, not a bank.** The client is the one party that legitimately knows the whole deal — it designed it — so it builds the graph and hands each bank only that bank's slice:
 
-- **Bodies it gets:** only the credit/debit records whose promise this bank
-  issues.
-- **Hashes it gets:** the Tx's full `records[]` list — but these are *hashes*.
-  A bank needs them to recompute and verify the Tx hash (§5.5); it cannot invert
-  a hash into another leg's amount, account, holder, or promise.
-- **Routing it gets:** for the settle cascade, the pubkeys of its immediate
-  **predecessor banks** (so it can verify their `settle` signatures, §5.6). It
-  learns *that* a peer bank participates, not *what* that peer transfers.
+- **Bodies it gets:** only the credit/debit records whose promise this bank issues.
+- **Hashes it gets:** the Tx's full `records[]` list — but these are *hashes*. A bank needs them to recompute and verify the Tx hash (§5.5); it cannot invert a hash into another leg's amount, account, holder, or promise.
+- **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their `settle` signatures, §5.6). It learns *that* a peer bank participates, not *what* that peer transfers.
 
-What a bank can infer is bounded and deliberate: the number of legs (length of
-`records[]`) and the identities of the banks directly upstream of it. It learns
-nothing else. **Banks do not call each other during a trade** — the client
-relays each signature to exactly the bank that needs it. (Discovery's
-`bank_peers`, §10, is unused on the trade path under this model.)
+What a bank can infer is bounded and deliberate: the number of legs (length of `records[]`) and the identities of the banks directly upstream of it. It learns nothing else. **Banks do not call each other during a trade** — the client relays each signature to exactly the bank that needs it.
 
-Worked: in the multi-lead example above, A/B/C/D each issue their own promise at
-their own bank. `bank-A` sees only `A → C` (its promise moving from A to C);
-`bank-D` sees only `D → A` and `D → B`. `bank-A` never learns that B also paid
-C, that C paid D, or what amounts flowed — only that the Tx has some number of
-records and that, were it a follower, certain named banks settle before it.
+> **Invariant:** This visibility boundary is load-bearing. Any implementation that lets a bank see another bank's records violates the protocol.
 
 ---
 
 ## 3. Identity
 
-Every party — user or bank — is an ed25519 keypair. The pubkey is
-base58-encoded and used as the identity in every doc.
+Every party — user or bank — is an ed25519 keypair. The pubkey is base58-encoded and used as the identity in every doc.
 
-- **User**: a person holding a private key (currently on disk in
-  `~/.barter/profile.json`).
-- **Bank**: an Edge Function process holding a private key via
-  `BANK_<NAME>_PRIV_KEY` (Supabase Secrets in v1).
+- **User**: a person holding a private key.
+- **Bank**: a process holding a private key.
 
 There is no separate "address" or "DID"; the pubkey IS the identity.
 
+> **Invariant:** ed25519 + base58 encoding is mandatory for v1 interoperability.
+
+---
+
 ## 4. Canonical JSON (RFC 8785)
 
-Every doc is signed over `SHA-256(canonical(doc))` where `canonical()` is
-the JCS algorithm:
+Every doc is signed over `SHA-256(canonical(doc))` where `canonical()` is the JCS algorithm:
 
 - Object keys sorted by Unicode code-unit order.
-- Numbers serialized via ECMAScript `ToString(Number)` (negative zero →
-  `"0"`).
+- Numbers serialized via ECMAScript `ToString(Number)` (negative zero → `"0"`).
 - Strings escape control chars + `"` + `\`; other UTF-8 passes through.
 - `undefined` keys dropped.
 
-The reference implementation is `packages/protocol/src/canonical.ts`. It is
-hand-rolled (no library dependency) to guarantee byte-identical output
-across Bun, Node, Deno, and browser. The cross-runtime parity test is
-the load-bearing test in the codebase.
+When signing a doc, **the top-level `sig` field is removed** before canonicalization. The hash that the signature commits to is therefore content-addressed by the unsigned doc.
 
-When signing a doc, **the top-level `sig` field is removed** before
-canonicalization. The hash that the signature commits to is therefore
-content-addressed by the unsigned doc.
+> **Invariant:** Two implementations must produce byte-identical canonical JSON for the same document, or every signature becomes unverifiable across implementations. You MUST implement RFC 8785 (or equivalent JCS) and you MUST verify cross-runtime parity before claiming v1 compatibility.
+
+---
 
 ## 5. Document types
 
@@ -180,13 +125,13 @@ Promise: BaseDoc & {
 }
 ```
 
-**`bank` is part of the Promise hash.** Two promises with the same name
-issued at different banks are different promises.
+**`bank` is part of the Promise hash.** Two promises with the same name issued at different banks are different promises.
+
+> **Invariant:** The Promise schema fields and their types are fixed in v1.
 
 ### 5.2 Pocket
 
-A holder's logical grouping of accounts. Banks reference pockets only by
-hash; the name is private to the holder.
+A holder's logical grouping of accounts. Banks reference pockets only by hash; the name is private to the holder.
 
 ```ts
 Pocket: BaseDoc & {
@@ -197,8 +142,7 @@ Pocket: BaseDoc & {
 
 ### 5.3 Account
 
-The issuer bank's record of a holder's stake in a given Promise. Banks
-maintain balance and pending state per Account row.
+The issuer bank's record of a holder's stake in a given Promise. Banks maintain balance and pending state per Account row.
 
 ```ts
 Account: BaseDoc & {
@@ -209,6 +153,8 @@ Account: BaseDoc & {
 ```
 
 Account hash = `base58(sha256(canonical(account_doc)))`.
+
+> **Invariant:** The issuer of a Promise is the sole source of truth for balances of that Promise. No other bank may issue or mutate accounts for a Promise it does not own.
 
 ### 5.4 Record
 
@@ -224,18 +170,9 @@ LedgerRecord: BaseDoc & {
 }
 ```
 
-A **transfer** is one debit + one credit of the same Promise for the same
-`amount`: value leaves the debited holder's account and lands in the credited
-holder's account, both at that Promise's issuer bank. `pair` links the two
-halves. Transfers **chain** when the holder credited by one transfer is the
-holder debited by another — that holder is passing value along (`A → B → C`). A
-Tx is the full set of transfers in one deal; the chain may be a line, a ring,
-or a general graph, spanning one bank or many.
+A **transfer** is one debit + one credit of the same Promise for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Promise's issuer bank. `pair` links the two halves. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). A Tx is the full set of transfers in one deal; the chain may be a line, a ring, or a general graph, spanning one bank or many.
 
-`pair` and `tx` are optional in v1 because populating them creates a
-circular hash dependency (Tx hashes the records that hash the Tx). The
-Tx → record binding lives in `Tx.records[]` ordering, and the bank's
-`txs` table tracks per-Tx state.
+`pair` and `tx` are optional in v1 because populating them creates a circular hash dependency (Tx hashes the records that hash the Tx). The Tx → record binding lives in `Tx.records[]` ordering, and the bank's per-Tx state tracks state per leg.
 
 ### 5.5 Tx
 
@@ -249,19 +186,15 @@ Tx: BaseDoc & {
 }
 ```
 
-`records` holds `2K` hashes encoding `K ≥ 1` transfer pairs (one debit + one
-credit each). Cardinality is **open** — there is no two-bank cap:
+`records` holds `2K` hashes encoding `K ≥ 1` transfer pairs (one debit + one credit each). Cardinality is **open** — there is no two-bank cap:
 
 - `K = 1`, one bank — a single transfer (gift, in-bank move).
-- `K = 2`, two banks — the bilateral swap (the common case; the reference
-  handlers optimize this path, §7.1).
+- `K = 2`, two banks — the bilateral swap (the common case).
 - `K` pairs across `M` banks — rings and multi-party settlements.
 
-A bank identifies the records it must act on as those whose `pubkey` equals its
-own bank pubkey (each record's `pubkey` is set to the issuer bank of the
-transferred Promise). A bank only holds, applies, and signs for its own
-records; it relays the rest. Across the whole Tx, debits and credits per
-Promise sum to zero by construction.
+A bank identifies the records it must act on as those whose `pubkey` equals its own bank pubkey (each record's `pubkey` is set to the issuer bank of the transferred Promise). A bank only holds, applies, and signs for its own records; it relays the rest. Across the whole Tx, debits and credits per Promise sum to zero by construction.
+
+> **Invariant:** `Tx.records[]` is unbounded. Any cap on the number of banks or transfer pairs is an implementation limitation, not a protocol constraint.
 
 ### 5.6 Signature
 
@@ -279,17 +212,11 @@ Signature: BaseDoc & {
 }
 ```
 
-`pubkey` may be a user OR a bank. `action="settle"` signed by a user
-means "I confirm receipt; you may settle." `action="settle"` signed by a
-bank means "I have applied balances." Same word, different layer.
+`pubkey` may be a user OR a bank. `action="settle"` signed by a user means "I confirm receipt; you may settle." `action="settle"` signed by a bank means "I have applied balances." Same word, different layer.
 
-`seen` is the load-bearing field for multi-party settlement: a follower bank's
-`settle` lists the upstream `settle` signatures it observed before applying its
-own. That turns the flat lead→follow handoff into a verifiable settle chain —
-each link proves the prior link committed, so a follower can refuse to move
-until its predecessors demonstrably have. `action` `"lead"` / `"follow"` tag a
-participant's role for the Tx; `"hold"`, `"approve"`, `"reject"` mark the other
-phases.
+`seen` is the load-bearing field for multi-party settlement: a follower bank's `settle` lists the upstream `settle` signatures it observed before applying its own. That turns the flat lead→follow handoff into a verifiable settle chain — each link proves the prior link committed, so a follower can refuse to move until its predecessors demonstrably have. `action` `"lead"` / `"follow"` tag a participant's role for the Tx; `"hold"`, `"approve"`, `"reject"` mark the other phases.
+
+> **Invariant:** `Signature.seen` carries the cascade proof. Any implementation must include upstream settle signatures in a follower's `seen` array, and must verify them before applying balances.
 
 ---
 
@@ -310,21 +237,17 @@ All RPCs are `POST` to `<bank-url>/rpc` with this body shape:
 ```
 
 - `id` is a ULID claimed in the recipient's replay window.
-- `to` binds the request to this specific recipient. A peer bank with a
-  different pubkey rejects the request even if the URL routes correctly.
-- `sig` is `ed25519(sha256(canonical(envelope minus sig)))`, signed by
-  the private key corresponding to `pubkey`.
-- For user-facing methods, `pubkey` is a user pubkey. For inter-bank
-  methods, `pubkey` is a bank pubkey.
+- `to` binds the request to this specific recipient. A peer bank with a different pubkey rejects the request even if the URL routes correctly.
+- `sig` is `ed25519(sha256(canonical(envelope minus sig)))`, signed by the private key corresponding to `pubkey`.
+- For user-facing methods, `pubkey` is a user pubkey. For inter-bank methods, `pubkey` is a bank pubkey.
 
-### Replay protection
+### 6.1 Replay protection
 
-The recipient maintains a sliding window of seen `(sender_pubkey, id,
-to)` triples in the `replay_window` table. A duplicate triple is rejected
-with code `-32002`. The sweeper evicts entries older than 7 days idle
-or beyond the per-sender LRU cap (currently 100 IDs).
+The recipient maintains a sliding window of seen `(sender_pubkey, id, to)` triples. A duplicate triple is rejected with code `-32002`. The window MUST be large enough to tolerate out-of-order delivery and MUST be pruned to prevent unbounded growth.
 
-### Error codes
+> **Invariant:** The envelope shape, the `to` binding, and the replay-protection semantics are protocol. The exact window size, pruning policy, and storage backend are implementation details.
+
+### 6.2 Error codes
 
 | Code | Meaning |
 |---|---|
@@ -340,15 +263,13 @@ or beyond the per-sender LRU cap (currently 100 IDs).
 | `-32004` | Timeout (reserved; not used in v1) |
 | `-32005` | Unknown doc (referenced hash not in this bank's DB) |
 
+> **Invariant:** These error codes and their meanings are part of the v1 contract. Custom codes MUST use the `-32006..-32099` range.
+
 ---
 
 ## 7. Method surface
 
-The trade path is **client-orchestrated**: the proposing client calls every
-method below on each participating bank directly, and relays signatures between
-them. `envelope.pubkey` on the trade-path methods is the **proposing user**, not
-a bank. Banks do not call each other (§2 Visibility). Read-only and account
-methods keep their usual user→bank shape.
+The trade path is **client-orchestrated**: the proposing client calls every method below on each participating bank directly, and relays signatures between them. `envelope.pubkey` on the trade-path methods is the **proposing user**, not a bank. Banks do not call each other (§2 Visibility). Read-only and account methods keep their usual user→bank shape.
 
 | Method | Caller | Side effect |
 |---|---|---|
@@ -365,40 +286,24 @@ methods keep their usual user→bank shape.
 
 ### 7.1 Orchestration & the per-bank slice
 
-The proposing client builds the deal as a set of transfers (each: promise,
-amount, debit holder, credit holder), then:
+The proposing client builds the deal as a set of transfers (each: promise, amount, debit holder, credit holder), then:
 
-1. **Build** the `2K` records and the Tx (`records[]` = all record hashes). Sign
-   a `proposer_approve` over the Tx hash.
-2. **Slice.** For each participating bank, select only the records whose
-   `pubkey` is that bank, compute its `role` (`lead`/`follow`) and its
-   `predecessors` (the issuer banks of promises credited to this bank's
-   debit-holders; empty for leads — leads break cycles by going first).
+1. **Build** the `2K` records and the Tx (`records[]` = all record hashes). Sign a `proposer_approve` over the Tx hash.
+2. **Slice.** For each participating bank, select only the records whose `pubkey` is that bank, compute its `role` (`lead`/`follow`) and its `predecessors` (the issuer banks of promises credited to this bank's debit-holders; empty for leads — leads break cycles by going first).
 3. **propose_leg** on every bank with its slice; collect each bank's `approve`.
-4. **hold_leg** on every bank; on any `-32003`, **reject_leg** everywhere and
-   abort.
-5. Wait for **confirm_receipt** from every holder (each holder signs once; the
-   client delivers that signature to each bank where the holder appears).
-6. **settle_leg** in topological order: leads first (`upstream_settles = []`),
-   then each follower once the client holds valid `settle` sigs from all of its
-   predecessors, passing them in as `upstream_settles`. The cascade ends when
-   every bank has settled.
+4. **hold_leg** on every bank; on any `-32003`, **reject_leg** everywhere and abort.
+5. Wait for **confirm_receipt** from every holder (each holder signs once; the client delivers that signature to each bank where the holder appears).
+6. **settle_leg** in topological order: leads first (`upstream_settles = []`), then each follower once the client holds valid `settle` sigs from all of its predecessors, passing them in as `upstream_settles`. The cascade ends when every bank has settled.
 
-Because the client is the only holder of the full graph, no bank needs another
-bank's records, URL, or even existence beyond its immediate predecessors. The
-doc schemas (`Tx.records[]` is unbounded; `Signature.seen` carries the cascade)
-and the wire envelope are unchanged from the bilateral case — only the
-orchestration fans out.
+Because the client is the only holder of the full graph, no bank needs another bank's records, URL, or even existence beyond its immediate predecessors. The doc schemas (`Tx.records[]` is unbounded; `Signature.seen` carries the cascade) and the wire envelope are unchanged from the bilateral case — only the orchestration fans out.
+
+> **Invariant:** The method names, parameter shapes, and side-effect semantics above are the protocol. The exact HTTP client library, retry policy, timeout values, and how the client stores the deal graph are implementation details.
 
 ---
 
 ## 8. State machine (per-Tx, per-bank)
 
-Each bank runs its own state machine over its own legs, advanced entirely by
-the proposing client's calls (§7.1). A bank never advances on a peer bank's
-message — only on a client call carrying the proofs it needs. `held` waits for
-the leg's holders to confirm; `confirmed` waits for the client to deliver
-`settle_leg` with valid predecessor sigs.
+Each bank runs its own state machine over its own legs, advanced entirely by the proposing client's calls (§7.1). A bank never advances on a peer bank's message — only on a client call carrying the proofs it needs. `held` waits for the leg's holders to confirm; `confirmed` waits for the client to deliver `settle_leg` with valid predecessor sigs.
 
 ```
    per-bank leg state (driven by the client; one machine per bank)
@@ -433,41 +338,31 @@ the leg's holders to confirm; `confirmed` waits for the client to deliver
    any pre-`settled` state and releases its holds.
 ```
 
+> **Invariant:** These states, their transitions, and their preconditions are the protocol. The exact storage representation (SQL table, key-value, in-memory) is an implementation detail.
+
 ---
 
 ## 9. Concurrency
 
-### Double-spend prevention
+### 9.1 Double-spend prevention
 
-When a bank receives `hold_leg` for one of its owned debit accounts, it
-acquires a row in `holds` keyed on `(account_hash, tx_hash,
-bank_pubkey)`. A **partial unique index** on `(account_hash, bank_pubkey)
-WHERE active` enforces *at most one active hold per account*.
+When a bank receives `hold_leg` for one of its owned debit accounts, it acquires a hold on that account for the Tx. A **concurrent hold attempt against an already-locked account returns `-32003`**. The coordinator then releases every hold acquired so far — across all participating banks — and rejects the Tx. Holds span the full participant set, but each per-account lock is independent and bank-local.
 
-A concurrent hold attempt against an already-locked account returns
-`-32003` (Postgres unique violation translated by the handler). The
-coordinator then releases every hold acquired so far — across all
-participating banks — and rejects the Tx. Holds span the full participant
-set, but each per-account lock is independent and bank-local.
+> **Invariant:** At most one active hold per account MUST be enforced. How you enforce it (database unique index, in-memory mutex, optimistic locking) is an implementation detail.
 
-### Mutual-credit balance semantics
+### 9.2 Mutual-credit balance semantics
 
-- **Issuers go negative.** Alice's account for her own Promise starts
-  at `0`; after settling one outbound transfer, it sits at `-1`. The
-  network owes the negative-balance side nothing; the holder owes the
-  network nothing. Each side is accountable for their own ledger
-  position.
-- **No credit floor in v1.** Holders can run arbitrarily negative. The
-  `Promise.limit` field is honored if set; otherwise unbounded.
-- **Sum invariant**: across all accounts for a given Promise, balances
-  always sum to zero (or the agreed limit). The bank enforces this on
-  every `settle`.
+- **Issuers go negative.** Alice's account for her own Promise starts at `0`; after settling one outbound transfer, it sits at `-1`. The network owes the negative-balance side nothing; the holder owes the network nothing. Each side is accountable for their own ledger position.
+- **No credit floor in v1.** Holders can run arbitrarily negative. The `Promise.limit` field is honored if set; otherwise unbounded.
+- **Sum invariant**: across all accounts for a given Promise, balances always sum to zero (or the agreed limit). The bank enforces this on every `settle`.
+
+> **Invariant:** The sum invariant is the load-bearing correctness guarantee of the ledger. Every implementation MUST enforce it on every settle.
 
 ---
 
 ## 10. Bank discovery + pubkey pinning
 
-### Discovery
+### 10.1 Discovery
 
 Banks publish their identity at:
 
@@ -482,28 +377,21 @@ GET <bank-url>/.well-known/barter-bank.json
   }
 ```
 
-The `url` field is the canonical RPC URL — the location clients should
-use, not necessarily the one they fetched from (banks behind reverse
-proxies need this).
+The `url` field is the canonical RPC URL — the location clients should use, not necessarily the one they fetched from (banks behind reverse proxies need this).
 
-When a bank first hears from a peer it may record `(peer_pubkey, peer_url)`
-in `bank_peers`. Under the client-orchestrated trade path (§2, §7) banks do
-not call each other, so `bank_peers` is vestigial on the hot path in v1 — kept
-for discovery and future bank-to-bank features.
+Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have heard from. Under the client-orchestrated trade path (§2, §7) banks do not call each other, so peer caching is vestigial on the hot path in v1 — kept for discovery and future bank-to-bank features.
 
-### Pubkey pinning (security)
+### 10.2 Pubkey pinning (security)
 
-`.well-known` is **not a trust anchor**. A compromised DNS / hosting
-provider could serve a different pubkey, and TOFU clients would be
-fooled. v1 pins pubkey alongside URL everywhere trust is established:
+`.well-known` is **not a trust anchor**. A compromised DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
 
 - The client config map stores `{pubkey, url}` per bank.
 - Invite strings carry `<pubkey>@<bank-url>` syntax (see §11).
-- `.well-known` is fetched and *compared* against the pinned pubkey; if
-  divergent, the operation fails closed.
+- `.well-known` is fetched and *compared* against the pinned pubkey; if divergent, the operation fails closed.
 
-In the v1 trust model the OOB channel that establishes the relationship
-already conveys the pubkey, so pinning is cheap.
+In the v1 trust model the OOB channel that establishes the relationship already conveys the pubkey, so pinning is cheap.
+
+> **Invariant:** The `.well-known` format and the pinning semantics are protocol. How the client stores its config (flat file, localStorage, OS keychain) is an implementation detail.
 
 ---
 
@@ -520,75 +408,52 @@ barter://<inviter-pubkey>@<inviter-bank-url>?give=<promise-hash>:<amount>&get=<p
 - `give`: what the inviter offers (promise hash + amount).
 - `get`: what the inviter wants in return.
 - `exp`: Unix seconds; receivers reject after.
-- `sig`: ed25519 over canonical JSON of the invite minus `sig`, by
-  inviter's pubkey.
+- `sig`: ed25519 over canonical JSON of the invite minus `sig`, by inviter's pubkey.
 
-Self-validating: the receiver can verify the signature before any
-network call. Tampering with give/get/bank-url invalidates the sig.
+Self-validating: the receiver can verify the signature before any network call. Tampering with give/get/bank-url invalidates the sig.
 
-v1.5 wires `barter trade <invite>` to drive the full trade flow from
-this string. v1 CLI takes the 8 hashes explicitly via flags; the invite
-format is implemented but not yet on the trade command's hot path.
+> **Invariant:** The invite string format, its fields, and its self-validating property are protocol. How the invite is conveyed (QR code, NFC, deep link, copy-paste) is an implementation detail.
 
 ---
 
-## 12. v1 design decisions, locked
+## 12. Protocol design decisions, locked
 
-| Decision | Resolution |
-|---|---|
-| Risk model | Lead/follow per legacy spec; no protocol-level rollback |
-| Trust model | Counterparties already know each other; discovery OOB |
-| Coordinator pattern | **Client-orchestrated**: the proposing user calls each bank with its own slice and relays signatures; banks never call each other on the trade path |
-| Visibility | Each bank sees only the records of the promises it issues + the Tx hash list + its predecessor bank pubkeys; no bank sees the full Tx |
-| Issuer authority | Issuer is sole source of truth for its Promise's balances |
-| Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock |
-| Lock abandonment | 24h sweeper releases stuck holds |
-| Key recovery | Out of scope (lose key → lose account) |
-| Key rotation | Out of scope; redeploy with new secret if compromised |
-| Bank discovery | Hardcoded URL+pubkey config in client; federated directory is v1.5 |
-| Canonicalization | Hand-rolled RFC 8785; cross-runtime golden vectors gate every release |
-| Inbox notification | 10s polling; SSE/WebSocket deferred |
-| Database | Supabase Postgres, multi-tenant via `bank_pubkey` column |
-| Migration policy | v1 = no in-place migrations after launch (wipe demo banks if schema changes) |
-| Account auto-creation | Receivers `open_account` before a trade; `propose_leg` requires the accounts in its records to already exist |
-| Promise fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 |
-| Tx cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case |
+| Decision | Resolution | Invariant? |
+|---|---|---|
+| Risk model | Lead/follow per legacy spec; no protocol-level rollback | **Yes** |
+| Trust model | Counterparties already know each other; discovery OOB | **Yes** |
+| Coordinator pattern | **Client-orchestrated**: the proposing user calls each bank with its own slice and relays signatures; banks never call each other on the trade path | **Yes** |
+| Visibility | Each bank sees only the records of the promises it issues + the Tx hash list + its predecessor bank pubkeys; no bank sees the full Tx | **Yes** |
+| Issuer authority | Issuer is sole source of truth for its Promise's balances | **Yes** |
+| Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
+| Key recovery | Out of scope (lose key → lose account) | **Yes** |
+| Key rotation | Out of scope; redeploy with new secret if compromised | **Yes** |
+| Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
+| Account auto-creation | Receivers `open_account` before a trade; `propose_leg` requires the accounts in its records to already exist | **Yes** |
+| Promise fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
+| Tx cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
 
 ---
 
-## 13. What v1 does not do
+## 13. What the protocol does NOT do
 
-- **No web UI.** CLI only. Web is v1.5.
-- **No `barter doctor`.** Self-health-check command lands in v1.5.
-- **No cross-bank inbox aggregation.** Each `barter inbox` hits one bank.
-- **No automated multi-user confirm collection.** The client must reach each
-  holder to gather `confirm_receipt` signatures; there is no push/notification
-  layer (10s inbox polling only).
-- **No NFT-like unique Promises.** Issued Promises are fungible.
+These are out of scope for v1. An implementation MAY add them, but they are not part of the barter.game v1 contract:
+
+- **No web UI.** The protocol is transport-agnostic; a web UI is a client-layer concern.
+- **No protocol-level rollback.** If the follow bank goes rogue after the lead settles, the lead is out. Recourse is social.
+- **No key recovery, no key rotation.** Forever-keys in v1.
+- **No NFT-like Promises.** Issued Promises are fungible.
+- **No automated settle-cascade retry.** If a downstream `settle_leg` fails, the client retries or the deal stalls with upstream legs already settled — the lead/follow risk (§2), resolved socially.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
-- **No key rotation or recovery.** Forever-key in v1.
-- **No automated settle-cascade retry.** If a downstream `settle_leg` fails,
-  the client retries or the deal stalls with upstream legs already settled —
-  the lead/follow risk (§2), resolved socially.
-
-See `TODOS.md` for the v1.5+ roadmap.
+- **No bank discovery directory.** Hardcoded URL+pubkey config is the v1 baseline; a federated directory is a v1.5+ extension.
 
 ---
 
-## 14. Where to read the code
+## 14. Implementing barter.game
 
-| Concern | Path |
-|---|---|
-| Canonical JSON | `packages/protocol/src/canonical.ts` |
-| Crypto primitives | `packages/protocol/src/crypto.ts` |
-| Doc schemas + validators | `packages/protocol/src/schemas.ts` |
-| Invite format | `packages/protocol/src/invite.ts` |
-| RPC envelope handler | `supabase/functions/_shared/bank/rpc.ts` |
-| Per-method handlers | `supabase/functions/_shared/bank/handlers/*.ts` |
-| Database queries | `supabase/functions/_shared/bank/db.ts` |
-| Peer HTTP client | `supabase/functions/_shared/bank/peer.ts` |
-| Bank bootstrap | `supabase/functions/_shared/bank/server.ts` |
-| Method registry | `supabase/functions/_shared/bank/registry.ts` |
-| CLI client wrapper | `apps/cli/src/client.ts` |
-| Schema migrations | `supabase/migrations/*.sql` (see `SCHEMA.md`) |
-| Live demo | `scripts/demo.sh` |
+If you are building your own bank or client:
+
+1. Read this file cover to cover. Everything here is the contract.
+2. See `IMPLEMENTATION.md` for how the reference team built it: Supabase, Edge Functions, Postgres, the CLI, and the specific file map.
+3. See `SCHEMA.md` for the v1 reference database schema — useful as a starting point, but you may use any storage that enforces the invariants in §9.
+4. See `packages/protocol/src/` for the reference canonicalizer, crypto primitives, and schema validators. You may reuse this code directly (MIT) or reimplement in your language of choice.
