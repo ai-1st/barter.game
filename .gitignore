@@ -15,3 +15,8 @@ supabase/.temp
 
 # Deno
 .deno
+
+# Hugo website
+website/public/
+website/resources/
+website/.hugo_build.lock

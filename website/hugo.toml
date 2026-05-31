@@ -1,0 +1,68 @@
+baseURL = 'https://barter.game'
+languageCode = 'en-us'
+title = 'barter.game'
+
+[module]
+  [[module.imports]]
+    path = 'github.com/imfing/hextra'
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    style = 'github'
+
+[params]
+  description = 'A federated mutual-credit ledger. Be your own bank.'
+  [params.editURL]
+    enable = true
+    base = 'https://github.com/ai-1st/barter.game/edit/main/website/content/'
+
+  [params.navbar]
+    displayTitle = true
+    displayLogo = false
+
+  [params.footer]
+    enable = true
+    displayCopyright = true
+
+  [params.search]
+    enable = true
+    type = 'flexsearch'
+
+[menu]
+  [[menu.main]]
+    name = 'Docs'
+    pageRef = '/docs'
+    weight = 1
+  [[menu.main]]
+    name = 'Event Managers'
+    pageRef = '/for-event-managers'
+    weight = 2
+  [[menu.main]]
+    name = 'Developers'
+    pageRef = '/for-developers'
+    weight = 3
+  [[menu.main]]
+    name = 'Self-Hosters'
+    pageRef = '/for-self-hosters'
+    weight = 4
+  [[menu.main]]
+    name = 'Players'
+    pageRef = '/for-players'
+    weight = 5
+  [[menu.main]]
+    name = 'AI Enthusiasts'
+    pageRef = '/for-ai-enthusiasts'
+    weight = 6
+  [[menu.main]]
+    name = 'Contributors'
+    pageRef = '/for-contributors'
+    weight = 7
+  [[menu.main]]
+    name = 'GitHub'
+    url = 'https://github.com/ai-1st/barter.game'
+    weight = 8
+    [menu.main.params]
+      icon = 'github'

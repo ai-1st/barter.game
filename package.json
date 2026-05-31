@@ -13,7 +13,8 @@
     "test:nparty": "deno test --allow-read --allow-env --node-modules-dir=auto supabase/functions/_shared/bank/test-deno/nparty.deno-test.ts",
     "test:all": "bun run test && bun run test:deno && bun run test:nparty",
     "build": "bun --filter '*' build",
-    "typecheck": "bun --filter '*' typecheck"
+    "typecheck": "bun --filter '*' typecheck",
+    "build:website": "cd website && hugo"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
