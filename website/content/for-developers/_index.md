@@ -46,7 +46,7 @@ If you're building a bank from scratch:
 6. [ ] Enforce **sum-to-zero** on every settle.
 7. [ ] Enforce **at most one active hold per account**.
 8. [ ] Expose `GET /.well-known/barter-bank.json`.
-9. [ ] Write a client that can orchestrate a bilateral trade end-to-end.
+9. [ ] Write a client that can orchestrate a trade end-to-end (bilateral or N-party).
 10. [ ] Run it against the reference banks to verify interop.
 
 ## The protocol library

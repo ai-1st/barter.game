@@ -12,16 +12,19 @@ This is v1. It works end-to-end today.
 
 ## See it work
 
-Two banks are live right now:
+Four demo banks are live right now:
 
 ```
 bank-alice  https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-alice
 bank-bob    https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-bob
+bank-carol  https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-carol
+bank-dave   https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-dave
 ```
 
-Hit either with `curl` and you'll get a signed `hello` proving its
-identity. Run `./scripts/demo.sh` and you'll watch two simulated users
-mint personal currencies on different banks, trade them, and settle.
+Hit any with `curl` and you'll get a signed `hello` proving its
+identity. Run `./scripts/demo.sh` and you'll watch four simulated users
+on four different banks mint personal currencies, propose a multi-party
+deal, confirm, and settle in topological order.
 
 ```bash
 git clone https://github.com/ai-1st/barter.game.git
@@ -30,7 +33,9 @@ bun install
 ./scripts/demo.sh
 ```
 
-The script narrates each step. By the end:
+The script narrates each step. By the end every Promise that moved
+sums to zero across all its accounts — the cryptographic version of
+"we're even." For a simple bilateral swap the balances look like this:
 
 | Holder | Promise | Bank | Balance |
 | --- | --- | --- | --- |
@@ -38,8 +43,6 @@ The script narrates each step. By the end:
 | Bob   | "1 logo" | bank-alice | **+1** (he received) |
 | Bob   | "1 hour" | bank-bob (issuer)   | **-1** (he gave it) |
 | Alice | "1 hour" | bank-bob   | **+1** (she received) |
-
-Sum per Promise = 0. The cryptographic version of "we're even."
 
 ## The big idea
 
@@ -78,7 +81,9 @@ barter.game/
 │   └── functions/
 │       ├── _shared/      ← shared bank code (rpc, handlers, db, peer)
 │       ├── bank-alice/   ← one Edge Function per bank
-│       └── bank-bob/
+│       ├── bank-bob/
+│       ├── bank-carol/
+│       └── bank-dave/
 ├── scripts/
 │   ├── demo.sh           ← the full v1 demo
 │   ├── genkey.ts         ← generate an ed25519 keypair for a new bank
@@ -99,15 +104,18 @@ barter mint "1 logo" --integer
 # Prepare to receive someone else's currency
 barter open <their-promise-hash> --bank <their-bank-url>
 
-# Propose a cross-bank trade
+# Propose a bilateral trade (convenience over `deal`)
 barter trade \
   --give <my-promise>:1 --get <their-promise>:1 \
   --my-give-account <h> --peer-give-account <h> \
   --peer-get-account <h> --my-get-account <h> \
   --peer-pubkey <pubkey> --peer-bank <url>
 
-# After both sides confirm, lead user settles
-barter confirm <tx-hash>
+# Or propose an N-party deal from a JSON file
+barter deal <deal-file.json>
+
+# After every holder confirms, the proposer settles
+barter confirm <tx-hash> --bank <url> [--bank <url> ...]
 barter settle <tx-hash>
 
 # See your balances
@@ -125,10 +133,11 @@ Pocket, Account, Tx, Record, Signature — is canonicalized via RFC 8785
 JSON, SHA-256-hashed, and content-addressed by that hash. Every RPC is a
 signed JSON-RPC envelope binding the request to (sender, recipient,
 ULID). A cross-bank trade walks `propose → approve → hold → confirm →
-settle` across two banks; the lead bank settles first, then notifies the
-follow bank, which settles too. The lead bank carries the small remaining
-risk that the follow bank goes rogue; per the ETHOS, that risk is settled
-socially, not by protocol-level rollback.
+settle` across two or more banks; lead banks settle first, then followers
+in topological order, each citing upstream proof in `Signature.seen`.
+The lead banks carry the small remaining risk that a follower goes rogue;
+per the ETHOS, that risk is settled socially, not by protocol-level
+rollback.
 
 Full details in [`PROTOCOL.md`](./PROTOCOL.md).
 
@@ -169,10 +178,10 @@ exactly however many people you've invited.
 bun run test:all
 ```
 
-75 tests: 61 under Bun, 14 under Deno. The Deno suite re-runs the same
-canonical-JSON golden vectors under a different runtime. Cross-runtime
-parity is the load-bearing invariant — every signature in the protocol
-depends on it.
+89 tests: 73 under Bun, 16 under Deno. The Deno suite re-runs the same
+canonical-JSON golden vectors under a different runtime plus a full
+multi-bank settle cascade. Cross-runtime parity is the load-bearing
+invariant — every signature in the protocol depends on it.
 
 ## What v1 doesn't do
 
@@ -182,7 +191,6 @@ Honest list:
 - **No protocol-level rollback.** If the follow bank goes rogue after
   the lead settles, the lead is out. Recourse is social.
 - **No key recovery, no key rotation.** Forever-keys in v1.
-- **No N-bank trades.** v1 caps at 2 banks per Tx.
 - **No NFT-like Promises.** Issued Promises are fungible.
 - **No automatic forward-confirm retry.** Best-effort.
 - **No cross-bank inbox aggregation.** `barter inbox` hits one bank.

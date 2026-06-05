@@ -67,8 +67,8 @@ are strangers. We are not that system.
 
 Every bank is its own URL, its own ed25519 key, its own ledger. Banks
 talk to each other via signed HTTP. Anyone running the codebase can be
-a peer. The v1 demo collapses two banks into one Supabase project for
-operational simplicity; the *protocol* doesn't know or care. A third bank
+a peer. The v1 demo collapses four banks into one Supabase project for
+operational simplicity; the *protocol* doesn't know or care. A fifth bank
 can join tomorrow.
 
 If barter.game ever centralized — even subtly, even for "the demo" — we

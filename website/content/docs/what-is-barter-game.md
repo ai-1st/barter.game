@@ -24,7 +24,7 @@ barter.game takes the opposite stance: **trust is local**. The system is for peo
 
 ## Federation is table stakes
 
-Every bank is its own URL, its own ed25519 key, its own ledger. Banks talk to each other via signed HTTP. Anyone running the codebase can be a peer. The demo collapses two banks into one Supabase project for operational simplicity; the *protocol* doesn't know or care.
+Every bank is its own URL, its own ed25519 key, its own ledger. Banks talk to each other via signed HTTP. Anyone running the codebase can be a peer. The demo collapses four banks into one Supabase project for operational simplicity; the *protocol* doesn't know or care.
 
 If barter.game ever centralized — even subtly, even for "the demo" — we have built the wrong thing.
 

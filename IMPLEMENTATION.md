@@ -15,7 +15,7 @@ The v1 reference implementation consists of:
 - **`supabase/functions/`** — Supabase Edge Functions that act as bank processes. One function per bank in the demo; the protocol supports arbitrary separation.
 - **`supabase/migrations/`** — Postgres schema. One database backs all demo banks; rows are scoped by `bank_pubkey`.
 
-The demo runs two live banks (`bank-alice`, `bank-bob`) on a single Supabase project. A third bank can be added by creating a new Edge Function and generating a keypair.
+The demo runs four live banks (`bank-alice`, `bank-bob`, `bank-carol`, `bank-dave`) on a single Supabase project. Additional banks can be added by creating a new Edge Function and generating a keypair.
 
 ---
 
@@ -131,7 +131,8 @@ The CLI polls the bank inbox every 10 seconds. There is no WebSocket or SSE in v
 | `barter init --bank <url>` | Pin a bank URL+pubkey in `~/.barter/profile.json` |
 | `barter mint "<name>" [--integer] [--due YYYY-MM-DD] [--limit N]` | Mint a Promise at your default bank |
 | `barter open <promise-hash> --bank <url>` | Open an Account to receive someone else's Promise |
-| `barter trade --give ... --get ... --my-give-account ... --peer-give-account ... --peer-get-account ... --my-get-account ... --peer-pubkey ... --peer-bank ...` | Propose a cross-bank trade |
+| `barter trade --give ... --get ... --my-give-account ... --peer-give-account ... --peer-get-account ... --my-get-account ... --peer-pubkey ... --peer-bank ...` | Propose a bilateral trade (convenience wrapper) |
+| `barter deal <deal-file.json>` | Propose an N-party deal (any number of banks/holders) |
 | `barter confirm <tx-hash>` | Sign `confirm_receipt` as a holder |
 | `barter settle <tx-hash>` | Drive the settle cascade (lead settles first, then followers) |
 | `barter inbox [--bank <url>]` | List pending Txs and balances at a bank |
@@ -190,7 +191,7 @@ SQLite with WAL mode, LevelDB with atomic batches, or an in-memory MVCC store wo
 | Migration policy | No in-place migrations after launch (wipe demo banks if schema changes) | Proper forward-compatible migrations, Blue/Green deploys |
 | Bank discovery | Hardcoded URL+pubkey in client config | Federated directory, on-chain registry, shared JSON file |
 | Web UI | None in v1 | SPA, React, vanilla HTML, native app |
-| N-bank trades | Protocol supports it; CLI demo caps at 2 for simplicity | Build a full N-party coordinator; it's just more client logic |
+| N-bank trades | Full N-party via `barter deal`; `barter trade` is a bilateral convenience | Same client logic, more transfers |
 
 ---
 
@@ -218,7 +219,7 @@ See `TODOS.md` for the v1.5+ roadmap.
 | Protocol (Bun) | `bun run test` | Canonical JSON, crypto, schemas, invite format |
 | Protocol (Deno) | `bun run test:deno` | Same golden vectors under Deno — cross-runtime parity |
 | N-party (Deno) | `bun run test:nparty` | Full multi-bank settle cascade in a Deno test runner |
-| End-to-end | `./scripts/demo.sh` | Two simulated users mint, trade, and settle across live banks |
+| End-to-end | `./scripts/demo.sh` | Four simulated users mint and settle a branching multi-bank deal across live banks |
 
 The Deno suite is load-bearing. If Bun and Deno disagree on a canonical hash, the protocol is broken. Run it before every release.
 

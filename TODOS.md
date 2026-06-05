@@ -58,13 +58,14 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 - **Context:** Requires Cloudflare Workers or similar in front to rewrite paths. $5-25/mo per bank on Supabase Pro plan, OR free with a Worker. Cosmetic.
 - **Depends on:** Real users complaining about URLs (probably never).
 
-## v2+ — bigger swings
+## Done — shipped in v1
 
 ### N-bank Tx (multi-party barter)
-- **What:** Remove the v1 bilateral cap so a single Tx can involve 3+ banks (the legacy `Tx.records[]` is unbounded by design).
-- **Why:** True multi-party barter is the legacy notes' original vision.
-- **Context:** Multi-leg fan-out (who calls whom in what order across 3+ banks) is a meaningfully different protocol than bilateral. Needs a coordinator-election scheme OR a fully symmetric N-party protocol like a saga / paxos variant. Big spec work.
-- **Depends on:** v1 stable; protocol team consensus on coordinator model.
+- **What:** A single Tx can involve any number of banks (the `Tx.records[]` is unbounded by design).
+- **Status:** Shipped. The `barter deal <file.json>` command takes a list of transfers, builds records + Tx, computes roles and predecessors, and locks every leg. `barter settle` drives the cascade in topological order (leads first, then followers). The N-party Deno integration test verifies a 4-bank branching/merging deal end-to-end.
+- **Context:** The client is the coordinator; it holds the full graph and relays signatures. Banks never call each other. The protocol doc schemas and wire envelope are unchanged from the bilateral case — only the orchestration fans out.
+
+## v2+ — bigger swings
 
 ### NFT-like unique Promises
 - **What:** Each `1 logo` Promise instance is a distinct, non-fungible token (vs v1 where any "1 logo" issued by Alice is interchangeable).
