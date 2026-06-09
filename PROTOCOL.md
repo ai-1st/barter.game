@@ -8,25 +8,80 @@ A federated mutual-credit ledger. A deal is a chain of paired credit/debit trans
 
 The simplest deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, and one or more **lead** holders hold first and settle first while everyone else follows. See §2.
 
+### Core concepts: Promise, issuer, holder, bank
+
+A **Promise** is a signed, content-addressed document in which one party (the **issuer**) commits to deliver a specific good or service — "1 logo," "1 hour of consulting," "a hand-drawn portrait." The Promise is bound to a single **bank** (an ed25519 keypair operating a ledger) that tracks every unit of that Promise issued, held, and transferred.
+
+- **Issuer**: the owner of the Promise doc (`pubkey` field). The issuer decides what the Promise means, how many exist (`limit`), and when it matures (`due`). The issuer is personally accountable for redemption.
+- **Holder**: any user with a positive balance in an Account for that Promise. Holders trade Promises among themselves; they are not accountable for the issuer's delivery, only for their own ledger position.
+- **Bank**: the ledger operator whose pubkey appears in `Promise.bank`. The bank is the sole source of truth for balances of that Promise. It issues Accounts, verifies signatures, and applies transfers. It does not guarantee the issuer's performance — that trust is social, out-of-band.
+
+A **transfer** moves a Promise from one holder to another. The debit holder's balance decreases; the credit holder's balance increases. The sum across all Accounts for a given Promise is always zero (or the agreed `limit`).
+
 ---
 
 ## 1. Trust model
 
-barter.game v1 assumes:
+barter.game v1 is built on three behavioral assumptions. They are not enforced by cryptography; they are the social substrate that makes the protocol's risk posture coherent.
 
-- **Users already know their counterparties.** Discovery is out of band (DM, in person, group chat). The protocol does not search for trading partners.
-- **Trust is socially enforced.** If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate.
-- **Bank operators are accountable people.** Anyone can run a bank, but the bank's users have a real relationship with the operator. v1 has no bank-as-a-service for anonymous operators.
+1. **Users already know the issuers of the Promises they hold.**  
+   Discovery is out of band — DM, in-person, group chat. The protocol does not search for trading partners, rate issuers, or verify delivery.
 
-> **Invariant:** These are behavioral assumptions baked into the protocol's risk posture. An implementation that changes them (e.g., adding a reputation system) is no longer barter.game v1 — it is a different protocol.
+2. **Trust is socially enforced.**  
+   If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate. Recourse is human, not algorithmic.
+
+3. **Bank operators are accountable to their issuers.**  
+   Anyone can run a bank, but the issuers who route their Promises through it have a real relationship with the operator. An operator can erase its ledger or abort transactions — there is no cryptographic prevention — but it cannot forge a plausible alternative history alone, because every Tx requires interlinked signatures from multiple independent parties.
+
+> **Extensibility:** Implementers MAY add additional trust, reputation, or audit mechanisms on top of the protocol (e.g., an external attestation layer, a voluntary-reputation miner, or a bank-integrity auditor). Such extensions MUST be backward-compatible: they must not prevent a client and bank from interacting using only the base v1 wire format.
 
 ---
 
-## 2. Settlement model — lead, follow, and visibility
+## 2. Settlement model — three waves, lead/follow, and visibility
 
-### 2.1 Risk — lead and follow
+A deal executes in three waves. Each wave is gated independently; waves do not advance until their gate is satisfied, and no wave waits for a different bank's wave.
 
-A Tx settles as an ordered cascade, not a single atomic flip. Every Tx names a **lead set** — one or more (holder, bank) — and the rest are **followers**. The lead set holds first and settles first; each follower applies its own balance change only after observing the signed `settle` of its predecessor(s) in the transfer chain. The follower's own `settle` cites those upstream sigs in `Signature.seen` (§5.6), so the cascade is a verifiable chain — every link proves the prior link committed.
+### 2.0 Three-wave execution model: approve → hold → settle
+
+**1. Approve** — every holder whose accounts are touched by the deal must authorize the specific **LedgerRecord(s)** (§5.4) that touch their accounts. Authorization is independent: Alice can approve without waiting for Bob. A holder's signature is applied to a Record, not to the Tx. Authorization can come from:
+
+- A direct holder signature on the Record (`action="approve"` or `action="settle"`). The **lead holder signs the credit record** — the record representing what they will receive.
+- A matching `Order` doc (§5.7). When a holder is represented by an Order, the holder's bank approves on the holder's behalf by signing the relevant Record(s), checking at approval time that the relevant accounts have sufficient free balance.
+- An invoice or cheque (reserved for v1.5+; v1 uses signatures and Orders).
+
+If a holder's bank sees both a direct signature and a matching Order, either one satisfies the approval gate.
+
+**2. Hold** — once **all approvals** for a bank's leg are in, that bank locks the debit accounts involved in its records. A bank holds when:
+
+- any of the approvals for its leg are `lead`, **or**
+- all approvals are `follow` AND every counterparty that must move first has already issued a `hold` signature.
+
+Holds are per-account and per-bank. A `-32003` conflict means some account is already locked by another in-flight deal; the client aborts by calling `reject_leg` everywhere.
+
+**3. Settle** — once **all holds** across the whole deal are in, banks apply balances in dependency order. The settle rule mirrors the hold rule:
+
+- a lead bank settles immediately (its holders accepted the risk of moving first),
+- a follow bank settles only after every predecessor bank whose output it depends on has issued a **record-level `settle` signature**, cited in `Signature.seen` (§5.6).
+
+> **Implementation note:** The v1 reference implementation calls `create_records` on each bank, assembles the returned ULIDs into a single Tx, and drives the three waves through `propose_leg`, `hold_leg`, `confirm_receipt`, and `settle_leg`. Alternative implementations MAY use one Tx per holder; the authorization semantics are the same.
+
+### 2.1 Authorization sources
+
+A bank advances a leg only when it has valid authorization — a signature or matching Order — for every **Record** (credit or debit) touching a holder's account in that leg. The four authorization sources, in precedence order:
+
+| Source | Signed target | Role implication |
+|---|---|---|
+| Holder's `lead`-action Signature | credit record | lead |
+| Holder's `follow`-action Signature | credit or debit record | follow |
+| Invoice | debit record | follow for the debit account owner |
+| Matching Order with `lead=true` | matching credit/debit records | lead |
+| Matching Order with `lead=false` | matching credit/debit records | follow |
+
+A bank MAY support only direct signatures in v1; Order/invoice/cheque matching are optional forward-compatible extensions. When multiple sources are present, any one suffices.
+
+### 2.2 Risk — lead and follow
+
+A Tx settles as an ordered cascade, not a single atomic flip. Every Tx names a **lead set** — one or more (holder, bank) — and the rest are **followers**. The lead set holds first and settles first; each follower applies its own balance change only after observing the **record-level `settle` signature(s)** of its predecessor(s) in the transfer chain. The follower's own `settle` cites those upstream sigs in `Signature.seen` (§5.6), so the cascade is a verifiable chain — every link proves the prior link committed.
 
 The lead set is whichever holders must move before anyone downstream can be made whole. Three shapes:
 
@@ -44,7 +99,7 @@ If any downstream bank refuses to apply (compromise, malice, downtime), every pa
 
 > **Invariant:** There is no protocol-level rollback mechanism and no protocol-level timeout. An implementation MAY add a sweeper that releases stuck holds for hygiene, but that is an implementation convenience, not a correctness mechanism.
 
-### 2.2 Visibility — every bank sees only its own legs
+### 2.3 Visibility — every bank sees only its own legs
 
 **No bank ever sees the whole transaction.** A bank sees only the transfers of the promises *it issues* — "this much of my promise leaves holder X; this much arrives at holder Y" — and nothing about the other legs.
 
@@ -53,8 +108,8 @@ This falls straight out of the issuer-authority rule (§5.3, §9): a transfer of
 The coordinator is therefore **the proposing client, not a bank.** The client is the one party that legitimately knows the whole deal — it designed it — so it builds the graph and hands each bank only that bank's slice:
 
 - **Bodies it gets:** only the credit/debit records whose promise this bank issues.
-- **Hashes it gets:** the Tx's full `records[]` list — but these are *hashes*. A bank needs them to recompute and verify the Tx hash (§5.5); it cannot invert a hash into another leg's amount, account, holder, or promise.
-- **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their `settle` signatures, §5.6). It learns *that* a peer bank participates, not *what* that peer transfers.
+- **ULIDs it gets:** the Tx's full `records[]` list — but these are *ULIDs*, not hashes. A bank needs them to verify that its own records are included in the Tx; it cannot infer another leg's amount, account, holder, or promise from a ULID alone.
+- **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their record-level `settle` signatures, §5.6). It learns *that* a peer bank participates, not *what* that peer transfers.
 
 What a bank can infer is bounded and deliberate: the number of legs (length of `records[]`) and the identities of the banks directly upstream of it. It learns nothing else. **Banks do not call each other during a trade** — the client relays each signature to exactly the bank that needs it.
 
@@ -96,7 +151,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "promise" | "pocket" | "account" | "tx" | "credit" | "debit" | "signature";
+  type: "promise" | "pocket" | "account" | "tx" | "credit" | "debit" | "signature" | "order";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -108,7 +163,7 @@ Encoded fields:
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
 - `DateString` — `YYYY-MM-DD`.
 
-The six concrete types:
+The seven concrete types:
 
 ### 5.1 Promise
 
@@ -164,35 +219,49 @@ One half of a paired credit/debit entry in the double-entry ledger.
 LedgerRecord: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
-  account: Base58SHA256;
-  pair?: Base58SHA256;    // hash of the peer record (v1: optional)
-  tx?: Base58SHA256;      // hash of containing Tx (v1: optional)
+  account: Base58SHA256;  // hash of the Account doc (still content-addressed)
+  pair?: ULID;            // ULID of the peer record (set by the bank at creation)
+  tx?: ULID;              // ULID of containing Tx (set by the bank at propose_leg)
 }
 ```
 
-A **transfer** is one debit + one credit of the same Promise for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Promise's issuer bank. `pair` links the two halves. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). A Tx is the full set of transfers in one deal; the chain may be a line, a ring, or a general graph, spanning one bank or many.
+A **transfer** is one debit + one credit of the same Promise for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Promise's issuer bank. `pair` links the two halves by ULID. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). A Tx is the full set of transfers in one deal; the chain may be a line, a ring, or a general graph, spanning one bank or many.
 
-`pair` and `tx` are optional in v1 because populating them creates a circular hash dependency (Tx hashes the records that hash the Tx). The Tx → record binding lives in `Tx.records[]` ordering, and the bank's per-Tx state tracks state per leg.
+Records are the atomic unit of holder authorization. A holder signs a `Signature` doc (§5.6) whose `hash` points to the Tx that contains the Record touching their account. The lead holder signs the **credit record** (what they will receive); follow holders may sign either the credit or debit record depending on authorization source.
+
+Records are **bank-minted**: the bank assigns their ULIDs and ensures uniqueness. They are NOT content-addressed. The Tx → record binding lives in `Tx.records[]` (a list of ULIDs), and the bank's per-Tx state tracks state per leg.
 
 ### 5.5 Tx
 
-Groups records into a barter deal.
+A **Tx represents a single holder's view of a barter deal**: "What am I giving and what am I getting in this exchange?" A holder may have **one or more Txs** in a single deal, depending on how many distinct sets of records touch their accounts. Each holder authorizes the **Records** within their Txs, not the Tx itself; they do not need to know the complete deal unless it is disclosed to them outside the protocol.
+
+For example, if Alice and Bob exchange promises X and Y:
+
+- Alice's Tx contains a debit record against her X account and a credit record for her Y account.
+- Bob's Tx contains a debit record against his Y account and a credit record for his X account.
+- Alice and Bob may not even know each other's identities in the exchange.
+- The X issuer bank sees only that some amount of X moved from one holder to another; it learns nothing about the Y side.
+- The Y issuer bank sees the reverse.
 
 ```ts
 Tx: BaseDoc & {
   type: "tx";
-  records: Base58SHA256[];   // ordered list of Record hashes
+  records: ULID[];           // ordered list of record ULIDs touching this holder
   order?: Base58SHA256;      // optional originating Order doc
+  // invoice?: Base58SHA256; // v1.5+ alternative authorization
+  // cheque?: Base58SHA256;  // v1.5+ alternative authorization
 }
 ```
 
-`records` holds `2K` hashes encoding `K ≥ 1` transfer pairs (one debit + one credit each). Cardinality is **open** — there is no two-bank cap:
+`Tx.pubkey` MUST be the owner of **all** accounts referenced by `records`. A Tx may carry at most one of `order`, `invoice`, or `cheque`; these are alternative authorization sources (see §2.1).
+
+`records` holds `2K` ULIDs encoding `K ≥ 1` transfer pairs (one debit + one credit each). Cardinality is **open** — there is no two-bank cap:
 
 - `K = 1`, one bank — a single transfer (gift, in-bank move).
 - `K = 2`, two banks — the bilateral swap (the common case).
 - `K` pairs across `M` banks — rings and multi-party settlements.
 
-A bank identifies the records it must act on as those whose `pubkey` equals its own bank pubkey (each record's `pubkey` is set to the issuer bank of the transferred Promise). A bank only holds, applies, and signs for its own records; it relays the rest. Across the whole Tx, debits and credits per Promise sum to zero by construction.
+> **Implementation note:** The v1 reference implementation aggregates every holder's records into a single Tx doc for orchestration simplicity. Each holder still authorizes independently via `confirm_receipt`, but they sign the same aggregated Tx hash. Alternative implementations MAY issue one Tx per holder; the three-wave approve/hold/settle semantics (§2.0) are unchanged.
 
 > **Invariant:** `Tx.records[]` is unbounded. Any cap on the number of banks or transfer pairs is an implementation limitation, not a protocol constraint.
 
@@ -212,11 +281,47 @@ Signature: BaseDoc & {
 }
 ```
 
-`pubkey` may be a user OR a bank. `action="settle"` signed by a user means "I confirm receipt; you may settle." `action="settle"` signed by a bank means "I have applied balances." Same word, different layer.
+`pubkey` may be a user OR a bank. All authorization signatures — holder **and** bank — reference a **LedgerRecord** via `hash`, not the Tx. The lead holder signs the **credit record** (what they will receive). A bank's `approve`, `hold`, `settle`, and `reject` signatures each reference the specific Record(s) the bank is attesting to.
 
-`seen` is the load-bearing field for multi-party settlement: a follower bank's `settle` lists the upstream `settle` signatures it observed before applying its own. That turns the flat lead→follow handoff into a verifiable settle chain — each link proves the prior link committed, so a follower can refuse to move until its predecessors demonstrably have. `action` `"lead"` / `"follow"` tag a participant's role for the Tx; `"hold"`, `"approve"`, `"reject"` mark the other phases.
+`seen` is the load-bearing field for multi-party settlement: a follower bank's `settle` signature lists the upstream bank `settle` signatures it observed before applying its own Records. That turns the flat lead→follow handoff into a verifiable settle chain — every link proves the prior link committed, so a follower can refuse to move until its predecessors demonstrably have. `action` `"lead"` / `"follow"` tag a participant's role for the Tx; `"hold"`, `"approve"`, `"reject"` mark the other phases.
 
 > **Invariant:** `Signature.seen` carries the cascade proof. Any implementation must include upstream settle signatures in a follower's `seen` array, and must verify them before applying balances.
+
+### 5.7 Order
+
+A standing instruction that authorizes a bank to process matching **Records** on the holder's behalf. Orders have no expiration; they remain valid as long as the holder maintains sufficient balance in the referenced accounts.
+
+```ts
+Order: BaseDoc & {
+  type: "order";
+  credit: Base58SHA256;     // account to credit (what the holder wants to receive)
+  debit: Base58SHA256;      // account to debit (what the holder is willing to give)
+  rate: number;             // debit_amount / credit_amount; must be positive
+  min: number;              // minimum credit amount per matched Record; prevents dust
+  limit: number;            // maximum cumulative debit amount this order may generate
+  lead: boolean;            // if true, holder authorizes lead role for matched Records
+  approvers?: Base58PubKey[]; // pubkeys whose signatures may substitute for the owner's
+}
+```
+
+**Order-Record matching.** A pair of Records (credit + debit) matches an Order `O` when all of the following hold:
+
+1. The credit record's `account` equals `O.credit`.
+2. The debit record's `account` equals `O.debit`.
+3. The debit amount divided by the credit amount equals `O.rate` (within the bank's rounding policy).
+4. The credit amount is ≥ `O.min`.
+5. The cumulative debit amount across all Records already matched to `O`, plus the current debit, does not exceed `O.limit`.
+6. If `O.lead` is `false`, the Records must be part of a Tx proposed with `role="follow"` for this holder's bank.
+
+If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the approve/hold/settle waves (§2.0). Specifically:
+
+- During **approve**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit. If yes, the bank issues an `approve` signature on the matched **Records** on behalf of the Order; if no, the bank rejects.
+- During **hold**, the bank locks the debit amount as it would for a direct holder signature.
+- During **settle**, the bank applies the balance change and releases the hold.
+
+A holder cancels an Order by emptying its `debit` account; the bank then has no available balance to approve against. Because Orders have no expiration, they remain on the ledger indefinitely, limited only by account balance.
+
+> **Invariant:** Order docs are first-class, content-addressed, and signed by the holder. A bank MUST verify the Order signature before treating it as authorization. The exact matching arithmetic and rounding policy are implementation details, but they MUST be deterministic and documented.
 
 ---
 
@@ -275,25 +380,49 @@ The trade path is **client-orchestrated**: the proposing client calls every meth
 |---|---|---|
 | `mint_promise(promise, pocket?)` | user → issuer bank | Store signed Promise + auto-Pocket + auto-Account (issuer's negative-balance row); sign bank attestation |
 | `open_account(account, pocket?)` | user → issuer bank | Store holder-signed Account (and Pocket if supplied) so the holder can receive that Promise |
-| `propose_leg(tx, records, proposer_approve, role, predecessors)` | client → each bank | Validate + persist the Tx (full hash list) and **only this bank's own records**; record role + predecessor banks; sign the bank's `approve` and return it |
-| `hold_leg(tx_hash)` | client → each bank | Acquire holds on this bank's owned debit accounts for the Tx; sign + return the bank's `hold`. `-32003` on conflict |
-| `confirm_receipt(tx_hash, user_confirm)` | holder → each bank they touch | Persist the holder's settle-action signature. The leg becomes `confirmed` once **every holder in this bank's own records** has signed |
-| `settle_leg(tx_hash, upstream_settles)` | client → each bank, in topo order | Verify the leg is `confirmed` and every **predecessor** bank's `settle` is present + valid; apply this bank's deltas; release its holds; sign + return the bank's `settle` (with `seen` = the upstream sigs) |
+| **Record creation** |
+| `create_records(transfers)` | client → each bank | The bank mints debit/credit records with its own ULIDs, stores them, and returns the record bodies. This is Phase 0 of the deal flow. |
+| **Approve wave** |
+| `propose_leg(tx, record_ulids, proposer_approve, role, predecessors)` | client → each bank | Validate that `record_ulids` were created by this bank and appear in `tx.records`; persist the Tx; record role + predecessor banks; return the bank's `approve` signature |
+| `confirm_receipt(tx_hash, user_confirm)` | holder → each bank they touch | Persist the holder's approval signature on the Tx. The leg becomes `confirmed` once **every Record in this bank's own records** has a valid holder signature (direct, via approver, or via matching Order) |
+| **Hold wave** |
+| `hold_leg(tx_hash)` | client → each bank | Once all approvals for this leg are in, acquire holds on this bank's owned debit accounts; sign + return the bank's `hold`. `-32003` on conflict |
+| **Settle wave** |
+| `settle_leg(tx_hash, upstream_settles)` | client → each bank, in topo order | Once all holds are in, verify this leg is `confirmed` and every **predecessor** bank's record-level `settle` is present + valid; apply this bank's deltas; release its holds; sign + return the bank's record-level `settle` (with `seen` = the upstream record-level sigs) |
+| **Abort** |
 | `reject_leg(tx_hash, reason)` | client → each bank | Release any holds this bank acquired for the Tx; mark its leg `rejected` |
+| **Read-only** |
 | `get_promise(promise_hash)` | any → any | Return the Promise doc body |
 | `get_account_balance(account_hash)` | user → issuer bank | Return current and pending balance |
 | `list_accounts()` | user → bank | Return all accounts owned by the sender at this bank, with Promise bodies |
 
 ### 7.1 Orchestration & the per-bank slice
 
-The proposing client builds the deal as a set of transfers (each: promise, amount, debit holder, credit holder), then:
+The proposing client builds the deal as a set of transfers (each: promise, amount, debit holder, credit holder). Conceptually a holder may have **one or more Txs** in the deal, each capturing a set of Records touching their accounts. In the v1 reference implementation these views are aggregated into a single Tx whose `records[]` contains every record hash. The three-wave orchestration is the same either way.
 
-1. **Build** the `2K` records and the Tx (`records[]` = all record hashes). Sign a `proposer_approve` over the Tx hash.
-2. **Slice.** For each participating bank, select only the records whose `pubkey` is that bank, compute its `role` (`lead`/`follow`) and its `predecessors` (the issuer banks of promises credited to this bank's debit-holders; empty for leads — leads break cycles by going first).
-3. **propose_leg** on every bank with its slice; collect each bank's `approve`.
-4. **hold_leg** on every bank; on any `-32003`, **reject_leg** everywhere and abort.
-5. Wait for **confirm_receipt** from every holder (each holder signs once; the client delivers that signature to each bank where the holder appears).
-6. **settle_leg** in topological order: leads first (`upstream_settles = []`), then each follower once the client holds valid `settle` sigs from all of its predecessors, passing them in as `upstream_settles`. The cascade ends when every bank has settled.
+#### Phase 0 — Create records
+
+1. **Group transfers by bank.** For each participating bank, collect the transfers of the promises it issues.
+2. **create_records** on every bank with its transfer list. The bank validates the accounts, mints debit/credit records with its own ULIDs, and returns them. The client collects all ULIDs.
+3. **Build the Tx.** Assemble `tx.records` from all returned ULIDs in the original transfer order. The Tx `pubkey` MUST be the proposer, who owns every account they reference.
+
+#### Wave 1 — Approve
+
+4. **Slice.** For each participating bank, select only the record ULIDs it created, compute its `role` (`lead`/`follow`) and its `predecessors`.
+5. **propose_leg** on every bank with its slice. Each bank validates that the ULIDs were created by it and appear in `tx.records`, checks free balance if the holder is represented by a matching Order, and returns its `approve` signature.
+6. Gather **confirm_receipt** from every holder (or matching Order authorization from the holder's bank). Each holder signs the **Tx hash** — the lead holder signs first. Approvals are independent and do not wait on each other.
+
+#### Wave 2 — Hold
+
+5. Once all approvals for a bank's leg are in, call **hold_leg** on that bank. The bank acquires holds on its owned debit accounts and returns a `hold` signature.  
+   - A lead bank holds immediately.  
+   - A follow bank holds only after every predecessor bank whose output it depends on has already returned `hold`.
+6. On any `-32003` conflict, call **reject_leg** everywhere and abort.
+
+#### Wave 3 — Settle
+
+7. Call **settle_leg** in topological order: leads first, then each follower once the client holds valid `settle` signatures from all of its predecessors. Each follower cites those upstream sigs in `Signature.seen`.
+8. The cascade ends when every bank has settled. If a downstream bank refuses, upstream banks remain settled — the lead/follow risk accepted in §2.2.
 
 Because the client is the only holder of the full graph, no bank needs another bank's records, URL, or even existence beyond its immediate predecessors. The doc schemas (`Tx.records[]` is unbounded; `Signature.seen` carries the cascade) and the wire envelope are unchanged from the bilateral case — only the orchestration fans out.
 
@@ -303,7 +432,7 @@ Because the client is the only holder of the full graph, no bank needs another b
 
 ## 8. State machine (per-Tx, per-bank)
 
-Each bank runs its own state machine over its own legs, advanced entirely by the proposing client's calls (§7.1). A bank never advances on a peer bank's message — only on a client call carrying the proofs it needs. `held` waits for the leg's holders to confirm; `confirmed` waits for the client to deliver `settle_leg` with valid predecessor sigs.
+Each bank runs its own state machine over its own legs, advanced entirely by the proposing client's calls (§7.1). A bank never advances on a peer bank's message — only on a client call carrying the proofs it needs. `held` waits for the leg's Records to be signed; `confirmed` waits for the client to deliver `settle_leg` with valid predecessor sigs.
 
 ```
    per-bank leg state (driven by the client; one machine per bank)
@@ -316,7 +445,8 @@ Each bank runs its own state machine over its own legs, advanced entirely by the
                                                 ┌──────────┐
                                                 │   held   │  debit accounts locked
                                                 └────┬─────┘
-                              confirm_receipt from every holder in THIS leg
+                              confirm_receipt: signature on every Record
+                              in THIS leg from the holder (or matching Order)
                                                      │
                                                      ▼
                                                 ┌──────────┐

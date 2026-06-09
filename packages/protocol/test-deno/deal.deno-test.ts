@@ -11,7 +11,15 @@ function counterUlid() {
   return () => ("01TEST" + String(n++).padStart(20, "0")).slice(0, 26);
 }
 
-Deno.test("buildDeal: Tx.records bind to the record hashes (Deno)", () => {
+Deno.test("buildDeal: Tx.records bind to the supplied record ULIDs (Deno)", () => {
+  const ulid = counterUlid();
+  const bankUlids: Record<string, string[]> = {
+    bankA: [ulid(), ulid()],
+    bankB: [ulid(), ulid()],
+    bankC: [ulid(), ulid()],
+    bankD: [ulid(), ulid(), ulid(), ulid()],
+  };
+
   const d = buildDeal(
     {
       proposer: "hA",
@@ -24,12 +32,21 @@ Deno.test("buildDeal: Tx.records bind to the record hashes (Deno)", () => {
         { promise: "pD", issuerBank: "bankD", amount: 1, from: { holder: "hD", account: "accD_D" }, to: { holder: "hB", account: "accB_D" } },
       ],
     },
-    { ulid: counterUlid() },
+    bankUlids,
+    { ulid },
   );
-  const expected = d.records.map((r) => hashDoc(r)).join(",");
+
+  const expected = [
+    bankUlids["bankA"][0], bankUlids["bankA"][1],
+    bankUlids["bankB"][0], bankUlids["bankB"][1],
+    bankUlids["bankC"][0], bankUlids["bankC"][1],
+    bankUlids["bankD"][0], bankUlids["bankD"][1],
+    bankUlids["bankD"][2], bankUlids["bankD"][3],
+  ].join(",");
+
   const actual = d.tx.records.join(",");
   if (expected !== actual) {
-    throw new Error(`Tx.records do not match record hashes under Deno`);
+    throw new Error(`Tx.records do not match expected ULIDs under Deno: expected ${expected}, got ${actual}`);
   }
   if (d.order.join(",") !== "bankA,bankB,bankC,bankD") {
     throw new Error(`unexpected settle order: ${d.order.join(",")}`);

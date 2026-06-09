@@ -26,6 +26,7 @@ title = 'barter.game'
   [params.footer]
     enable = true
     displayCopyright = true
+    displayPoweredBy = false
 
   [params.search]
     enable = true

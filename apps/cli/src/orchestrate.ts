@@ -2,8 +2,9 @@
 //
 // The proposing user is the coordinator (PROTOCOL.md §2 Visibility): it holds
 // the whole deal, hands each bank only its own slice, and relays signatures.
-// Banks never call each other. This module drives propose_leg → hold_leg, and
-// later the settle_leg cascade, signing every call as the proposer.
+// Banks never call each other. This module drives create_records → propose_leg
+// → hold_leg, and later the settle_leg cascade, signing every call as the
+// proposer.
 
 import { buildDeal, newUlid, signDoc, type DealSpec } from "../../../packages/protocol/src/index.ts";
 import { call } from "./client.ts";
@@ -36,7 +37,8 @@ function proposerApprove(profile: Profile, txHash: string): Record<string, unkno
 }
 
 /**
- * Build the deal, propose every leg, then lock every leg. On any failure,
+ * Call create_records on every participating bank, assemble the record ULIDs
+ * into a Tx, propose every leg, then lock every leg. On any failure,
  * reject every leg already touched and rethrow. Returns the DealState the
  * proposer persists for the later settle cascade.
  */
@@ -45,21 +47,51 @@ export async function proposeAndHold(
   spec: DealSpec,
   banks: BankMap,
 ): Promise<DealState> {
-  const built = buildDeal(spec);
-  const approve = proposerApprove(profile, built.txHash);
+  // Phase 0: create records at each bank. The bank assigns ULIDs.
+  const bankRecordUlids: Record<string, string[]> = {};
+  const touchedCreate: string[] = [];
+  try {
+    // Group transfers by bank so we can call create_records per bank.
+    const groups = new Map<string, Array<{ amount: number; from_account: string; to_account: string }>>();
+    for (const t of spec.transfers) {
+      if (!groups.has(t.issuerBank)) groups.set(t.issuerBank, []);
+      groups.get(t.issuerBank)!.push({
+        amount: t.amount,
+        from_account: t.from.account,
+        to_account: t.to.account,
+      });
+    }
 
-  for (const bank of built.order) {
-    if (!banks[bank]) throw new Error(`no URL configured for participating bank ${bank}`);
+    for (const [bank, transfers] of groups) {
+      if (!banks[bank]) throw new Error(`no URL configured for participating bank ${bank}`);
+      const res = (await call(
+        profile,
+        "create_records",
+        { transfers },
+        { bankUrl: banks[bank], toBankPubkey: bank },
+      )) as { records: Array<Record<string, unknown>> };
+      bankRecordUlids[bank] = res.records.map((r) => r.ulid as string);
+      touchedCreate.push(bank);
+    }
+  } catch (err) {
+    // Best-effort cleanup: if create_records fails partway through, we can't
+    // really undo the records already created (they're bank-minted). The
+    // client just rethrows and the deal is abandoned.
+    throw err;
   }
+
+  // Build the Tx from the collected ULIDs.
+  const built = buildDeal(spec, bankRecordUlids);
+  const approve = proposerApprove(profile, built.txHash);
 
   const touched: string[] = [];
   try {
-    // Phase 1: propose each leg with ONLY that bank's records.
+    // Phase 1: propose each leg with ONLY that bank's record ULIDs.
     for (const leg of built.legs) {
       await call(
         profile,
         "propose_leg",
-        { tx: built.tx, records: leg.records, proposer_approve: approve, role: leg.role, predecessors: leg.predecessors },
+        { tx: built.tx, record_ulids: leg.recordUlids, proposer_approve: approve, role: leg.role, predecessors: leg.predecessors },
         { bankUrl: banks[leg.bank], toBankPubkey: leg.bank },
       );
       touched.push(leg.bank);

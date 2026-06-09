@@ -1,0 +1,32 @@
+/* Fix white-on-white code blocks.
+   Hugo's Chroma 'github' style hardcodes `background-color:#fff` inline on <pre>.
+   In dark mode the body text becomes light, so unstyled spans inside the white
+   background become invisible. Force readable colours in both modes. */
+pre[style*="background-color:#fff"],
+pre[style*="background-color: #fff"] {
+  color: #1f2937;
+}
+
+pre[style*="background-color:#fff"] code,
+pre[style*="background-color: #fff"] code {
+  color: #1f2937;
+}
+
+html.dark pre[style*="background-color:#fff"],
+html.dark pre[style*="background-color: #fff"] {
+  background-color: #1f2937 !important;
+  color: #e5e7eb;
+}
+
+html.dark pre[style*="background-color:#fff"] code,
+html.dark pre[style*="background-color: #fff"] code,
+html.dark pre[style*="background-color:#fff"] span,
+html.dark pre[style*="background-color: #fff"] span {
+  color: #e5e7eb;
+}
+
+/* Ensure syntax-highlighted keywords remain visible in dark mode */
+html.dark pre[style*="background-color:#fff"] span[style*="color:"],
+html.dark pre[style*="background-color: #fff"] span[style*="color:"] {
+  filter: brightness(1.4);
+}

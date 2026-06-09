@@ -94,7 +94,7 @@ export type Signature = BaseDoc & {
 * that is responsible for record keeping. As other documents, promises are immutable. To change a Bank, new Promise
 * needs to be created.
 * 
-* - pubkey: emitent of the promise
+* - pubkey: issuer of the promise
 * - bank: pubkey of the entity that maintains account balances and processes transactions, 
 * - name: diplay name of the promise
 * - due: optional maturity date 

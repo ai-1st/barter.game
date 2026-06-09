@@ -26,6 +26,18 @@ export type AccountRow = {
   acknowledged: boolean;
 };
 
+export type LedgerRecordRow = {
+  ulid: string;
+  bank_pubkey: string;
+  type: string;
+  account: string;
+  amount: string;
+  pair_ulid: string | null;
+  tx_ulid: string | null;
+  body: Record<string, unknown>;
+  created_at: string;
+};
+
 export class BankDB {
   constructor(private sb: SupabaseClient, private bankPubkey: string) {}
 
@@ -121,6 +133,66 @@ export class BankDB {
       out[row.hash as string] = row.body as Record<string, unknown>;
     }
     return out;
+  }
+
+  // ── ledger_records: bank-minted, ULID-identified ───────────────────────────
+
+  /** Create a ledger record. The bank assigns the ULID and guarantees uniqueness. */
+  async insertLedgerRecord(input: {
+    ulid: string;
+    type: "credit" | "debit";
+    account: string;
+    amount: number;
+    pairUlid?: string;
+    body: Record<string, unknown>;
+  }): Promise<void> {
+    const { error } = await this.sb.from("ledger_records").insert({
+      ulid: input.ulid,
+      bank_pubkey: this.bankPubkey,
+      type: input.type,
+      account: input.account,
+      amount: input.amount,
+      pair_ulid: input.pairUlid ?? null,
+      body: input.body,
+    });
+    if (error) throw new Error(`ledger_records.insert: ${error.message}`);
+  }
+
+  async getLedgerRecord(ulid: string): Promise<LedgerRecordRow | null> {
+    const { data, error } = await this.sb
+      .from("ledger_records")
+      .select("*")
+      .eq("ulid", ulid)
+      .eq("bank_pubkey", this.bankPubkey)
+      .maybeSingle();
+    if (error) throw new Error(`ledger_records.get: ${error.message}`);
+    return data as LedgerRecordRow | null;
+  }
+
+  /** Look up multiple ledger records by ULID. Returns a ulid → body map. */
+  async getLedgerRecordsByUlids(ulids: string[]): Promise<Record<string, Record<string, unknown>>> {
+    if (ulids.length === 0) return {};
+    const { data, error } = await this.sb
+      .from("ledger_records")
+      .select("ulid, body")
+      .eq("bank_pubkey", this.bankPubkey)
+      .in("ulid", ulids);
+    if (error) throw new Error(`ledger_records.byUlids: ${error.message}`);
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const row of data ?? []) {
+      out[row.ulid as string] = row.body as Record<string, unknown>;
+    }
+    return out;
+  }
+
+  /** Bind ledger records to a Tx by setting their tx_ulid. */
+  async bindRecordsToTx(ulids: string[], txUlid: string): Promise<void> {
+    const { error } = await this.sb
+      .from("ledger_records")
+      .update({ tx_ulid: txUlid })
+      .eq("bank_pubkey", this.bankPubkey)
+      .in("ulid", ulids);
+    if (error) throw new Error(`ledger_records.bindTx: ${error.message}`);
   }
 
   /**

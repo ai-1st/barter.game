@@ -28,10 +28,10 @@ export const rejectLeg: Handler = async (params, ctx) => {
     if ((txRow.body as { pubkey: string }).pubkey !== ctx.senderPubkey) {
       throw new RpcError(RpcErrors.VALIDATION, "reject_leg caller must be the Tx proposer");
     }
-    const recordHashes = (txRow.body as { records: string[] }).records;
-    const recordRows = await ctx.db.getDocsByHashes(recordHashes);
-    for (const h of recordHashes) {
-      const rec = recordRows[h];
+    const recordUlids = (txRow.body as { records: string[] }).records;
+    const recordRows = await ctx.db.getLedgerRecordsByUlids(recordUlids);
+    for (const u of recordUlids) {
+      const rec = recordRows[u];
       if (!rec || rec.pubkey !== ctx.bankPubkey || rec.type !== "debit") continue;
       await ctx.db.releaseHold(rec.account as string, p.tx_hash);
     }

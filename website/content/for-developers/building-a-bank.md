@@ -72,9 +72,15 @@ Then implement the trade path in order:
 - Store the Pocket if supplied.
 - This is how a holder prepares to receive a Promise.
 
+### `create_records`
+- The bank mints debit/credit records with its own ULIDs.
+- Validates that both accounts exist and belong to this bank.
+- Sets `pair` on each record to link the two halves.
+- Stores in `ledger_records` and returns the bodies to the client.
+
 ### `propose_leg`
-- Validate the Tx and **only the records this bank issues**.
-- Persist the Tx hash list and the bank's slice.
+- Validate the Tx and **only the record ULIDs this bank created**.
+- Persist the Tx and bind the records to it.
 - Record `role` (lead/follow) and `predecessors`.
 - Sign and return `approve`.
 

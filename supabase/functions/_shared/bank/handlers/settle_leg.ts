@@ -73,11 +73,11 @@ export const settleLeg: Handler = async (params, ctx) => {
   }
 
   // Apply deltas for owned records; release holds on debited accounts.
-  const recordHashes = (txRow.body as { records: string[] }).records;
-  const recordRows = await ctx.db.getDocsByHashes(recordHashes);
+  const recordUlids = (txRow.body as { records: string[] }).records;
+  const recordRows = await ctx.db.getLedgerRecordsByUlids(recordUlids);
   const applied: Array<{ accountHash: string; delta: number; newBalance: string }> = [];
-  for (const h of recordHashes) {
-    const rec = recordRows[h];
+  for (const u of recordUlids) {
+    const rec = recordRows[u];
     if (!rec || rec.pubkey !== ctx.bankPubkey) continue;
     const delta = rec.type === "debit" ? -(rec.amount as number) : +(rec.amount as number);
     const newBalance = await ctx.db.applyBalanceDelta(rec.account as string, delta);

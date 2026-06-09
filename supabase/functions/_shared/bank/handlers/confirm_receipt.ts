@@ -71,12 +71,12 @@ async function haveAllLegConfirms(
 ): Promise<boolean> {
   const txRow = await ctx.db.getDoc(txHash);
   if (!txRow) return false;
-  const recordHashes = (txRow.body as { records: string[] }).records;
-  const recordRows = await ctx.db.getDocsByHashes(recordHashes);
+  const recordUlids = (txRow.body as { records: string[] }).records;
+  const recordRows = await ctx.db.getLedgerRecordsByUlids(recordUlids);
 
   const holders = new Set<string>();
-  for (const h of recordHashes) {
-    const rec = recordRows[h];
+  for (const u of recordUlids) {
+    const rec = recordRows[u];
     if (!rec || rec.pubkey !== ctx.bankPubkey) continue;
     const acct = await ctx.db.getAccount(rec.account as string);
     if (acct) holders.add(acct.holder_pubkey);

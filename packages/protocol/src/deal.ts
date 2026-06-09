@@ -3,15 +3,19 @@
 // A *deal* is a set of transfers. Each transfer moves one Promise from a debit
 // holder to a credit holder, and lives entirely at the Promise's issuer bank
 // (debit + credit are both that bank's records). The proposing client is the
-// only party that sees the whole deal; it builds the records + Tx here, then
-// hands each bank ONLY its own slice (see PROTOCOL.md §2 Visibility, §7.1).
+// only party that sees the whole deal; it hands each bank ONLY its own slice
+// (see PROTOCOL.md §2 Visibility, §7.1).
+//
+// Records are bank-minted: the client calls `create_records` on each bank,
+// the bank assigns ULIDs, stores the records, and returns them. The client
+// then assembles the Tx from those ULIDs and drives propose_leg → hold_leg →
+// settle_leg.
 //
 // This module has zero I/O. It is exercised by both the Bun and Deno test
-// suites, same as canonical.ts, so the record/Tx bytes it produces are
-// identical across runtimes.
+// suites, same as canonical.ts.
 
 import { hashDoc, newUlid } from "./crypto.ts";
-import type { Base58PubKey, Base58SHA256, LedgerRecord, Tx } from "./schemas.ts";
+import type { Base58PubKey, Base58SHA256, LedgerRecord, Tx, ULID } from "./schemas.ts";
 
 /** One leg of value movement: `from` gives `amount` of `promise` to `to`. */
 export type TransferSpec = {
@@ -44,16 +48,14 @@ export type BankLeg = {
   role: "lead" | "follow";
   /** Bank pubkeys whose `settle` this bank must observe before settling. */
   predecessors: Base58PubKey[];
-  /** Bodies of ONLY this bank's records (its issued Promise's movements). */
-  records: LedgerRecord[];
+  /** ULIDs of this bank's records (in the order returned by create_records). */
+  recordUlids: ULID[];
 };
 
 export type BuiltDeal = {
-  /** Full Tx doc: pubkey=proposer, records=ALL record hashes (in build order). */
+  /** Full Tx doc: pubkey=proposer, records=ALL record ULIDs (in build order). */
   tx: Tx;
   txHash: Base58SHA256;
-  /** Every record, for the proposer's own bookkeeping. */
-  records: LedgerRecord[];
   /** Per-bank slices, ordered by settle (topological) order: leads first. */
   legs: BankLeg[];
   /** Settle order as bank pubkeys (leads first). */
@@ -127,12 +129,37 @@ function validateTransfer(t: TransferSpec, i: number): void {
 }
 
 /**
- * Build a deal into its records, Tx, and per-bank slices.
+ * Group transfers by issuer bank, preserving the original relative order.
+ */
+function groupTransfersByBank(
+  transfers: TransferSpec[],
+): Map<Base58PubKey, { transfers: TransferSpec[]; indices: number[] }> {
+  const groups = new Map<string, { transfers: TransferSpec[]; indices: number[] }>();
+  for (let i = 0; i < transfers.length; i++) {
+    const bank = transfers[i].issuerBank;
+    if (!groups.has(bank)) groups.set(bank, { transfers: [], indices: [] });
+    groups.get(bank)!.transfers.push(transfers[i]);
+    groups.get(bank)!.indices.push(i);
+  }
+  return groups;
+}
+
+/**
+ * Build a deal into its Tx and per-bank slices.
+ *
+ * The client must first call `create_records` on each participating bank,
+ * passing that bank's transfers. The bank returns record ULIDs in the same
+ * order (debit, credit per transfer). Those ULIDs are fed back in via
+ * `bankRecordUlids`.
  *
  * Record ordering in `Tx.records[]` is `[t0.debit, t0.credit, t1.debit,
  * t1.credit, …]` — stable and reproducible from the transfer list.
  */
-export function buildDeal(spec: DealSpec, opts: BuildDealOptions = {}): BuiltDeal {
+export function buildDeal(
+  spec: DealSpec,
+  bankRecordUlids: Record<Base58PubKey, ULID[]>,
+  opts: BuildDealOptions = {},
+): BuiltDeal {
   const ulid = opts.ulid ?? newUlid;
   if (!spec.transfers || spec.transfers.length === 0) {
     throw new Error("deal needs at least one transfer");
@@ -146,31 +173,37 @@ export function buildDeal(spec: DealSpec, opts: BuildDealOptions = {}): BuiltDea
     }
   }
 
-  // Build records (debit, credit) per transfer, in order.
-  const records: LedgerRecord[] = [];
-  for (const t of spec.transfers) {
-    records.push({
-      type: "debit",
-      pubkey: t.issuerBank,
-      ulid: ulid(),
-      account: t.from.account,
-      amount: t.amount,
-    });
-    records.push({
-      type: "credit",
-      pubkey: t.issuerBank,
-      ulid: ulid(),
-      account: t.to.account,
-      amount: t.amount,
-    });
+  // Validate supplied record ULIDs match each bank's transfer count.
+  const groups = groupTransfersByBank(spec.transfers);
+  for (const [bank, g] of groups) {
+    const supplied = bankRecordUlids[bank];
+    if (!supplied) {
+      throw new Error(`missing record ULIDs for bank ${bank}`);
+    }
+    const expected = g.transfers.length * 2; // one debit + one credit per transfer
+    if (supplied.length !== expected) {
+      throw new Error(
+        `bank ${bank}: expected ${expected} record ULIDs (${g.transfers.length} transfers), got ${supplied.length}`,
+      );
+    }
   }
-  const recordHashes = records.map((r) => hashDoc(r));
+
+  // Assemble Tx.records in original transfer order.
+  const txRecords: ULID[] = new Array(spec.transfers.length * 2);
+  for (const [bank, g] of groups) {
+    const ulids = bankRecordUlids[bank];
+    for (let j = 0; j < g.indices.length; j++) {
+      const idx = g.indices[j];
+      txRecords[idx * 2] = ulids[j * 2];         // debit
+      txRecords[idx * 2 + 1] = ulids[j * 2 + 1]; // credit
+    }
+  }
 
   const tx: Tx = {
     type: "tx",
     pubkey: spec.proposer,
     ulid: ulid(),
-    records: recordHashes,
+    records: txRecords,
   };
   const txHash = hashDoc(tx);
 
@@ -200,18 +233,12 @@ export function buildDeal(spec: DealSpec, opts: BuildDealOptions = {}): BuiltDea
 
   const order = topoSortBanks(banks, predecessors);
 
-  // Slice records per bank.
-  const recordsByBank = new Map<string, LedgerRecord[]>();
-  for (const r of records) {
-    const owner = r.pubkey;
-    if (!recordsByBank.has(owner)) recordsByBank.set(owner, []);
-    recordsByBank.get(owner)!.push(r);
-  }
+  // Slice record ULIDs per bank.
   const legs: BankLeg[] = order.map((bank) => ({
     bank,
     role: leadSet.has(bank) ? "lead" : "follow",
     predecessors: predecessors[bank] ?? [],
-    records: recordsByBank.get(bank) ?? [],
+    recordUlids: bankRecordUlids[bank] ?? [],
   }));
 
   // Which banks each holder must confirm at: any bank where they hold a record.
@@ -225,5 +252,5 @@ export function buildDeal(spec: DealSpec, opts: BuildDealOptions = {}): BuiltDea
     }
   }
 
-  return { tx, txHash, records, legs, order, confirmsByHolder };
+  return { tx, txHash, legs, order, confirmsByHolder };
 }

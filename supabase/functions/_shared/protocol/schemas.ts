@@ -34,7 +34,8 @@ export type DocType =
   | "tx"
   | "credit"
   | "debit"
-  | "signature";
+  | "signature"
+  | "order";
 
 /** Promise: minted by Promise owner. Bound to an issuing bank pubkey. */
 export type Promise = BaseDoc & {
@@ -60,24 +61,28 @@ export type Account = BaseDoc & {
 };
 
 /** Record: one half of a paired credit/debit accounting entry.
- *  v1 relaxes `pair` and `tx` to optional because populating them would
- *  require a circular hash dance (Tx hashes records that hash the Tx).
- *  The Tx → record binding lives in Tx.records[] ordering; the bank's
- *  `txs` table joins state by tx_hash.
+ *  Records are bank-minted and identified by ULID, not by content hash.
+ *  `pair` links the debit and credit halves of a transfer (both ULIDs).
+ *  `tx` is set when the record is bound to a Tx during propose_leg.
  */
 export type LedgerRecord = BaseDoc & {
   type: "credit" | "debit";
   amount: number;
   account: Base58SHA256;
-  pair?: Base58SHA256;
-  tx?: Base58SHA256;
+  pair?: ULID;
+  tx?: ULID;
 };
 
-/** Tx: groups a set of Records into a barter deal. */
+/** Tx: groups a set of Records into a barter deal.
+ *  `records` holds bank-assigned ULIDs in transfer order.
+ *  The Tx itself is still hashed for signing, but two independent builds of
+ *  the same logical deal will produce different hashes (banks assign ULIDs),
+ *  so the Tx hash is no longer a globally deterministic content address.
+ */
 export type Tx = BaseDoc & {
   type: "tx";
   order?: Base58SHA256;
-  records: Base58SHA256[];
+  records: ULID[];
 };
 
 /** Signature: attestation doc. `sig` populated after signing. */
@@ -98,15 +103,28 @@ export type Signature = BaseDoc & {
   sig?: Base58Signature;
 };
 
-export type AnyDoc = Promise | Pocket | Account | LedgerRecord | Tx | Signature;
+/** Order: standing instruction authorizing a bank to process matching Txs. */
+export type Order = BaseDoc & {
+  type: "order";
+  credit: Base58SHA256;      // account to credit (what holder wants to receive)
+  debit: Base58SHA256;       // account to debit (what holder is willing to give)
+  rate: number;              // debit_amount / credit_amount; must be positive
+  min: number;               // minimum credit amount per matched Tx
+  limit: number;             // maximum cumulative debit amount
+  lead: boolean;             // if true, authorizes lead role for matched Txs
+  approvers?: Base58PubKey[]; // pubkeys whose sigs may substitute for the owner's
+};
+
+export type AnyDoc = Promise | Pocket | Account | LedgerRecord | Tx | Signature | Order;
 
 // ------- Hash helpers -------
+// LedgerRecords are bank-minted by ULID and are NOT content-addressed.
 
 export const hashPromise = (p: Promise): Base58SHA256 => hashDoc(p);
 export const hashPocket = (p: Pocket): Base58SHA256 => hashDoc(p);
 export const hashAccount = (a: Account): Base58SHA256 => hashDoc(a);
-export const hashRecord = (r: LedgerRecord): Base58SHA256 => hashDoc(r);
 export const hashTx = (t: Tx): Base58SHA256 => hashDoc(t);
+export const hashOrder = (o: Order): Base58SHA256 => hashDoc(o);
 
 // ------- Validators -------
 //
@@ -195,10 +213,10 @@ export function validateRecord(d: unknown): asserts d is LedgerRecord {
   if (typeof r.account !== "string" || !BASE58_RE.test(r.account)) {
     throw new TypeError("record.account must be a base58 hash");
   }
-  // v1 relaxation: pair and tx are optional (see schema comment).
+  // pair and tx are ULIDs (bank-assigned), not content hashes.
   for (const field of ["pair", "tx"]) {
-    if (r[field] !== undefined && (typeof r[field] !== "string" || !BASE58_RE.test(r[field] as string))) {
-      throw new TypeError(`record.${field} must be a base58 hash if present`);
+    if (r[field] !== undefined && (typeof r[field] !== "string" || !ULID_RE.test(r[field] as string))) {
+      throw new TypeError(`record.${field} must be a ULID if present`);
     }
   }
 }
@@ -210,12 +228,44 @@ export function validateTx(d: unknown): asserts d is Tx {
     throw new TypeError("tx.records must be a non-empty array");
   }
   for (const r of t.records) {
-    if (typeof r !== "string" || !BASE58_RE.test(r)) {
-      throw new TypeError("tx.records[] must be base58 hashes");
+    if (typeof r !== "string" || !ULID_RE.test(r)) {
+      throw new TypeError("tx.records[] must be ULIDs");
     }
   }
   if (t.order !== undefined && (typeof t.order !== "string" || !BASE58_RE.test(t.order))) {
     throw new TypeError("tx.order must be a base58 hash if present");
+  }
+}
+
+export function validateOrder(d: unknown): asserts d is Order {
+  assertBaseDoc(d, "order");
+  const o = d as Record<string, unknown>;
+  for (const field of ["credit", "debit"]) {
+    if (typeof o[field] !== "string" || !BASE58_RE.test(o[field] as string)) {
+      throw new TypeError(`order.${field} must be a base58 hash`);
+    }
+  }
+  if (typeof o.rate !== "number" || !Number.isFinite(o.rate) || o.rate <= 0) {
+    throw new TypeError("order.rate must be a positive finite number");
+  }
+  if (typeof o.min !== "number" || !Number.isFinite(o.min) || o.min < 0) {
+    throw new TypeError("order.min must be a non-negative finite number");
+  }
+  if (typeof o.limit !== "number" || !Number.isFinite(o.limit) || o.limit <= 0) {
+    throw new TypeError("order.limit must be a positive finite number");
+  }
+  if (typeof o.lead !== "boolean") {
+    throw new TypeError("order.lead must be a boolean");
+  }
+  if (o.approvers !== undefined) {
+    if (!Array.isArray(o.approvers)) {
+      throw new TypeError("order.approvers must be an array if present");
+    }
+    for (const a of o.approvers) {
+      if (typeof a !== "string" || !BASE58_RE.test(a)) {
+        throw new TypeError("order.approvers[] must be base58 pubkeys");
+      }
+    }
   }
 }
 
@@ -260,6 +310,7 @@ export function validateDoc(d: unknown): asserts d is AnyDoc {
     case "debit": return validateRecord(d);
     case "tx": return validateTx(d);
     case "signature": return validateSignature(d);
+    case "order": return validateOrder(d);
     default: throw new TypeError(`unknown doc.type: ${String(t)}`);
   }
 }

@@ -33,15 +33,15 @@ Migrations live in `supabase/migrations/`. Apply with `supabase db push`.
 ### `docs` — content-addressed signed-doc archive
 
 Every signed doc the bank has ever seen, keyed by its content hash.
-This is the bank's eternal append-only history. Account balances are
-derived from the doc stream (with the `accounts` table as an
-optimization).
+This is the bank's eternal append-only history for content-addressed
+docs: Promise, Pocket, Account, Tx, Signature, and Order.
+Ledger records are NOT stored here (they live in `ledger_records`).
 
 ```sql
 CREATE TABLE docs (
   hash         TEXT NOT NULL,                  -- base58(sha256(canonical(doc)))
   bank_pubkey  TEXT NOT NULL,                  -- which bank holds this doc
-  type         TEXT NOT NULL,                  -- promise|pocket|account|tx|credit|debit|signature
+  type         TEXT NOT NULL,                  -- promise|pocket|account|tx|signature|order
   pubkey       TEXT NOT NULL,                  -- doc.pubkey (owner / signer)
   body         JSONB NOT NULL,                 -- the full signed doc
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -59,6 +59,31 @@ bank, so this is mostly a defensive choice.
 
 Inserts use `ON CONFLICT DO NOTHING` semantics — receiving the same
 doc twice is a no-op, which makes RPC retries safe.
+
+### `ledger_records` — bank-minted ledger entries
+
+Ledger records are created by the bank, identified by ULID, and are
+NOT content-addressed. The bank assigns ULIDs at creation time and
+ensures uniqueness per `(ulid, bank_pubkey)`. Records reference each
+other (`pair`) and their containing Tx (`tx`) by ULID.
+
+```sql
+CREATE TABLE ledger_records (
+  ulid         TEXT NOT NULL,
+  bank_pubkey  TEXT NOT NULL,
+  type         TEXT NOT NULL,        -- credit | debit
+  account      TEXT NOT NULL,        -- account hash (content-addressed)
+  amount       NUMERIC NOT NULL,
+  pair_ulid    TEXT,                 -- peer record ULID (set at creation)
+  tx_ulid      TEXT,                 -- containing Tx ULID (set at propose_leg)
+  body         JSONB NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (ulid, bank_pubkey)
+);
+
+CREATE INDEX ledger_records_by_account ON ledger_records (bank_pubkey, account);
+CREATE INDEX ledger_records_by_tx ON ledger_records (bank_pubkey, tx_ulid);
+```
 
 ### `accounts` — per-(promise, holder) balance optimization
 
@@ -248,6 +273,9 @@ $$ LANGUAGE plpgsql;
 
 These are not enforced by the schema; they live in the bank handlers.
 
+- **Bank-minted records**: `create_records` is the only path that
+  creates `ledger_records` rows. The bank assigns ULIDs and guarantees
+  uniqueness. Clients never create record bodies.
 - **Sum invariant per Promise**: for any `promise_hash`, the sum of
   `balance` across all accounts at the issuing bank equals zero (or
   `+limit` / `-limit` if a limit is set).
@@ -257,8 +285,9 @@ These are not enforced by the schema; they live in the bank handlers.
 - **One Active Hold per Account**: the partial unique index enforces
   this at the DB layer. Per-Promise locks are NOT enforced (a Promise
   has many accounts, each lockable independently).
-- **`approve_trade` precondition**: the calling bank is the lead bank
-  for the Tx; the local txs row state is `proposed`.
+- **`propose_leg` precondition**: every `record_ulid` passed to
+  `propose_leg` must exist in `ledger_records` for this bank and must
+  be present in `tx.records`.
 - **`settle` precondition**: txs.state == `confirmed`, and the calling
   bank is the lead bank.
 

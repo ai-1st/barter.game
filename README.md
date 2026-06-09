@@ -128,16 +128,17 @@ The CLI is the protocol's truest surface; the web UI ships in v1.5.
 
 ## How the protocol works (one paragraph)
 
-Every user and every bank is an ed25519 keypair. Every doc — Promise,
-Pocket, Account, Tx, Record, Signature — is canonicalized via RFC 8785
-JSON, SHA-256-hashed, and content-addressed by that hash. Every RPC is a
-signed JSON-RPC envelope binding the request to (sender, recipient,
-ULID). A cross-bank trade walks `propose → approve → hold → confirm →
-settle` across two or more banks; lead banks settle first, then followers
-in topological order, each citing upstream proof in `Signature.seen`.
-The lead banks carry the small remaining risk that a follower goes rogue;
-per the ETHOS, that risk is settled socially, not by protocol-level
-rollback.
+Every user and every bank is an ed25519 keypair. Promise, Pocket,
+Account, Signature, and Order docs are canonicalized via RFC 8785 JSON,
+SHA-256-hashed, and content-addressed by that hash. Ledger records are
+bank-minted: the bank assigns their ULIDs and ensures uniqueness. A
+`Tx` groups those records by ULID. Every RPC is a signed JSON-RPC
+envelope binding the request to (sender, recipient, ULID). A cross-bank
+trade walks `create_records → propose → hold → confirm → settle` across
+two or more banks; lead banks settle first, then followers in topological
+order, each citing upstream proof in `Signature.seen`. The lead banks
+carry the small remaining risk that a follower goes rogue; per the ETHOS,
+that risk is settled socially, not by protocol-level rollback.
 
 Full details in [`PROTOCOL.md`](./PROTOCOL.md).
 

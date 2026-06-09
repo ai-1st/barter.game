@@ -30,15 +30,15 @@ export const holdLeg: Handler = async (params, ctx) => {
     throw new RpcError(RpcErrors.VALIDATION, "hold_leg caller must be the Tx proposer");
   }
 
-  const recordHashes = (txRow.body as { records: string[] }).records;
-  const recordRows = await ctx.db.getDocsByHashes(recordHashes);
+  const recordUlids = (txRow.body as { records: string[] }).records;
+  const recordRows = await ctx.db.getLedgerRecordsByUlids(recordUlids);
 
   // One account may be debited by several records in the same Tx (e.g. a holder
   // paying two counterparties). The hold is per-account, so dedupe and sum the
   // amounts — a single account gets a single lock for the whole Tx.
   const amountByAccount = new Map<string, number>();
-  for (const h of recordHashes) {
-    const rec = recordRows[h];
+  for (const u of recordUlids) {
+    const rec = recordRows[u];
     if (!rec) continue; // not this bank's record (visibility: we don't hold its body)
     if (rec.pubkey === ctx.bankPubkey && rec.type === "debit") {
       const acct = rec.account as string;

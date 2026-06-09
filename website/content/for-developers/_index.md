@@ -10,7 +10,7 @@ The barter.game protocol is intentionally small. You can read the full contract 
 
 **Read [`PROTOCOL.md`](https://github.com/ai-1st/barter.game/blob/main/PROTOCOL.md) first.** It defines:
 
-- The six document types (Promise, Pocket, Account, Record, Tx, Signature)
+- The document types: Promise, Pocket, Account, Tx, Signature, Order — plus bank-minted LedgerRecords identified by ULID
 - RFC 8785 canonical JSON (cross-runtime parity is load-bearing)
 - ed25519 signatures over SHA-256 hashes
 - The JSON-RPC envelope and replay protection
@@ -42,7 +42,7 @@ If you're building a bank from scratch:
 2. [ ] Implement ed25519 sign/verify and SHA-256. Use audited libraries.
 3. [ ] Define the six doc types and their validators.
 4. [ ] Build the JSON-RPC envelope handler with replay protection.
-5. [ ] Implement `propose_leg`, `hold_leg`, `confirm_receipt`, `settle_leg`, `reject_leg`.
+5. [ ] Implement `create_records`, `propose_leg`, `hold_leg`, `confirm_receipt`, `settle_leg`, `reject_leg`.
 6. [ ] Enforce **sum-to-zero** on every settle.
 7. [ ] Enforce **at most one active hold per account**.
 8. [ ] Expose `GET /.well-known/barter-bank.json`.

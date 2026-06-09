@@ -45,7 +45,7 @@ This is the most reusable part of the reference implementation. It is dependency
 | `src/crypto.ts` | ed25519 sign/verify, SHA-256, base58 encode/decode. Thin wrappers around `@noble/*`. |
 | `src/schemas.ts` | Runtime validators for all six doc types. Zod-like without the dependency — plain TypeScript predicates. |
 | `src/invite.ts` | Encode/decode `barter://` invite strings. |
-| `src/deal.ts` | Deal-graph builder: given a set of transfers, build records, compute Tx hash, determine roles and predecessors. |
+| `src/deal.ts` | Deal-graph builder: given transfer specs and bank-minted record ULIDs, assemble the Tx, compute its hash, determine roles and predecessors. |
 | `src/index.ts` | Re-exports. |
 
 The cross-runtime parity test is the most important test in the repo. It canonicalizes the same document under Bun and Deno and asserts the hashes match. If this test fails, every signature in the protocol is unverifiable across implementations.
@@ -87,7 +87,8 @@ This was chosen for operational simplicity (one project, one migration set, one 
 | `_shared/bank/peer.ts` | HTTP client for bank-to-bank calls (mostly vestigial in v1; used for discovery) |
 | `_shared/bank/handlers/mint_promise.ts` | `mint_promise` — Promise + Account + Pocket creation |
 | `_shared/bank/handlers/open_account.ts` | `open_account` — holder opens a receiving account |
-| `_shared/bank/handlers/propose_leg.ts` | `propose_leg` — persist Tx slice, sign `approve` |
+| `_shared/bank/handlers/create_records.ts` | `create_records` — bank mints debit/credit records with ULIDs |
+| `_shared/bank/handlers/propose_leg.ts` | `propose_leg` — validate record ULIDs, persist Tx, sign `approve` |
 | `_shared/bank/handlers/hold_leg.ts` | `hold_leg` — acquire debit holds, sign `hold` |
 | `_shared/bank/handlers/confirm_receipt.ts` | `confirm_receipt` — store holder confirmation, advance to `confirmed` when complete |
 | `_shared/bank/handlers/settle_leg.ts` | `settle_leg` — verify predecessors, apply balances, release holds, sign `settle` |
@@ -160,8 +161,9 @@ See `SCHEMA.md` for the full schema, table definitions, indexes, triggers, and i
 - `base58 TEXT` for all hashes, pubkeys, and signatures. No binary types — easier to debug, portable across languages.
 - `NUMERIC` for balances. Exact arithmetic; never floating point.
 - `TIMESTAMPTZ` for all timestamps.
-- `docs` table is append-only. `ON CONFLICT DO NOTHING` makes retries safe.
-- `accounts` is a materialized view of balance state, derivable from `docs` but kept O(1) for queries.
+- `docs` table is append-only. Stores content-addressed docs (Promise, Pocket, Account, Tx, Signature, Order). `ON CONFLICT DO NOTHING` makes retries safe.
+- `ledger_records` table stores bank-minted records identified by ULID, not by content hash. Records reference each other and the Tx by ULID.
+- `accounts` is a materialized view of balance state, derivable from the doc stream but kept O(1) for queries.
 - `txs` holds per-bank leg state (role, predecessors, state). No bank sees the full graph.
 - `holds` has a partial unique index on `(account_hash, bank_pubkey) WHERE active` — the double-spend gate.
 - `replay_window` is the replay-protection store.

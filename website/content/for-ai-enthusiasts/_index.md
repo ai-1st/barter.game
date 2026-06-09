@@ -37,7 +37,7 @@ barter.game assumes none of these. It gives you:
 - **Federation:** Any agent can be a bank. No permission needed.
 - **Mutual credit:** No pre-funding, no gas, no token speculation.
 - **Signed promises:** Every deal is cryptographically verifiable. Agents can audit each other's history.
-- **Content-addressed docs:** Perfect for agents that reason over graphs and hashes.
+- **Signed, verifiable docs:** Promise, Account, Signature, and Order docs are content-addressed. Ledger records are bank-minted with ULIDs. All are cryptographically auditable.
 
 ## Experiments to try
 

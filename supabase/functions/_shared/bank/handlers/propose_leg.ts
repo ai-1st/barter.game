@@ -1,22 +1,19 @@
 // propose_leg — proposing client (a user) → each participating bank.
 //
-// The client built the whole deal (records + Tx) and now hands THIS bank only
-// the slice it is allowed to see: the Tx (whose `records[]` is the full list of
-// record HASHES) plus the BODIES of only this bank's own records (records whose
-// `pubkey` is this bank — i.e. transfers of the promises this bank issues).
-//
-// The bank cannot see any other leg's amount/account/holder/promise; it just
-// verifies its own records hash into the Tx, persists them, records its role +
-// predecessors for the settle cascade, and signs an `approve`. See PROTOCOL.md
-// §2 (Visibility) and §7.1 (Orchestration).
+// The client has already called create_records on every bank and now hands
+// THIS bank the assembled Tx (whose records[] is the full list of record ULIDs)
+// plus the ULIDs of this bank's own records. The bank verifies those ULIDs
+// were created by it, checks they appear in tx.records, persists the Tx,
+// binds the records to the Tx, records its role + predecessors, and signs
+// an `approve`. See PROTOCOL.md §2 (Visibility) and §7.1 (Orchestration).
 
 import { hashDoc, newUlid, signDoc, verifyDoc } from "../../protocol/crypto.ts";
-import { validateRecord, validateTx } from "../../protocol/schemas.ts";
+import { validateTx } from "../../protocol/schemas.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
 
 type ProposeLegParams = {
   tx: Record<string, unknown>;
-  records: Array<Record<string, unknown>>;
+  record_ulids: string[];
   proposer_approve: Record<string, unknown>;
   role: "lead" | "follow";
   predecessors: string[];
@@ -24,8 +21,8 @@ type ProposeLegParams = {
 
 export const proposeLeg: Handler = async (params, ctx) => {
   const p = params as ProposeLegParams;
-  if (!p.tx || !Array.isArray(p.records)) {
-    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.tx and params.records[] required");
+  if (!p.tx || !Array.isArray(p.record_ulids)) {
+    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.tx and params.record_ulids[] required");
   }
   if (p.role !== "lead" && p.role !== "follow") {
     throw new RpcError(RpcErrors.INVALID_PARAMS, "params.role must be 'lead' or 'follow'");
@@ -44,6 +41,7 @@ export const proposeLeg: Handler = async (params, ctx) => {
   }
   const txHash = hashDoc(p.tx);
   const txRecords = (p.tx as { records: string[] }).records;
+  const txUlid = (p.tx as { ulid: string }).ulid;
   const proposerPubkey = (p.tx as { pubkey: string }).pubkey;
 
   // The proposer (Tx author) is the calling user and must have signed approve.
@@ -62,23 +60,21 @@ export const proposeLeg: Handler = async (params, ctx) => {
     throw new RpcError(RpcErrors.SIG_INVALID, "proposer_approve signature invalid for this tx");
   }
 
-  // Validate every record the client handed us: it must be well-formed, owned
-  // by THIS bank, hash into the Tx, and name an account this bank knows.
-  if (p.records.length === 0) {
+  // Validate every record ULID the client claims is ours.
+  if (p.record_ulids.length === 0) {
     throw new RpcError(RpcErrors.VALIDATION, "this bank owns no records in the deal");
   }
-  for (const rec of p.records) {
-    try {
-      validateRecord(rec);
-    } catch (err) {
-      throw new RpcError(RpcErrors.VALIDATION, err instanceof Error ? err.message : "record invalid");
+  const recordBodies = await ctx.db.getLedgerRecordsByUlids(p.record_ulids);
+  for (const ulid of p.record_ulids) {
+    const rec = recordBodies[ulid];
+    if (!rec) {
+      throw new RpcError(RpcErrors.UNKNOWN_DOC, `record ULID ${ulid} not found at this bank`);
     }
     if (rec.pubkey !== ctx.bankPubkey) {
-      throw new RpcError(RpcErrors.VALIDATION, `record.pubkey ${String(rec.pubkey)} is not this bank`);
+      throw new RpcError(RpcErrors.VALIDATION, `record ${ulid} is not owned by this bank`);
     }
-    const recHash = hashDoc(rec);
-    if (!txRecords.includes(recHash)) {
-      throw new RpcError(RpcErrors.VALIDATION, `record ${recHash} is not in tx.records[]`);
+    if (!txRecords.includes(ulid)) {
+      throw new RpcError(RpcErrors.VALIDATION, `record ULID ${ulid} is not in tx.records[]`);
     }
     const acct = await ctx.db.getAccount(rec.account as string);
     if (!acct) {
@@ -86,16 +82,9 @@ export const proposeLeg: Handler = async (params, ctx) => {
     }
   }
 
-  // Persist the Tx (hash list), our own records, and the proposer's approve.
+  // Persist the Tx (hash list), bind our records to it, and store proposer approve.
   await ctx.db.insertDoc({ hash: txHash, type: "tx", pubkey: proposerPubkey, body: p.tx });
-  for (const rec of p.records) {
-    await ctx.db.insertDoc({
-      hash: hashDoc(rec),
-      type: rec.type as string,
-      pubkey: ctx.bankPubkey,
-      body: rec,
-    });
-  }
+  await ctx.db.bindRecordsToTx(p.record_ulids, txUlid);
   await ctx.db.insertDoc({
     hash: hashDoc(pa),
     type: "signature",
@@ -115,5 +104,5 @@ export const proposeLeg: Handler = async (params, ctx) => {
   approve.sig = signDoc(approve, ctx.bankPrivateKey);
   await ctx.db.insertDoc({ hash: hashDoc(approve), type: "signature", pubkey: ctx.bankPubkey, body: approve });
 
-  return { tx_hash: txHash, role: p.role, predecessors, approve, owned_records: p.records.length };
+  return { tx_hash: txHash, role: p.role, predecessors, approve, owned_records: p.record_ulids.length };
 };

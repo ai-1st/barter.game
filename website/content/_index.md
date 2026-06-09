@@ -8,7 +8,7 @@ layout: hextra-home
   {{< hextra/hero-subtitle >}}A federated mutual-credit ledger. Mint personal currencies, trade them with people you trust, and settle cryptographically — no central authority, no middleman.{{< /hextra/hero-subtitle >}}
 {{< /hextra/hero-container >}}
 
-<div class="hx-mt-12 hx-mb-12">
+<div class="hx-mt-20 hx-mb-20">
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
     title="For Event Managers"
@@ -49,17 +49,17 @@ layout: hextra-home
 {{< /hextra/feature-grid >}}
 </div>
 
-<div class="hx-mt-12 hx-mb-12 hx-text-center">
+<div class="hx-mt-20 hx-mb-20 hx-text-center">
 
 ## How it works in one paragraph
 
-Every user and every bank is an **ed25519 keypair**. Every document — Promise, Account, Transaction, Signature — is canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. A cross-bank trade walks `propose → hold → confirm → settle` across any number of banks. The lead bank settles first; followers settle after observing upstream proof. No bank ever sees the full transaction. The math binds everyone together.
+Every user and every bank is an **ed25519 keypair**. Promise, Pocket, Account, Signature, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. A cross-bank trade walks `create_records → propose → hold → confirm → settle` across any number of banks. The lead bank settles first; followers settle after observing upstream proof. No bank ever sees the full transaction. The math binds everyone together.
 
 [Read the full docs →](docs)
 
 </div>
 
-<div class="hx-mt-12 hx-mb-12">
+<div class="hx-mt-20 hx-mb-20"">
 
 ## See it work
 

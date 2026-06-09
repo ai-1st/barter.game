@@ -1,5 +1,7 @@
 # Ethos
 
+> **Why "game"?** barter.game is designed as a game first. We suggest treating it as a practice environment for trading skills — a safe space to experiment with personal currencies, negotiation, and settlement. Only use it for real economic transactions if your local laws and circumstances permit. The "game" framing keeps the stakes appropriate while the protocol itself is serious cryptography.
+
 The beliefs driving barter.game. These are not requirements written into the
 spec; they are the priors that shape every decision when the spec runs out.
 
@@ -12,7 +14,7 @@ You decide how many exist. You decide who gets them. You decide what they
 cost.
 
 The system exists to make this fantasy practical, not theoretical. Anyone
-with a credit card and ten minutes can deploy a bank. Anyone with a
+with a cloud account or own server can deploy a bank. Anyone with a
 keyboard can mint a promise.
 
 ## 2. Trust is local; the protocol formalizes it
@@ -54,16 +56,42 @@ chose not to.
 
 Why: the failure mode that protocol-level rollback prevents — "bank A
 settled but bank B never did" — is a *bank*-level failure, not a *user*-
-level failure. Users already signed `confirm_receipt` saying they got the
-goods. The remaining risk is one bank being uncooperative. In our trust
+level failure. Users already signed the deal. The remaining risk is one 
+bank being uncooperative. In our trust
 model (operators are known to their users), that risk is settled socially:
-the lead party yells at the follow bank operator, whom they presumably
+the lead party yells at the issuer of the promise not being delivered,
+issuer yells at their bank operator, whom they presumably
 know in person.
 
 Distributed atomicity is the right answer for systems where the operators
 are strangers. We are not that system.
 
-## 5. Federation is table stakes
+## 5. No expirations — forever docs, no clock sync
+
+The protocol deliberately avoids expirations, timeouts, and any mechanism that
+requires synchronized clocks across participants.
+
+- **All signatures and documents are irrevocable and eternal.** Once signed, a
+doc lives forever in the content-addressed graph. There is no revocation
+mechanism, no "cancel this signature" operation, and no TTL.
+- **Standing orders are forever.** An `Order` (§5.7) remains valid for as long as
+the holder maintains sufficient balance in the relevant account. The only limit
+is the account itself.
+- **Cancellation is mechanical, not administrative.** A holder who wants to stop
+offering a promise empties the corresponding account. A bank that wishes to
+release a hold without settling issues a `reject` signature on the Tx, which
+becomes part of the public audit trail.
+- **No clock synchronization.** Removing time-based expiry eliminates an entire
+class of distributed-system bugs: clock skew, NTP failures, timezone confusion,
+and race conditions around boundary timestamps. The only ordering guarantee is
+the partial order established by `Signature.seen`.
+
+This is a trade-off. It means abandoned holds must be cleaned up by operator
+sweepers (a hygiene convenience, not a correctness mechanism) and that users
+must manage their own exposure through account balance, not through time-boxed
+authorizations.
+
+## 6. Federation is table stakes
 
 Every bank is its own URL, its own ed25519 key, its own ledger. Banks
 talk to each other via signed HTTP. Anyone running the codebase can be
@@ -74,21 +102,28 @@ can join tomorrow.
 If barter.game ever centralized — even subtly, even for "the demo" — we
 have built the wrong thing.
 
-## 6. Content-addressed docs, all the way down
+## 7. Content-addressed docs — almost all the way down
 
-Every doc — Promise, Pocket, Account, Record, Tx, Signature — is hashed
-by its canonical JSON form. References between docs use those hashes.
+Promise, Pocket, Account, Order, and Signature docs are hashed by their
+canonical JSON form. References between these docs use those hashes.
 Nothing has an ID assigned by a server. Two banks that store the same
-doc store it under the same hash. Audit means walking the hash graph;
-verification means re-hashing.
+Promise doc store it under the same hash. Audit means walking the hash
+graph; verification means re-hashing.
 
-This is why the cross-runtime canonical JSON parity test is the
-load-bearing test in the entire codebase. If Deno and Bun hash the same
-doc to different bytes, every cryptographic claim collapses. We
-hand-rolled the canonicalizer rather than depend on an npm shim that
-might drift.
+**Ledger records are the exception.** A `LedgerRecord` is minted by the
+bank that issues it, assigned a ULID by that bank, and referenced by
+ULID — not by content hash. The same logical transfer executed twice
+will produce different record ULIDs, so the records are not content-
+addressed. The `Tx` that groups those records also references them by
+ULID, which means two independent builds of the same deal produce
+different Tx hashes.
 
-## 7. The CLI is the protocol's truest surface
+This trade-off makes the bank the sole authority for its ledger entries
+and eliminates a class of client-side hash-mismatch bugs. The cross-
+runtime canonical JSON parity test remains load-bearing for everything
+that IS content-addressed (Promises, Accounts, Signatures, Orders).
+
+## 8. The CLI is the protocol's truest surface
 
 A clean command-line interface that drives the protocol end to end is
 more honest than any web UI. The CLI shows you the hashes, the
@@ -99,7 +134,7 @@ reconstruct the math.
 The web UI is a polish layer that ships later. The protocol's truth
 lives in the CLI.
 
-## 8. Open source so anyone can be a bank
+## 9. Open source so anyone can be a bank
 
 The code is public. The schema is public. The keys are yours. If we
 disappear, you still have the protocol. If you don't like our bank, run

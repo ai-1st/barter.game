@@ -1,8 +1,8 @@
 // In-memory integration test for the client-orchestrated N-party flow.
 //
-// Drives the real bank handlers (propose_leg → hold_leg → confirm_receipt →
-// settle_leg) across FOUR simulated banks, with an in-memory BankDB, exercising
-// the exact branching/merging deal from PROTOCOL.md §2:
+// Drives the real bank handlers (create_records → propose_leg → hold_leg →
+// confirm_receipt → settle_leg) across FOUR simulated banks, with an in-memory
+// BankDB, exercising the exact branching/merging deal from PROTOCOL.md §2:
 //
 //   A → C   B → C   C → D   D → A   D → B      leads: {bank-A, bank-B}
 //
@@ -15,6 +15,7 @@
 
 import { genKeyPair, hashDoc, newUlid, signDoc } from "../../protocol/crypto.ts";
 import { buildDeal, type TransferSpec } from "../../protocol/deal.ts";
+import { createRecords } from "../handlers/create_records.ts";
 import { proposeLeg } from "../handlers/propose_leg.ts";
 import { holdLeg } from "../handlers/hold_leg.ts";
 import { confirmReceipt } from "../handlers/confirm_receipt.ts";
@@ -35,6 +36,7 @@ class Store {
   accounts = new Map<string, { promise: string; pocket: string; holder: string; balance: number }>();
   txs = new Map<string, { state: string; role: string | null; predecessors: string[] }>();
   holds = new Map<string, Hold>();
+  ledgerRecords = new Map<string, { type: string; account: string; amount: number; pairUlid: string | null; txUlid: string | null; body: Record<string, unknown> }>();
 }
 const k = (bank: string, x: string) => `${bank}|${x}`;
 
@@ -122,6 +124,48 @@ class InMemoryBankDB {
     }
     return Promise.resolve(null);
   }
+  // ledger_records
+  insertLedgerRecord(input: { ulid: string; type: "credit" | "debit"; account: string; amount: number; pairUlid?: string; body: Record<string, unknown> }) {
+    this.store.ledgerRecords.set(k(this.bankPubkey, input.ulid), {
+      type: input.type,
+      account: input.account,
+      amount: input.amount,
+      pairUlid: input.pairUlid ?? null,
+      txUlid: null,
+      body: input.body,
+    });
+    return Promise.resolve();
+  }
+  getLedgerRecord(ulid: string) {
+    const r = this.store.ledgerRecords.get(k(this.bankPubkey, ulid));
+    if (!r) return Promise.resolve(null);
+    return Promise.resolve({
+      ulid,
+      bank_pubkey: this.bankPubkey,
+      type: r.type,
+      account: r.account,
+      amount: String(r.amount),
+      pair_ulid: r.pairUlid,
+      tx_ulid: r.txUlid,
+      body: r.body,
+      created_at: "",
+    });
+  }
+  getLedgerRecordsByUlids(ulids: string[]) {
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const u of ulids) {
+      const r = this.store.ledgerRecords.get(k(this.bankPubkey, u));
+      if (r) out[u] = r.body;
+    }
+    return Promise.resolve(out);
+  }
+  bindRecordsToTx(ulids: string[], txUlid: string) {
+    for (const u of ulids) {
+      const r = this.store.ledgerRecords.get(k(this.bankPubkey, u));
+      if (r) r.txUlid = txUlid;
+    }
+    return Promise.resolve();
+  }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -187,21 +231,37 @@ Deno.test("N-party branching/merging deal settles and balances sum to zero", asy
     { promise: coinD, issuerBank: bD.pub, amount: 1, from: { holder: D.pub, account: accD_D }, to: { holder: B.pub, account: accB_D } },
   ];
 
-  const deal = buildDeal({ proposer: A.pub, leadBanks: [bA.pub, bB.pub], transfers });
+  // Phase 0: create_records on every bank with its own transfers.
+  const bankRecordUlids: Record<string, string[]> = {};
+  const bankTransfers = new Map<string, Array<{ amount: number; from_account: string; to_account: string }>>();
+  for (const t of transfers) {
+    if (!bankTransfers.has(t.issuerBank)) bankTransfers.set(t.issuerBank, []);
+    bankTransfers.get(t.issuerBank)!.push({ amount: t.amount, from_account: t.from.account, to_account: t.to.account });
+  }
+  for (const [bankPub, btransfers] of bankTransfers) {
+    const bank = bankByPub.get(bankPub)!;
+    const res = await createRecords(
+      { transfers: btransfers },
+      ctx(store, bank, A.pub),
+    ) as { records: Array<Record<string, unknown>> };
+    bankRecordUlids[bankPub] = res.records.map((r) => r.ulid as string);
+  }
+
+  const deal = buildDeal({ proposer: A.pub, leadBanks: [bA.pub, bB.pub], transfers }, bankRecordUlids);
   const txHash = deal.txHash;
 
   // proposer signs approve over the Tx hash.
   const proposerApprove: Record<string, unknown> = { type: "signature", pubkey: A.pub, ulid: newUlid(), hash: txHash, action: "approve" };
   proposerApprove.sig = signDoc(proposerApprove, A.priv);
 
-  // 1) propose_leg on every bank with its own slice.
+  // 1) propose_leg on every bank with its own record ULIDs.
   for (const leg of deal.legs) {
     const bank = bankByPub.get(leg.bank)!;
     const res = await proposeLeg(
-      { tx: deal.tx, records: leg.records, proposer_approve: proposerApprove, role: leg.role, predecessors: leg.predecessors },
+      { tx: deal.tx, record_ulids: leg.recordUlids, proposer_approve: proposerApprove, role: leg.role, predecessors: leg.predecessors },
       ctx(store, bank, A.pub),
     ) as { owned_records: number };
-    assert(res.owned_records === leg.records.length, `propose_leg owned mismatch for ${leg.bank}`);
+    assert(res.owned_records === leg.recordUlids.length, `propose_leg owned mismatch for ${leg.bank}`);
   }
 
   // 2) hold_leg on every bank.

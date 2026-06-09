@@ -20,22 +20,22 @@ Alice gives 1 logo  → Bob receives 1 logo   (at bank-alice)
 Bob   gives 1 hour  → Alice receives 1 hour (at bank-bob)
 ```
 
-From these transfers, the client builds 4 **records** (2 debits + 2 credits) and a **Tx** that groups them. The Tx contains only the *hashes* of the records — no amounts, no account details, no identities. Just hashes.
+Alice's client groups these by bank and calls `create_records` on each. The bank validates the accounts, assigns ULIDs, and returns the record bodies. The client assembles a **Tx** that groups all record ULIDs. Each bank sees only the ULIDs — not amounts, not account details, not identities.
 
 ## Step 2: Slice per bank
 
 Alice's client slices the deal so each bank sees only its own legs:
 
-- **bank-alice** sees: "1 logo leaves Alice; 1 logo arrives at Bob." Plus the full Tx hash list (opaque). Plus: bank-alice is the **lead**.
-- **bank-bob** sees: "1 hour leaves Bob; 1 hour arrives at Alice." Plus the full Tx hash list (opaque). Plus: bank-bob is the **follow**; its predecessor is bank-alice.
+- **bank-alice** sees: "1 logo leaves Alice; 1 logo arrives at Bob." Plus the full Tx ULID list (opaque). Plus: bank-alice is the **lead**.
+- **bank-bob** sees: "1 hour leaves Bob; 1 hour arrives at Alice." Plus the full Tx ULID list (opaque). Plus: bank-bob is the **follow**; its predecessor is bank-alice.
 
 Neither bank sees the other's amounts, accounts, or holders.
 
 ## Step 3: Propose and hold
 
-Alice calls `propose_leg` on both banks, then `hold_leg` on both:
+Alice calls `propose_leg` on both banks (passing only the ULIDs each bank created), then `hold_leg` on both:
 
-1. Each bank validates its slice, persists it, and signs `approve`.
+1. Each bank validates its ULIDs were minted by it and appear in the Tx, persists the Tx, and signs `approve`.
 2. Each bank locks the debit accounts and signs `hold`.
 
 If either bank can't acquire the hold (concurrent trade on the same account), it returns `-32003` Lock Conflict. Alice's client releases all holds and aborts.
