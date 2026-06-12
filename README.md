@@ -23,8 +23,9 @@ bank-dave   https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-dave
 
 Hit any with `curl` and you'll get a signed `hello` proving its
 identity. Run `./scripts/demo.sh` and you'll watch four simulated users
-on four different banks mint personal currencies, propose a multi-party
-deal, confirm, and settle in topological order.
+on four different banks mint personal currencies, initiate a multi-party
+deal, accept their deal tokens — and then watch the banks settle it
+on their own, in topological order.
 
 ```bash
 git clone https://github.com/ai-1st/barter.game.git
@@ -69,17 +70,18 @@ See [`ETHOS.md`](./ETHOS.md) for the full set of beliefs.
 
 ```
 barter.game/
+├── SETTLEMENT_WALKTHROUGH.md ← the canonical narrative of one trade — start here
 ├── ETHOS.md              ← the beliefs driving the design
-├── PROTOCOL.md           ← the INVARIANT protocol contract (read this first if building your own)
+├── PROTOCOL.md           ← the INVARIANT protocol contract (read this if building your own)
 ├── IMPLEMENTATION.md     ← how *this repo* implements v1 (change anything here for your stack)
 ├── SCHEMA.md             ← v1 reference database schema
 ├── TODOS.md              ← the v1.5+ roadmap
-├── packages/protocol/    ← the @barter.game/protocol library (canonical, crypto, schemas, invites)
-├── apps/cli/             ← the `barter` CLI: init, mint, open, trade, confirm, settle, inbox
+├── packages/protocol/    ← the @barter.game/protocol library (canonical, crypto, schemas, invites, deal tokens)
+├── apps/cli/             ← the `barter` CLI: init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
 ├── supabase/
 │   ├── migrations/       ← SQL schema (see SCHEMA.md)
 │   └── functions/
-│       ├── _shared/      ← shared bank code (rpc, handlers, db, peer)
+│       ├── _shared/      ← shared bank code (rpc, handlers, advance engine, subscriptions, db)
 │       ├── bank-alice/   ← one Edge Function per bank
 │       ├── bank-bob/
 │       ├── bank-carol/
@@ -98,25 +100,28 @@ barter.game/
 # One-time setup
 barter init --bank https://...your-bank.../functions/v1/bank-alice
 
-# Issue a personal currency
-barter mint "1 logo" --integer
+# Issue a personal currency — the mint IS the first ledger record pair
+# (your issue account goes to -5, your holding account to +5)
+barter mint "1 logo" --amount 5 --integer
 
-# Prepare to receive someone else's currency
-barter open <their-promise-hash> --bank <their-bank-url>
+# Offer a swap: prints a signed barter:// invite string for the counterparty
+# (accounts are implicit — no bank call to "open" anything)
+barter invite --give <my-promise>:1 --get <their-promise>:1
 
-# Propose a bilateral trade (convenience over `deal`)
-barter trade \
-  --give <my-promise>:1 --get <their-promise>:1 \
-  --my-give-account <h> --peer-give-account <h> \
-  --peer-get-account <h> --my-get-account <h> \
-  --peer-pubkey <pubkey> --peer-bank <url>
+# Counterparty initiates from the invite: creates records on both banks,
+# lead-signs their own Tx, and prints a deal token back for you
+barter trade --invite "barter://..."
 
-# Or propose an N-party deal from a JSON file
+# You verify and follow-sign your own Tx — from here the banks
+# self-advance through hold and settle; nobody drives settlement
+barter accept "barterdeal:..."
+
+# Or initiate an N-party deal from a JSON file (one deal token per holder)
 barter deal <deal-file.json>
 
-# After every holder confirms, the proposer settles
-barter confirm <tx-hash> --bank <url> [--bank <url> ...]
-barter settle <tx-hash>
+# Watch a deal you initiated; relay signatures by hand if a push got lost
+barter status <deal-ulid>
+barter nudge <deal-ulid>
 
 # See your balances
 barter inbox
@@ -130,17 +135,25 @@ The CLI is the protocol's truest surface; the web UI ships in v1.5.
 
 Every user and every bank is an ed25519 keypair. Promise, Pocket,
 Account, Signature, and Order docs are canonicalized via RFC 8785 JSON,
-SHA-256-hashed, and content-addressed by that hash. Ledger records are
-bank-minted: the bank assigns their ULIDs and ensures uniqueness. A
-`Tx` groups those records by ULID. Every RPC is a signed JSON-RPC
-envelope binding the request to (sender, recipient, ULID). A cross-bank
-trade walks `create_records → propose → hold → confirm → settle` across
-two or more banks; lead banks settle first, then followers in topological
-order, each citing upstream proof in `Signature.seen`. The lead banks
-carry the small remaining risk that a follower goes rogue; per the ETHOS,
-that risk is settled socially, not by protocol-level rollback.
+SHA-256-hashed, and content-addressed by that hash. Accounts are
+implicit — they come into existence when an Account doc is first
+presented, and Pocket bodies never leave the holder (banks only ever
+see the hash). Ledger records are bank-minted in mandatory debit/credit
+pairs; the mint itself is just the first such pair. Each holder signs
+their OWN `Tx` — the record ULIDs on their own accounts — with action
+`lead` (the initiator) or `follow` (everyone else); banks answer with
+per-record `approve`/`reject` signatures. From there the banks
+self-advance: each one holds its debit accounts, the lead bank settles
+once it has seen every peer's `hold`, and followers settle after their
+predecessors, citing the upstream settle proofs in `Signature.seen`.
+Signatures travel between banks via Subscription fan-out, or any party
+relays them by hand (`barter nudge`) — they carry their own authority.
+The lead banks carry the small remaining risk that a follower goes
+rogue; per the ETHOS, that risk is settled socially, not by
+protocol-level rollback.
 
-Full details in [`PROTOCOL.md`](./PROTOCOL.md).
+Full details in [`PROTOCOL.md`](./PROTOCOL.md); the story version is
+[`SETTLEMENT_WALKTHROUGH.md`](./SETTLEMENT_WALKTHROUGH.md).
 
 ## How to run your own bank
 
@@ -179,21 +192,25 @@ exactly however many people you've invited.
 bun run test:all
 ```
 
-89 tests: 73 under Bun, 16 under Deno. The Deno suite re-runs the same
-canonical-JSON golden vectors under a different runtime plus a full
-multi-bank settle cascade. Cross-runtime parity is the load-bearing
-invariant — every signature in the protocol depends on it.
+127 tests: 103 under Bun, 24 under Deno. The Deno suite re-runs the
+same canonical-JSON golden vectors under a different runtime, then
+exercises the full bank: minting, the bilateral direct-approval
+walkthrough, subscription fan-out, and a four-bank N-party deal in
+which the banks self-advance to settled. Cross-runtime parity is the
+load-bearing invariant — every signature in the protocol depends on it.
 
 ## What v1 doesn't do
 
 Honest list:
 
 - **No web UI.** CLI only.
-- **No protocol-level rollback.** If the follow bank goes rogue after
+- **No protocol-level rollback.** If a follow bank goes rogue after
   the lead settles, the lead is out. Recourse is social.
 - **No key recovery, no key rotation.** Forever-keys in v1.
 - **No NFT-like Promises.** Issued Promises are fungible.
-- **No automatic forward-confirm retry.** Best-effort.
+- **No guaranteed push delivery.** Subscription fan-out is
+  fire-and-forget; a lost push stalls a deal until `barter nudge`
+  relays the signatures by hand.
 - **No cross-bank inbox aggregation.** `barter inbox` hits one bank.
 
 These are documented limitations, not bugs. See [`TODOS.md`](./TODOS.md)
@@ -201,14 +218,15 @@ for the v1.5+ work.
 
 ## Reading order if you're new here
 
-1. [`ETHOS.md`](./ETHOS.md) — what we believe, why we built it this way (10 minutes)
-2. [`./scripts/demo.sh`](./scripts/demo.sh) — see it work (5 minutes)
-3. [`PROTOCOL.md`](./PROTOCOL.md) — the **invariant protocol contract** (45 minutes if you read carefully)
-4. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
-5. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
-6. `packages/protocol/src/` — the code (an afternoon)
-7. `supabase/functions/_shared/bank/handlers/` — the server-side state machine
-8. [`TODOS.md`](./TODOS.md) — what's next
+1. [`SETTLEMENT_WALKTHROUGH.md`](./SETTLEMENT_WALKTHROUGH.md) — the canonical narrative: Alice, Bob, two banks, one trade (10 minutes)
+2. [`ETHOS.md`](./ETHOS.md) — what we believe, why we built it this way (10 minutes)
+3. [`./scripts/demo.sh`](./scripts/demo.sh) — see it work (5 minutes)
+4. [`PROTOCOL.md`](./PROTOCOL.md) — the **invariant protocol contract** (45 minutes if you read carefully)
+5. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
+6. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
+7. `packages/protocol/src/` — the code (an afternoon)
+8. `supabase/functions/_shared/bank/` — the server-side handlers and advance engine
+9. [`TODOS.md`](./TODOS.md) — what's next
 
 ## Building your own implementation?
 

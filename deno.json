@@ -10,6 +10,9 @@
     "apps/*/node_modules"
   ],
   "test": {
-    "include": ["packages/**/test-deno/*.deno-test.ts"]
+    "include": [
+      "packages/**/test-deno/*.deno-test.ts",
+      "supabase/functions/_shared/bank/test-deno/*.deno-test.ts"
+    ]
   }
 }

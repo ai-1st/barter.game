@@ -5,10 +5,16 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 ## v1.5 — likely-next-up
 
 ### Cross-bank inbox aggregation
-- **What:** A single inbox UI/CLI view that shows all of a user's pending Txs across every bank that issued a Promise they hold.
+- **What:** A single inbox UI/CLI view that shows all of a user's balances and in-flight deals across every bank that issued a Promise they hold.
 - **Why:** v1 inbox is scoped to one bank at a time; a user with Promises across 3 banks has to open 3 inbox tabs.
-- **Context:** Per the design's Architectural Note, the issuing bank is the sole authority for its Promise's balances. The user's client would need to hit every issuer bank for the user's accounts and merge the results. Hardcoded bank list (v1) makes this feasible; a directory (below) makes it scalable.
-- **Depends on:** v1 protocol must be stable; design the merge order (last-write-wins by ULID?).
+- **Context:** The issuing bank is the sole authority for its Promise's balances, so the client must hit every issuer bank (`list_accounts` / `get_deal`) and merge. The push half already shipped: Subscription docs let the client point each bank's signature fan-out at its own endpoint (`barter subscribe --url ...`), so aggregation becomes a merge problem, not a polling problem. Hardcoded bank list (v1) makes this feasible; a directory (below) makes it scalable.
+- **Depends on:** v1 protocol must be stable; a client-side endpoint to receive `notify_signatures` pushes; design the merge order (last-write-wins by ULID?).
+
+### Hold sweeper & orphaned-record hygiene
+- **What:** An operator sweeper that releases holds belonging to deals that died before settling, and garbage-collects ledger records that were created (`create_records`) but never bound to a holder-signed Tx.
+- **Why:** Banks self-advance but never time out — the protocol has no clocks (ETHOS §5). An abandoned deal leaves its debit accounts locked until a participant calls `reject_deal`, and created-but-never-signed records sit in the ledger forever.
+- **Context:** Hygiene, not correctness: the partial unique index on `holds` stays the double-spend gate either way. A sweep is a per-bank operator policy (interval, or manual-only); it must issue a proper `reject` signature over the deal so the release is part of the audit trail.
+- **Depends on:** Decide the operator policy surface (config per bank vs. hardcoded demo default).
 
 ### Federated bank directory
 - **What:** A registry where banks publish themselves so clients/peers can discover them beyond the hardcoded v1 list.
@@ -60,10 +66,10 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 
 ## Done — shipped in v1
 
-### N-bank Tx (multi-party barter)
-- **What:** A single Tx can involve any number of banks (the `Tx.records[]` is unbounded by design).
-- **Status:** Shipped. The `barter deal <file.json>` command takes a list of transfers, builds records + Tx, computes roles and predecessors, and locks every leg. `barter settle` drives the cascade in topological order (leads first, then followers). The N-party Deno integration test verifies a 4-bank branching/merging deal end-to-end.
-- **Context:** The client is the coordinator; it holds the full graph and relays signatures. Banks never call each other. The protocol doc schemas and wire envelope are unchanged from the bilateral case — only the orchestration fans out.
+### N-bank deals (multi-party barter)
+- **What:** A single deal can involve any number of banks and holders (a holder's `Tx.records[]` is unbounded by design).
+- **Status:** Shipped, then reworked for the direct-approval model. `barter deal <file.json>` takes a list of transfers, creates the records on every bank, builds ONE Tx PER HOLDER, lead-signs the initiator's, cross-subscribes the banks, and prints a deal token per remaining holder; each holder runs `barter accept`. From there the banks self-advance through hold and settle in topological order (leads first). The N-party Deno integration test verifies a 4-bank branching/merging deal end-to-end.
+- **Context:** The initiator holds the full graph; each bank sees only its own slice. Under the rework banks DO push signatures to each other — via Subscription fan-out, with client relay (`barter nudge`) as the floor. The single proposer-signed Tx and `confirm_receipt` are gone: a holder signing their own Tx is both authorization and receipt.
 
 ## v2+ — bigger swings
 
@@ -98,9 +104,9 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Stable client package API.
 
 ### Inbox triage agent (W: 3)
-- **What:** Watches the inbox poll feed, summarizes incoming Tx proposals in plain English, drafts `confirm_receipt` based on standing instructions ("auto-confirm anything from Alice ≤ 5 logos").
-- **Why:** 10s polling is correct protocol but tedious UX. Triage reduces friction without touching the wire.
-- **Context:** Client-side only. Standing instructions live alongside the encrypted key.
+- **What:** Watches incoming deal tokens and the subscription push feed, summarizes proposed deals in plain English, drafts the holder's follow-Tx signature based on standing instructions ("auto-accept anything from Alice ≤ 5 logos").
+- **Why:** Reviewing deal tokens by hand is correct protocol but tedious UX. Triage reduces friction without touching the wire.
+- **Context:** Client-side only. Standing instructions live alongside the encrypted key. The agent never invents a Tx — it signs (or declines) the holder's own Tx carried by the deal token, after the same `get_deal` cross-check `barter accept` does.
 - **Depends on:** Inbox UI track (CLI version is trivial; web version benefits more).
 
 ### Emitter due-diligence agent (W: 4)
@@ -176,14 +182,14 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Stable v1; bank-integrity auditor to externally check the AI operator.
 
 ### Personality-clone pre-approver (W: 7)
-- **What:** Train an agent on past trades, conversations, and decisions. Auto-signs `approve` on Txs the user would have approved.
+- **What:** Train an agent on past trades, conversations, and decisions. Auto-signs the user's own Txs (lead or follow) on deals the user would have approved.
 - **Why:** Sovereignty extended into agentic form — your tiny central bank runs while you sleep.
 - **Context:** Disturbing because the signed evidence is yours but the decision wasn't. Failure modes are reputation damage to a real pubkey.
 - **Depends on:** Conversational wallet; robust eval of clone fidelity.
 
 ### Receipt-witness agent (W: 7)
 - **What:** Inspects the delivered artifact and attests "yes, this is the deliverable Alice promised."
-- **Why:** Adds machine corroboration to `confirm_receipt`, which v1 leaves purely human ("code cannot verify a logo is a logo").
+- **Why:** Adds machine corroboration to the holder's follow signature (their Tx signature IS the receipt confirmation), which v1 leaves purely human ("code cannot verify a logo is a logo").
 - **Context:** Directly challenges an ETHOS premise. Probably right for narrow Promise types (file deliverables, signed text) and wrong for fuzzy ones ("dinner"). Decide carefully — this is one of the load-bearing v1 assumptions.
 - **Depends on:** Decision to soften the "human attestation mandatory" premise; per-Promise-type witness adapters.
 

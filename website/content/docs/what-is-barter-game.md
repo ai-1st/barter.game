@@ -9,9 +9,9 @@ barter.game takes the opposite stance: **trust is local**. The system is for peo
 ## The core loop
 
 1. **Mint** a personal currency — "1 logo", "1 hour of consulting", "1 home-cooked dinner" — issued by you, signed by you, redeemable from you.
-2. **Open** an account to receive someone else's currency.
-3. **Trade** — offer your promise for theirs. The protocol constructs a cryptographically signed deal.
-4. **Settle** — balances update atomically across banks. Sum per Promise = 0.
+2. **Trade** — offer your promise for theirs with a signed invite string. The initiator builds the deal: ledger records on each bank, one Tx per participant.
+3. **Accept** — each party signs their own Tx. Your signature is both authorization and receipt confirmation.
+4. **Banks settle** — on their own, lead bank first, each citing cryptographic proof of the previous step. Sum per Promise = 0.
 
 ## What makes it different
 

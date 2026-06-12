@@ -37,7 +37,7 @@ In every cross-bank trade, someone settles first. That party is the **lead**. Th
 - Their bank operator is unknown.
 - You can afford to wait.
 
-In a ring trade (`A → B → C → A`), one party must break the cycle by leading. The protocol picks based on the graph structure. As a player, you should understand whether you're in the lead set before you confirm.
+In a ring trade (`A → B → C → A`), one party must break the cycle by leading. The protocol picks based on the graph structure. As a player, you should understand whether you're in the lead set before you accept — your follow signature on your own Tx is what authorizes the deal, and once the banks have everyone's signatures they settle on their own.
 
 ## The social layer is the enforcement layer
 
@@ -53,7 +53,7 @@ This is a feature, not a bug. The protocol is precise about what it guarantees (
 
 ### The liquidity bridge
 
-Alice wants Bob's "1 hour" but Bob doesn't want Alice's "1 logo." Carol wants Alice's "1 logo" and has something Bob wants. The protocol supports N-party rings. Alice proposes a three-way trade. The client builds the graph, slices per bank, and orchestrates the cascade.
+Alice wants Bob's "1 hour" but Bob doesn't want Alice's "1 logo." Carol wants Alice's "1 logo" and has something Bob wants. The protocol supports N-party rings. Alice initiates a three-way deal: her client builds the graph, creates the records on each bank, and hands Bob and Carol a deal token each. They accept, and the banks settle the ring themselves.
 
 ### Portfolio rebalancing
 

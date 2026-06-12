@@ -18,18 +18,19 @@ The best networking happens when people trade real value, not just business card
 1. **You deploy a bank** (or we do it for you). It takes 10 minutes. See the [self-hoster guide](../for-self-hosters).
 2. **Attendees `barter init`** against your bank URL. They now have a wallet.
 3. **They mint promises** — whatever they can deliver. "1 design review." "1 investor intro." "1 yoga class."
-4. **They trade.** The protocol handles the cryptography. Attendees just scan a QR code or paste an invite string.
-5. **They settle.** Balances update. The issuer now owes the holder a deliverable.
+4. **They trade.** The protocol handles the cryptography. Attendees just scan a QR code or paste an invite string, then accept the deal token that comes back.
+5. **Banks settle on their own.** Once both sides have signed, balances update. The issuer now owes the holder a deliverable.
 
 ## What your attendees see
 
 ```bash
 # At the event
 barter init --bank https://your-event.barter.game/functions/v1/event-bank
-barter mint "1 portfolio review"
-barter trade --give ... --get ...
-barter confirm <tx-hash>
-barter settle <tx-hash>
+barter mint "1 portfolio review" --amount 5
+barter invite --give <promise>:1 --get <their-promise>:1   # hand them the barter:// string
+# …they run: barter trade --invite "<barter://...>" and send back a deal token…
+barter accept "<barterdeal:...>"                            # banks settle on their own
+barter inbox                                                # watch the balances land
 ```
 
 Or, wrap this in a simple web UI (v1.5) and attendees never touch the terminal.

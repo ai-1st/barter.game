@@ -1,17 +1,17 @@
 // Deno-side check that the deal builder runs under Deno (npm: specifiers for
-// the noble libs) and produces the same internal hash binding as Bun. The
+// the noble libs) and produces the same per-holder partition as Bun. The
 // byte-level canonical parity is covered by canonical.deno-test.ts; here we
-// just confirm buildDeal's graph logic + Tx hashing work cross-runtime.
+// just confirm buildDeal's graph logic + per-holder Tx hashing work
+// cross-runtime.
 
 import { buildDeal } from "../src/deal.ts";
-import { hashDoc } from "../src/crypto.ts";
 
 function counterUlid() {
   let n = 0;
   return () => ("01TEST" + String(n++).padStart(20, "0")).slice(0, 26);
 }
 
-Deno.test("buildDeal: Tx.records bind to the supplied record ULIDs (Deno)", () => {
+Deno.test("buildDeal: holder Txs partition the supplied record ULIDs (Deno)", () => {
   const ulid = counterUlid();
   const bankUlids: Record<string, string[]> = {
     bankA: [ulid(), ulid()],
@@ -22,7 +22,8 @@ Deno.test("buildDeal: Tx.records bind to the supplied record ULIDs (Deno)", () =
 
   const d = buildDeal(
     {
-      proposer: "hA",
+      deal: "01TESTDEAL000000000000XXXX".slice(0, 26),
+      initiator: "hA",
       leadBanks: ["bankA", "bankB"],
       transfers: [
         { promise: "pA", issuerBank: "bankA", amount: 1, from: { holder: "hA", account: "accA_A" }, to: { holder: "hC", account: "accC_A" } },
@@ -36,17 +37,18 @@ Deno.test("buildDeal: Tx.records bind to the supplied record ULIDs (Deno)", () =
     { ulid },
   );
 
-  const expected = [
-    bankUlids["bankA"][0], bankUlids["bankA"][1],
-    bankUlids["bankB"][0], bankUlids["bankB"][1],
-    bankUlids["bankC"][0], bankUlids["bankC"][1],
-    bankUlids["bankD"][0], bankUlids["bankD"][1],
-    bankUlids["bankD"][2], bankUlids["bankD"][3],
-  ].join(",");
-
-  const actual = d.tx.records.join(",");
-  if (expected !== actual) {
-    throw new Error(`Tx.records do not match expected ULIDs under Deno: expected ${expected}, got ${actual}`);
+  const all = Object.values(bankUlids).flat().sort().join(",");
+  const fromTxs = d.holderTxs.flatMap((h) => h.tx.records);
+  const covered = [...fromTxs].sort().join(",");
+  if (all !== covered) {
+    throw new Error(`holder Txs do not cover the record ULIDs under Deno: expected ${all}, got ${covered}`);
+  }
+  if (new Set(fromTxs).size !== fromTxs.length) {
+    throw new Error("holder Txs overlap — partition must be disjoint");
+  }
+  const lead = d.holderTxs.find((h) => h.role === "lead");
+  if (!lead || lead.holder !== "hA") {
+    throw new Error(`expected initiator hA to lead, got ${lead?.holder}`);
   }
   if (d.order.join(",") !== "bankA,bankB,bankC,bankD") {
     throw new Error(`unexpected settle order: ${d.order.join(",")}`);

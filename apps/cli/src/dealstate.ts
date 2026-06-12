@@ -1,6 +1,6 @@
-// Local persistence for the proposer's in-flight deal, so `barter settle` can
-// resume the settle cascade after holders confirm out of band. Stored next to
-// the profile, keyed by Tx hash.
+// Local persistence for the initiator's in-flight deal, so `barter status`
+// and `barter nudge` can watch / un-stick it after the other holders accept
+// out of band. Stored next to the profile, keyed by the deal ULID.
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -15,15 +15,15 @@ function dealsDir(): string {
 export function saveDealState(state: DealState): string {
   const dir = dealsDir();
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${state.txHash}.json`);
+  const path = join(dir, `${state.deal}.json`);
   writeFileSync(path, JSON.stringify(state, null, 2), { mode: 0o600 });
   return path;
 }
 
-export function loadDealState(txHash: string): DealState {
-  const path = join(dealsDir(), `${txHash}.json`);
+export function loadDealState(deal: string): DealState {
+  const path = join(dealsDir(), `${deal}.json`);
   if (!existsSync(path)) {
-    throw new Error(`no local deal state for ${txHash} at ${path}; only the proposer can settle a deal`);
+    throw new Error(`no local deal state for ${deal} at ${path}; only the initiator tracks a deal`);
   }
   return JSON.parse(readFileSync(path, "utf8")) as DealState;
 }

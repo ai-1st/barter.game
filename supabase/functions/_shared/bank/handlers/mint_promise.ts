@@ -1,141 +1,160 @@
-// mint_promise — user → issuer bank.
+// mint_promise — issuer → issuing bank.
 //
-// Caller is the user issuing the Promise. The bank:
-//   1. validates the params (name, optional integer/due/limit)
-//   2. constructs the Promise doc using THIS bank as the issuer
-//   3. constructs a Pocket doc (the issuer's "issuance pocket") and an
-//      Account doc tying the issuer to their own Promise
-//   4. signs the Promise + Account from the BANK's key (the bank's stamp
-//      of issuance; the user separately signs the Promise to claim
-//      authorship in W3+; for W2 the bank acts on the user's behalf since
-//      the request envelope itself is user-signed)
-//   5. stores both docs in `docs`, opens the issuer's negative-balance Account
-//   6. returns Promise hash + Account hash so the user can reference them
+// Minting IS the first ledger record pair. The issuer presents:
+//   - the Promise doc (signed request envelope claims authorship)
+//   - two Account docs on two DISTINCT Pocket hashes: the issue account
+//     (goes negative) and the holding account (goes positive)
+//   - the amount to mint
 //
-// Why two signatures (user envelope + bank stamp): the design has the user
-// sign their own Promise (claims authorship); the bank signs as an attestation
-// of issuance. W2 does the bank attestation; the user signs the Promise doc
-// at the client side and includes it in params for the bank to store
-// verbatim (so the on-disk Promise.sigs[] has the user's claim).
+// The bank stores the docs, creates the debit/credit pair under a fresh
+// deal ULID, and settles immediately — a mint has a single signer and a
+// single bank, so the signed envelope is the issuer's authorization and
+// there is zero counterparty risk. No special mint balance logic: the same
+// mechanism that moves value in trades creates it here.
+//
+// There is no open_account call; these two Account rows come into existence
+// right here. Pocket bodies never reach the bank — only the hashes inside
+// the Account docs.
 
-import { hashDoc, signDoc, newUlid } from "../../protocol/crypto.ts";
-import { validatePromise } from "../../protocol/schemas.ts";
+import { hashDoc, newUlid, signDoc } from "../../protocol/crypto.ts";
+import { validateAccount, validatePromise } from "../../protocol/schemas.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
+import { fanoutSignatures } from "../subscriptions.ts";
 
 type MintPromiseParams = {
-  // The user-signed Promise doc, ready to store. The bank validates it,
-  // stamps a bank-signed Signature attesting issuance, persists both.
   promise: Record<string, unknown>;
-  // Optional user-supplied pocket hash. If absent, a default-named
-  // "issuance" pocket is created for this issuer.
-  pocket?: Record<string, unknown>;
+  debit_account: Record<string, unknown>;   // issue account — goes negative
+  credit_account: Record<string, unknown>;  // holding account — goes positive
+  amount: number;
 };
 
 export const mintPromise: Handler = async (params, ctx) => {
   const p = params as MintPromiseParams;
-  if (!p.promise) {
-    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.promise required");
+  for (const f of ["promise", "debit_account", "credit_account"] as const) {
+    if (!p[f]) throw new RpcError(RpcErrors.INVALID_PARAMS, `params.${f} required`);
   }
+  if (typeof p.amount !== "number" || !Number.isFinite(p.amount) || p.amount <= 0) {
+    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.amount must be a positive finite number");
+  }
+
   try {
     validatePromise(p.promise);
+    validateAccount(p.debit_account);
+    validateAccount(p.credit_account);
   } catch (err) {
-    throw new RpcError(
-      RpcErrors.VALIDATION,
-      err instanceof Error ? err.message : "promise validation failed",
-    );
+    throw new RpcError(RpcErrors.VALIDATION, err instanceof Error ? err.message : "doc validation failed");
   }
 
-  const promise = p.promise as Record<string, unknown>;
+  const promise = p.promise;
   if (promise.bank !== ctx.bankPubkey) {
-    throw new RpcError(
-      RpcErrors.VALIDATION,
-      `promise.bank must equal this bank's pubkey (${ctx.bankPubkey})`,
-    );
+    throw new RpcError(RpcErrors.VALIDATION, `promise.bank must equal this bank's pubkey (${ctx.bankPubkey})`);
   }
   if (promise.pubkey !== ctx.senderPubkey) {
-    throw new RpcError(
-      RpcErrors.VALIDATION,
-      "promise.pubkey must equal the request sender (issuer issues their own promises)",
-    );
-  }
-
-  // Pocket: use supplied or auto-create.
-  let pocketDoc: Record<string, unknown>;
-  if (p.pocket) {
-    pocketDoc = p.pocket;
-  } else {
-    pocketDoc = {
-      type: "pocket",
-      pubkey: ctx.senderPubkey,
-      ulid: newUlid(),
-      name: "issuance",
-    };
+    throw new RpcError(RpcErrors.VALIDATION, "promise.pubkey must equal the request sender (issuer issues their own promises)");
   }
   const promiseHash = hashDoc(promise);
-  const pocketHash = hashDoc(pocketDoc);
 
-  // Account: issuer's own account on their own promise.
-  const accountDoc: Record<string, unknown> = {
-    type: "account",
-    pubkey: ctx.senderPubkey,
-    ulid: newUlid(),
-    pocket: pocketHash,
-    promise: promiseHash,
-  };
-  const accountHash = hashDoc(accountDoc);
+  for (const [label, acct] of [["debit_account", p.debit_account], ["credit_account", p.credit_account]] as const) {
+    if (acct.pubkey !== ctx.senderPubkey) {
+      throw new RpcError(RpcErrors.VALIDATION, `${label}.pubkey must equal the request sender`);
+    }
+    if (acct.promise !== promiseHash) {
+      throw new RpcError(RpcErrors.VALIDATION, `${label}.promise must reference the minted promise`);
+    }
+  }
+  if (p.debit_account.pocket === p.credit_account.pocket) {
+    throw new RpcError(RpcErrors.VALIDATION, "the two accounts must use two distinct Pocket hashes");
+  }
 
-  // Persist everything. Hash-keyed upserts are idempotent under retry.
-  await ctx.db.insertDoc({
-    hash: promiseHash,
-    type: "promise",
-    pubkey: ctx.senderPubkey,
-    body: promise,
-  });
-  await ctx.db.insertDoc({
-    hash: pocketHash,
-    type: "pocket",
-    pubkey: ctx.senderPubkey,
-    body: pocketDoc,
-  });
-  await ctx.db.insertDoc({
-    hash: accountHash,
-    type: "account",
-    pubkey: ctx.senderPubkey,
-    body: accountDoc,
-  });
-  await ctx.db.upsertAccount({
-    accountHash,
-    promiseHash,
-    pocketHash,
-    holderPubkey: ctx.senderPubkey,
-    initialBalance: 0,            // issuer's balance starts at 0; goes negative on first transfer
-    acknowledged: true,           // issuer's own account is auto-acknowledged
-  });
+  if (promise.integer === true && !Number.isInteger(p.amount)) {
+    throw new RpcError(RpcErrors.VALIDATION, "promise.integer requires an integer amount");
+  }
 
-  // Bank's attestation — a Signature doc with action="approve" against the
-  // Promise hash. Optional but recommended; lets future readers verify
-  // "the bank knows about this Promise."
-  const attestation: Record<string, unknown> = {
-    type: "signature",
+  const debitAccountHash = hashDoc(p.debit_account);
+  const creditAccountHash = hashDoc(p.credit_account);
+
+  // Limit: total issuance lives on the issue account as a negative balance.
+  if (typeof promise.limit === "number") {
+    const existing = await ctx.db.getAccount(debitAccountHash);
+    const alreadyMinted = existing ? -Number(existing.balance) : 0;
+    if (alreadyMinted + p.amount > promise.limit) {
+      throw new RpcError(
+        RpcErrors.VALIDATION,
+        `mint of ${p.amount} would exceed promise.limit ${promise.limit} (already minted ${alreadyMinted})`,
+      );
+    }
+  }
+
+  // Persist docs + implicit accounts. Hash-keyed upserts are idempotent.
+  await ctx.db.insertDoc({ hash: promiseHash, type: "promise", pubkey: ctx.senderPubkey, body: promise });
+  for (const [hash, acct] of [[debitAccountHash, p.debit_account], [creditAccountHash, p.credit_account]] as const) {
+    await ctx.db.insertDoc({ hash, type: "account", pubkey: ctx.senderPubkey, body: acct });
+    await ctx.db.upsertAccount({
+      accountHash: hash,
+      promiseHash,
+      pocketHash: acct.pocket as string,
+      holderPubkey: ctx.senderPubkey,
+    });
+  }
+
+  // The mint record pair — a self-contained mini-deal.
+  const deal = newUlid();
+  const debitUlid = newUlid();
+  const creditUlid = newUlid();
+  const debit: Record<string, unknown> = {
+    type: "debit",
     pubkey: ctx.bankPubkey,
-    ulid: newUlid(),
-    hash: promiseHash,
-    action: "approve",
+    ulid: debitUlid,
+    amount: p.amount,
+    account: debitAccountHash,
+    pair: creditUlid,
   };
-  const attestationSig = signDoc(attestation, ctx.bankPrivateKey);
-  attestation.sig = attestationSig;
-  const attestationHash = hashDoc(attestation);
-  await ctx.db.insertDoc({
-    hash: attestationHash,
-    type: "signature",
+  const credit: Record<string, unknown> = {
+    type: "credit",
     pubkey: ctx.bankPubkey,
-    body: attestation,
+    ulid: creditUlid,
+    amount: p.amount,
+    account: creditAccountHash,
+    pair: debitUlid,
+  };
+  await ctx.db.insertLedgerRecord({
+    ulid: debitUlid, type: "debit", account: debitAccountHash, amount: p.amount,
+    pairUlid: creditUlid, dealUlid: deal, body: debit,
   });
+  await ctx.db.insertLedgerRecord({
+    ulid: creditUlid, type: "credit", account: creditAccountHash, amount: p.amount,
+    pairUlid: debitUlid, dealUlid: deal, body: credit,
+  });
+
+  // Settle immediately: apply ±amount, sign the artifacts.
+  await ctx.db.applyBalanceDelta(debitAccountHash, -p.amount);
+  await ctx.db.applyBalanceDelta(creditAccountHash, +p.amount);
+
+  const signatures: Array<Record<string, unknown>> = [];
+  const sign = async (body: Record<string, unknown>) => {
+    body.sig = signDoc(body, ctx.bankPrivateKey);
+    await ctx.db.insertDoc({ hash: hashDoc(body), type: "signature", pubkey: ctx.bankPubkey, body });
+    signatures.push(body);
+    return body;
+  };
+
+  // Per-record approvals, the mint-deal settle, and the promise attestation.
+  for (const ulid of [debitUlid, creditUlid]) {
+    await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), record: ulid, action: "approve" });
+  }
+  const settle = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), deal, action: "settle" });
+  const attestation = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), hash: promiseHash, action: "approve" });
+
+  await ctx.db.upsertLeg({ dealUlid: deal, state: "settled", role: "lead", predecessors: [], banks: [ctx.bankPubkey] });
+  await fanoutSignatures(ctx, signatures);
 
   return {
     promise_hash: promiseHash,
-    pocket_hash: pocketHash,
-    account_hash: accountHash,
+    debit_account_hash: debitAccountHash,
+    credit_account_hash: creditAccountHash,
+    deal,
+    records: [debit, credit],
+    settle,
     bank_attestation: attestation,
   };
 };

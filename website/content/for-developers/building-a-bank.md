@@ -57,60 +57,57 @@ Before dispatching to a method handler:
 
 ## 5. Implement the method handlers
 
-Start with read-only methods (`get_promise`, `get_account_balance`, `list_accounts`) — they're simple and let you test your envelope.
+Start with read-only methods (`get_promise`, `get_account_balance`, `list_accounts`, `get_deal`) — they're simple and let you test your envelope.
+
+One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Promise and Account docs, and the bank stores them on first sight (a Promise must reference this bank; an Account's promise must be issued here). **Never accept a Pocket body** — `account.pocket` is an opaque hash; Pocket bodies stay with the holder.
 
 Then implement the trade path in order:
 
 ### `mint_promise`
-- Store the signed Promise doc.
-- Auto-create the issuer's Account (negative-balance row).
-- Auto-create a Pocket if the user doesn't have one.
-- Sign and return a bank attestation.
-
-### `open_account`
-- Store the holder-signed Account doc.
-- Store the Pocket if supplied.
-- This is how a holder prepares to receive a Promise.
+- Validate: the Promise references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Promise, and sit on **distinct Pocket hashes**.
+- The mint is the first ledger record pair: a debit on the issue account (goes negative) and a credit on the holding account (goes positive). Set `pair` on each record.
+- Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Promise hash.
 
 ### `create_records`
-- The bank mints debit/credit records with its own ULIDs.
-- Validates that both accounts exist and belong to this bank.
-- Sets `pair` on each record to link the two halves.
-- Stores in `ledger_records` and returns the bodies to the client.
+- Run doc intake first, so new accounts can be referenced in the same call.
+- Per transfer: both accounts on the same Promise, Promise issued here, integer/positive checks.
+- The bank mints debit/credit record pairs with its own ULIDs; `pair` links the two halves.
+- Store the leg topology under the deal: `role` (lead/follow), `predecessors`, the full bank list. State: `created`.
+- Store in `ledger_records` and return the bodies to the client.
 
-### `propose_leg`
-- Validate the Tx and **only the record ULIDs this bank created**.
-- Persist the Tx and bind the records to it.
-- Record `role` (lead/follow) and `predecessors`.
-- Sign and return `approve`.
+### `submit_tx`
+- Params: a holder's Tx plus their `lead`/`follow` signature over its hash. The envelope sender may differ from the holder — anyone can relay a signed Tx.
+- Validate: the signature verifies; every record this bank owns in `tx.records` sits on an account whose holder is `tx.pubkey`. Idempotent re-submits are fine.
+- Persist the Tx, bind the records to it.
+- Per owned record, run the limit/balance check and issue a per-record `approve` or `reject` Signature.
+- Leg advances to `approved` once **every** record this bank owns under the deal is Tx-bound and approved.
+- Fan out the new signatures, then run the advance engine.
 
-### `hold_leg`
-- Acquire holds on debit accounts in this bank's slice.
-- Return `-32003` on conflict.
-- Sign and return `hold`.
+### `subscribe`
+- Store the Subscription doc (subscriber pubkey = sender) plus one watch row per key (`record`, `hash`, or `deal`).
+- On every signature the bank creates, POST a bank-signed `notify_signatures` envelope to matching subscribers. Fire-and-forget: a lost push is unstuck by client relay.
 
-### `confirm_receipt`
-- Store the holder's settle-action Signature.
-- Advance to `confirmed` once **every holder in this bank's own records** has signed.
+### `notify_signatures`
+- Verify the envelope and each pushed signature (known pubkey, valid sig), store them, then run the advance engine.
+- This single method serves both topologies: bank-to-bank push and client relay.
 
-### `settle_leg`
-- Verify leg is `confirmed`.
-- Verify every predecessor's `settle` signature is present and valid.
-- Apply balance deltas (enforcing sum-to-zero).
-- Release holds.
-- Sign and return `settle`, with `seen` = upstream signatures.
+### The advance engine (not an RPC)
+Banks self-advance — there is no client hold or settle call. After every `submit_tx` and `notify_signatures`, evaluate the leg:
+- `approved` → acquire holds on owned debit accounts, sign `hold` for the deal, fan out, state → `held`. On hold conflict, leave state unchanged; the next event retries.
+- `held` → settle. **Lead leg:** once valid `hold` signatures from every other bank in the deal have arrived. **Follow leg:** once valid `settle` signatures from all predecessors have arrived, citing their hashes in `Signature.seen`.
+- Settle = apply deltas (enforcing sum-to-zero), release holds, sign `settle`, fan out, state → `settled`. Idempotent.
 
-### `reject_leg`
-- Release holds.
-- Mark leg `rejected`.
+### `reject_deal`
+- Any deal participant can cancel before settlement.
+- Release holds, mark the leg `rejected`, fan out the reject signature.
 
 ## 6. Enforce the invariants
 
 ### Sum-to-zero
-On every `settle_leg`, after applying deltas, the sum of `balance` across all accounts for the settled Promise must equal zero (or `+limit`/`-limit` if a limit is set). If it doesn't, your implementation has a bug.
+On every settle, after applying deltas, the sum of `balance` across all accounts for the settled Promise must equal zero. If it doesn't, your implementation has a bug.
 
 ### One active hold per account
-When `hold_leg` runs, attempt to acquire a hold. If another active hold exists on the same account, reject with `-32003`. Release holds on `settle`, `reject`, and sweeper cleanup.
+When the advance engine acquires holds, check for another active hold on the same account. On conflict, leave the leg state unchanged — the next incoming signature retries. Release holds on `settle`, `reject`, and sweeper cleanup.
 
 ## 7. Expose discovery
 
@@ -130,14 +127,13 @@ Sign this response with your bank key so clients can verify it.
 ## 8. Write a client and test end-to-end
 
 You need a client that can:
-1. Build a deal graph from transfers.
-2. Slice per bank.
-3. Call `propose_leg` → `hold_leg` on all banks.
-4. Gather `confirm_receipt` from all holders.
-5. Call `settle_leg` in topological order (leads first, then followers).
-6. Handle `-32003` by calling `reject_leg` everywhere.
+1. Mint (`mint_promise`: Promise + two Accounts on distinct Pocket hashes).
+2. Produce and consume `barter://` invite strings.
+3. Initiate a trade: call `create_records` on each bank, build one Tx per holder, sign yours as `lead`, `submit_tx`, register Subscriptions, and print a `barterdeal:` token per counterparty.
+4. Accept: verify a deal token against the banks via `get_deal`, sign your Tx as `follow`, `submit_tx`.
+5. Watch the banks self-advance (`get_deal` polling — `barter status`) and relay missing signatures via `notify_signatures` when a push got lost (`barter nudge`).
 
-Test against the reference banks. If your client can trade with `bank-alice` and `bank-bob`, your implementation is interoperable.
+Test against the reference banks: mint → invite → trade → accept → status. If your client can trade with `bank-alice` and `bank-bob`, your implementation is interoperable.
 
 ## 9. Production considerations
 

@@ -1,105 +1,133 @@
-// `barter trade` — bilateral convenience over the N-party orchestrator.
+// `barter trade --invite "<string>"` — initiate the bilateral swap.
 //
-// A two-transfer deal (I give X at my bank, I get Y at the peer bank) with my
-// bank as the lead. Builds it as a DealSpec and runs the same propose → hold
-// flow as `barter deal`; settle/confirm work identically afterward.
-//
-// Usage:
-//   barter trade \
-//     --give <promise-hash>:<amount> --get <promise-hash>:<amount> \
-//     --my-give-account <h> --peer-give-account <h> \
-//     --peer-get-account <h> --my-get-account <h> \
-//     --peer-pubkey <pubkey> --peer-bank <url> [--bank <my-bank-url>]
+// The initiator (say Alice) verifies the inviter's signed offer, resolves
+// her own two accounts (funded give account at her bank; fresh receiving
+// account for the inviter's promise), creates the record pairs on both
+// banks, cross-subscribes the banks, signs her own Tx as "lead", and prints
+// the DEAL TOKEN the inviter must `barter accept` to follow-sign. From
+// there the banks settle on their own.
 
-import type { DealSpec } from "../../../../packages/protocol/src/index.ts";
-import { fetchBankPubkey } from "../client.ts";
+import {
+  isInviteExpired,
+  newUlid,
+  parseInvite,
+  verifyInvite,
+  type DealSpec,
+} from "../../../../packages/protocol/src/index.ts";
+import { call, fetchBankPubkey } from "../client.ts";
+import { createLocalAccount } from "../docstore.ts";
 import { loadProfile } from "../profile.ts";
-import { proposeAndHold, type BankMap } from "../orchestrate.ts";
+import { createRecordsAndLead, makeDealTokens, type BankMap } from "../orchestrate.ts";
 import { saveDealState } from "../dealstate.ts";
 
-type Leg = { promise: string; amount: number };
-type TradeArgs = {
-  give?: Leg; get?: Leg;
-  myGiveAccount?: string; peerGiveAccount?: string;
-  peerGetAccount?: string; myGetAccount?: string;
-  peerPubkey?: string; peerBank?: string; bank?: string;
-};
-
-function parseLeg(raw: string | undefined, label: string): Leg {
-  if (!raw) throw new Error(`--${label} <promise-hash>:<amount> required`);
-  const colon = raw.lastIndexOf(":");
-  if (colon < 0) throw new Error(`--${label} must be <promise-hash>:<amount>`);
-  const amount = Number(raw.slice(colon + 1));
-  if (!Number.isFinite(amount) || amount <= 0) throw new Error(`--${label} amount must be positive`);
-  return { promise: raw.slice(0, colon), amount };
-}
+type TradeArgs = { invite?: string; bank?: string; giveAccount?: string };
 
 function parseArgs(argv: string[]): TradeArgs {
   const args: TradeArgs = {};
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
-      case "--give": args.give = parseLeg(argv[++i], "give"); break;
-      case "--get": args.get = parseLeg(argv[++i], "get"); break;
-      case "--my-give-account": args.myGiveAccount = argv[++i]; break;
-      case "--peer-give-account": args.peerGiveAccount = argv[++i]; break;
-      case "--peer-get-account": args.peerGetAccount = argv[++i]; break;
-      case "--my-get-account": args.myGetAccount = argv[++i]; break;
-      case "--peer-pubkey": args.peerPubkey = argv[++i]; break;
-      case "--peer-bank": args.peerBank = argv[++i]; break;
+      case "--invite": args.invite = argv[++i]; break;
       case "--bank": args.bank = argv[++i]; break;
+      case "--give-account": args.giveAccount = argv[++i]; break;
     }
   }
   return args;
 }
 
-const REQUIRED: Array<keyof TradeArgs> = [
-  "give", "get", "myGiveAccount", "peerGiveAccount", "peerGetAccount", "myGetAccount", "peerPubkey", "peerBank",
-];
-
 export async function runTrade(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
-  for (const k of REQUIRED) {
-    if (!args[k]) {
-      const flag = "--" + (k as string).replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
-      process.stderr.write(`barter trade: ${flag} required\n`);
-      return 1;
-    }
+  if (!args.invite) {
+    process.stderr.write(`barter trade: --invite "<barter://...>" required\n`);
+    return 1;
   }
+  const invite = parseInvite(args.invite);
+  if (!verifyInvite(invite)) {
+    process.stderr.write(`barter trade: invite signature does not verify — refusing\n`);
+    return 1;
+  }
+  if (isInviteExpired(invite)) {
+    process.stderr.write(`barter trade: invite expired\n`);
+    return 1;
+  }
+
   const profile = loadProfile();
   const myBankUrl = args.bank ?? profile.defaultBankUrl;
   const myBankPubkey = await fetchBankPubkey(myBankUrl);
-  const peerBankPubkey = await fetchBankPubkey(args.peerBank!);
+  const peerBankPubkey = await fetchBankPubkey(invite.bankUrl);
 
+  // The inviter's "get" is what I give; their "give" is what I get.
+  const iGive = invite.get;
+  const iGet = invite.give;
+
+  // My funded account for the promise I give (it lives at MY bank).
+  let myGiveAccount = args.giveAccount;
+  if (!myGiveAccount) {
+    const res = (await call(profile, "list_accounts", {}, { bankUrl: myBankUrl })) as {
+      accounts: Array<{ account_hash: string; promise_hash: string; balance: string }>;
+    };
+    const funded = res.accounts.find(
+      (a) => a.promise_hash === iGive.promise && Number(a.balance) >= iGive.amount,
+    );
+    if (!funded) {
+      process.stderr.write(
+        `barter trade: no account with ≥${iGive.amount} of ${iGive.promise} at ${myBankUrl} — pass --give-account\n`,
+      );
+      return 1;
+    }
+    myGiveAccount = funded.account_hash;
+  }
+
+  // My receiving account for the inviter's promise (implicit, authored now).
+  const receiving = createLocalAccount(profile, iGet.promise, "main");
+
+  const deal = newUlid();
   const spec: DealSpec = {
-    proposer: profile.pubkey,
+    deal,
+    initiator: profile.pubkey,
     leadBanks: [myBankPubkey],
     transfers: [
       {
-        promise: args.give!.promise, issuerBank: myBankPubkey, amount: args.give!.amount,
-        from: { holder: profile.pubkey, account: args.myGiveAccount! },
-        to: { holder: args.peerPubkey!, account: args.peerGiveAccount! },
+        promise: iGive.promise, issuerBank: myBankPubkey, amount: iGive.amount,
+        from: { holder: profile.pubkey, account: myGiveAccount },
+        to: { holder: invite.pubkey, account: iGive.account },
       },
       {
-        promise: args.get!.promise, issuerBank: peerBankPubkey, amount: args.get!.amount,
-        from: { holder: args.peerPubkey!, account: args.peerGetAccount! },
-        to: { holder: profile.pubkey, account: args.myGetAccount! },
+        promise: iGet.promise, issuerBank: peerBankPubkey, amount: iGet.amount,
+        from: { holder: invite.pubkey, account: iGet.account },
+        to: { holder: profile.pubkey, account: receiving.accountHash },
       },
     ],
   };
-  const banks: BankMap = { [myBankPubkey]: myBankUrl, [peerBankPubkey]: args.peerBank! };
+  const banks: BankMap = { [myBankPubkey]: myBankUrl, [peerBankPubkey]: invite.bankUrl };
 
-  const state = await proposeAndHold(profile, spec, banks);
-  saveDealState(state);
+  // Present the inviter's bundled Account docs + my fresh receiving account
+  // to the banks that need them (accounts are implicit).
+  const inviterDocs = invite.accounts ?? [];
+  const docsByBank: Record<string, Array<Record<string, unknown>>> = {
+    [myBankPubkey]: inviterDocs.filter((d) => d.promise === iGive.promise),
+    [peerBankPubkey]: [
+      receiving.account,
+      ...inviterDocs.filter((d) => d.promise === iGet.promise),
+    ],
+  };
 
-  process.stdout.write(
-    `trade proposed + held on both banks\n` +
-      `  tx hash:      ${state.txHash}\n` +
-      `  lead bank:    ${myBankPubkey}\n` +
-      `  follow bank:  ${peerBankPubkey}\n\n` +
-      `both parties confirm receipt at BOTH banks, then you settle:\n` +
-      `  you:   barter confirm ${state.txHash} --bank ${myBankUrl} --bank ${args.peerBank}\n` +
-      `  peer:  barter confirm ${state.txHash} --bank ${myBankUrl} --bank ${args.peerBank}\n` +
-      `  then:  barter settle ${state.txHash}\n`,
-  );
+  const state = await createRecordsAndLead(profile, spec, banks, docsByBank);
+  const path = saveDealState(state);
+  const tokens = makeDealTokens(profile, state);
+
+  let out =
+    `trade initiated — records created, your Tx lead-signed on both banks\n` +
+    `  deal:        ${deal}\n` +
+    `  lead bank:   ${myBankPubkey}\n` +
+    `  state saved: ${path}\n\n` +
+    `send the deal token to your counterparty; they run 'barter accept "<token>"':\n\n`;
+  for (const t of tokens) {
+    out += `token ${t.holder} ${t.token}\n\n`;
+  }
+  out +=
+    `the banks settle on their own once everyone has signed.\n` +
+    `watch with:   barter status ${deal}\n` +
+    `if stalled:   barter nudge ${deal}\n`;
+  process.stdout.write(out);
   return 0;
 }

@@ -1,16 +1,19 @@
 #!/usr/bin/env bun
 // barter.game CLI.
 
-import { runConfirm } from "./commands/confirm.ts";
+import { runAccept } from "./commands/accept.ts";
+import { runAccount } from "./commands/account.ts";
 import { runDeal } from "./commands/deal.ts";
 import { runInbox } from "./commands/inbox.ts";
 import { runInit } from "./commands/init.ts";
+import { runInvite } from "./commands/invite.ts";
 import { runMint } from "./commands/mint.ts";
-import { runOpen } from "./commands/open.ts";
-import { runSettle } from "./commands/settle.ts";
+import { runNudge } from "./commands/nudge.ts";
+import { runStatus } from "./commands/status.ts";
+import { runSubscribe } from "./commands/subscribe.ts";
 import { runTrade } from "./commands/trade.ts";
 
-const VERSION = "0.0.4-nparty";
+const VERSION = "0.0.5-direct-approval";
 
 const HELP = `barter — federated mutual-credit ledger CLI (v${VERSION})
 
@@ -21,33 +24,39 @@ COMMANDS:
   init --bank <url>
       Create or rotate the local profile (~/.barter/profile.json).
 
-  mint <name> [--integer] [--due YYYY-MM-DD] [--limit N]
-      Issue a Promise on your home bank.
+  mint <name> --amount N [--integer] [--due YYYY-MM-DD] [--limit N]
+      Issue a Promise: the mint is the first debit/credit record pair
+      (issue account goes negative, holding account positive).
 
-  open <promise-hash> --bank <url> [--pocket <hash>]
-      Pre-create an Account for someone else's Promise on the issuing bank.
+  account <promise-hash> [--name <pocket-name>]
+      Author a receiving Account locally. No bank call — accounts are
+      implicit and come into existence when the doc is first presented.
 
-  trade --give <hash>:N --get <hash>:N \\
-        --my-give-account <h> --peer-give-account <h> \\
-        --peer-get-account <h> --my-get-account <h> \\
-        --peer-pubkey <pubkey> --peer-bank <url>
-      Bilateral trade (two transfers, one lead bank). Convenience over 'deal'.
+  invite --give <promise>:N --get <promise>:N [--give-account <hash>]
+      Offer a swap. Prints a signed barter:// string for the counterparty.
+
+  trade --invite "<barter://...>"
+      Initiate the swap from an invite: create records on both banks,
+      lead-sign your Tx, print the deal token the inviter must accept.
 
   deal <deal-file.json>
-      Propose an N-party deal (any number of banks/holders). The proposing
-      user coordinates: each bank sees only its own legs. Locks every leg.
+      Initiate an N-party deal (any number of banks/holders). Prints one
+      deal token per other holder.
+
+  accept "<deal-token>"
+      Follow-sign your view of a deal. Banks settle on their own after.
+
+  status <deal-ulid>
+      Watch a deal you initiated (per-bank leg states).
+
+  nudge <deal-ulid>
+      Relay signatures between banks by hand to un-stick a stalled deal.
+
+  subscribe --bank <url> --url <push-url> [--deal <ulid>]...
+      Register a standing signature fan-out at a bank.
 
   inbox [--bank <url>]
       List your accounts (with balances) on a bank.
-
-  confirm <tx-hash> --bank <url> [--bank <url> ...]
-      Sign confirm_receipt once and post it to every bank you touch.
-
-  settle <tx-hash>
-      Proposer drives the settle cascade from local deal state.
-
-  doctor <bank-url>
-      Health-check a bank end-to-end.                            (W4)
 
 OPTIONS:
   -h, --help              Show this help.
@@ -68,16 +77,26 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = args;
   try {
     switch (cmd) {
-      case "init":     return runInit(rest);
-      case "mint":     return await runMint(rest);
-      case "open":     return await runOpen(rest);
-      case "trade":    return await runTrade(rest);
-      case "deal":     return await runDeal(rest);
-      case "inbox":    return await runInbox(rest);
-      case "confirm":  return await runConfirm(rest);
-      case "settle":   return await runSettle(rest);
-      case "doctor":
-        process.stderr.write(`barter: '${cmd}' lands in W4.\n`);
+      case "init":      return runInit(rest);
+      case "mint":      return await runMint(rest);
+      case "account":   return runAccount(rest);
+      case "invite":    return await runInvite(rest);
+      case "trade":     return await runTrade(rest);
+      case "deal":      return await runDeal(rest);
+      case "accept":    return await runAccept(rest);
+      case "status":    return await runStatus(rest);
+      case "nudge":     return await runNudge(rest);
+      case "subscribe": return await runSubscribe(rest);
+      case "inbox":     return await runInbox(rest);
+      case "open":
+      case "confirm":
+      case "settle":
+        process.stderr.write(
+          `barter: '${cmd}' was removed in the direct-approval model.\n` +
+            `  open    → 'barter account' (accounts are implicit; no bank call)\n` +
+            `  confirm → 'barter accept' (you sign your own Tx as follow)\n` +
+            `  settle  → banks settle on their own; see 'barter status' / 'barter nudge'\n`,
+        );
         return 2;
       default:
         process.stderr.write(`barter: unknown command '${cmd}'. Try 'barter --help'.\n`);

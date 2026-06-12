@@ -10,8 +10,8 @@
 
 The v1 reference implementation consists of:
 
-- **`packages/protocol/`** — a TypeScript library of canonical JSON, crypto primitives, doc schemas, and invite formatting. Shared between the CLI and the server.
-- **`apps/cli/`** — the `barter` command-line client. Init, mint, open, trade, confirm, settle, inbox.
+- **`packages/protocol/`** — a TypeScript library of canonical JSON, crypto primitives, doc schemas, the deal builder, and the invite / deal-token codecs. Shared between the CLI and the server.
+- **`apps/cli/`** — the `barter` command-line client. Init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox.
 - **`supabase/functions/`** — Supabase Edge Functions that act as bank processes. One function per bank in the demo; the protocol supports arbitrary separation.
 - **`supabase/migrations/`** — Postgres schema. One database backs all demo banks; rows are scoped by `bank_pubkey`.
 
@@ -43,9 +43,9 @@ This is the most reusable part of the reference implementation. It is dependency
 |---|---|
 | `src/canonical.ts` | Hand-rolled RFC 8785 canonicalizer. Guaranteed byte-identical across Bun, Node, Deno, and browser. |
 | `src/crypto.ts` | ed25519 sign/verify, SHA-256, base58 encode/decode. Thin wrappers around `@noble/*`. |
-| `src/schemas.ts` | Runtime validators for all six doc types. Zod-like without the dependency — plain TypeScript predicates. |
-| `src/invite.ts` | Encode/decode `barter://` invite strings. |
-| `src/deal.ts` | Deal-graph builder: given transfer specs and bank-minted record ULIDs, assemble the Tx, compute its hash, determine roles and predecessors. |
+| `src/schemas.ts` | Runtime validators for all doc types (incl. Subscription). Zod-like without the dependency — plain TypeScript predicates. |
+| `src/invite.ts` | Encode/decode `barter://` invite strings (with bundled Account bodies) and `barterdeal:` deal tokens — the initiator → follow-holder handoff. |
+| `src/deal.ts` | Deal builder: given transfer specs and bank-minted record ULIDs, assemble ONE Tx PER HOLDER (a disjoint exact cover of the records), compute hashes, lead/follow roles, and per-bank predecessors. |
 | `src/index.ts` | Re-exports. |
 
 The cross-runtime parity test is the most important test in the repo. It canonicalizes the same document under Bun and Deno and asserts the hashes match. If this test fails, every signature in the protocol is unverifiable across implementations.
@@ -83,28 +83,34 @@ This was chosen for operational simplicity (one project, one migration set, one 
 | `_shared/bank/rpc.ts` | Envelope validation, signature check, replay-window claim, method dispatch |
 | `_shared/bank/registry.ts` | Method name → handler function map |
 | `_shared/bank/server.ts` | Bank bootstrap: load key, start HTTP listener, attach routing |
-| `_shared/bank/db.ts` | Postgres queries: doc insert, balance update, hold acquire/release, tx state machine |
-| `_shared/bank/peer.ts` | HTTP client for bank-to-bank calls (mostly vestigial in v1; used for discovery) |
-| `_shared/bank/handlers/mint_promise.ts` | `mint_promise` — Promise + Account + Pocket creation |
-| `_shared/bank/handlers/open_account.ts` | `open_account` — holder opens a receiving account |
-| `_shared/bank/handlers/create_records.ts` | `create_records` — bank mints debit/credit records with ULIDs |
-| `_shared/bank/handlers/propose_leg.ts` | `propose_leg` — validate record ULIDs, persist Tx, sign `approve` |
-| `_shared/bank/handlers/hold_leg.ts` | `hold_leg` — acquire debit holds, sign `hold` |
-| `_shared/bank/handlers/confirm_receipt.ts` | `confirm_receipt` — store holder confirmation, advance to `confirmed` when complete |
-| `_shared/bank/handlers/settle_leg.ts` | `settle_leg` — verify predecessors, apply balances, release holds, sign `settle` |
-| `_shared/bank/handlers/reject_leg.ts` | `reject_leg` — release holds, mark `rejected` |
+| `_shared/bank/db.ts` | Postgres queries: doc insert, balance update, hold acquire/release, deal-leg state, subscriptions, received-signature lookups |
+| `_shared/bank/advance.ts` | The advance engine — `advanceDeal()` self-advances a leg through hold and settle (see §4.4) |
+| `_shared/bank/subscriptions.ts` | Signature fan-out: POST bank-signed `notify_signatures` envelopes to matching subscribers (fire-and-forget) |
+| `_shared/bank/peer.ts` | HTTP client for signed bank-to-bank calls |
+| `_shared/bank/handlers/intake.ts` | Shared doc intake — Promise/Account docs attached to any mutating call; accounts come into existence here (Pocket bodies are rejected) |
+| `_shared/bank/handlers/mint_promise.ts` | `mint_promise` — the mint as the first record pair on two distinct pockets, settled immediately |
+| `_shared/bank/handlers/create_records.ts` | `create_records` — bank mints debit/credit record pairs with ULIDs, stores its slice of the settle topology |
+| `_shared/bank/handlers/submit_tx.ts` | `submit_tx` — verify a holder's lead/follow Tx signature, issue per-record `approve`/`reject`, advance the leg |
+| `_shared/bank/handlers/subscribe.ts` | `subscribe` — store a Subscription doc + its watch keys |
+| `_shared/bank/handlers/notify_signatures.ts` | `notify_signatures` — accept pushed/relayed signatures (from anyone), verify, store, re-advance touched deals |
+| `_shared/bank/handlers/reject_deal.ts` | `reject_deal` — participant-initiated cancellation: release holds, mark `rejected`, fan out |
+| `_shared/bank/handlers/get_deal.ts` | `get_deal` — leg state + record bodies + deal signatures (token verification, polling, relay) |
 | `_shared/bank/handlers/get.ts` | `get_promise`, `get_account_balance`, `list_accounts` — read-only queries |
 
-### 4.4 The 24-hour abandonment sweeper
+Removed from the old model: `open_account` (accounts are implicit — `intake.ts`), `propose_leg` and `confirm_receipt` (both subsumed by the holder's own Tx signature in `submit_tx`), and `hold_leg` / `settle_leg` as client RPCs (that logic moved into the advance engine).
 
-Holds that are not released by `settle` or `reject` within 24 hours are released by a background sweeper. This is a **hygiene mechanism**, not a correctness mechanism. The protocol has no timeouts (PROTOCOL.md §2.1). The sweeper exists because a crashed client could leave an account locked forever, and we prefer liveness over strictness for a demo.
+### 4.4 The advance engine — banks self-advance, event-driven
 
-In a production implementation you might:
-- Keep the 24h sweep (simple, forgiving).
-- Make it configurable per-bank.
-- Remove it entirely and require manual operator intervention.
+There is no client `settle` command and no cron job (Supabase Edge Functions have no background workers). `advanceDeal(deal)` in `advance.ts` runs after every event that can unblock a leg — a `submit_tx` that completes approval, or a signature arriving via `notify_signatures` — and moves the leg as far as it can:
 
-All are valid. The protocol does not specify sweeper behavior.
+1. **`approved` → `held`**: acquire holds on the owned debit accounts (keyed `(account, deal)`; a conflict backs off quietly and is retried on the next event), sign `{deal, action: "hold"}`, fan out.
+2. **`held` → `settled`, lead leg**: settle once valid `hold` signatures from **every other bank in the deal** have been observed. The lead settles first, bearing the lead/follow risk.
+3. **`held` → `settled`, follow leg**: settle once verified `{deal, action: "settle"}` signatures from all predecessor banks are stored; their hashes go into this bank's settle `Signature.seen` — the verifiable proof chain.
+4. Settle applies the balance deltas for every owned record, releases the holds, signs `settle`, and fans out. Idempotent by state, never by replay.
+
+Blocked conditions return quietly; the next incoming signature retries. Authority never comes from the caller — holds require a fully approved leg, and settles require stored, verified peer signatures.
+
+A hold abandoned by a dead deal currently stays until `reject_deal` releases it; an operator hold-sweeper is a hygiene item on the roadmap (`TODOS.md`), not a correctness mechanism — the protocol has no timeouts.
 
 ### 4.5 Replay window implementation
 
@@ -117,9 +123,11 @@ The "whichever set is larger" rule means a sender that sends 200 IDs in an hour 
 
 These numbers are arbitrary and tuned for the demo. Your implementation may choose different caps.
 
-### 4.6 Inbox polling
+### 4.6 Subscription fan-out and client relay
 
-The CLI polls the bank inbox every 10 seconds. There is no WebSocket or SSE in v1. This is a client UX choice, not a protocol requirement. A web UI could use long-polling, server-sent events, or a push notification service without changing the protocol.
+Signature delivery is push-based: the initiating client sends Subscription docs to each bank (the CLI cross-subscribes the banks in a deal to each other by default), and each bank POSTs a bank-signed `notify_signatures` JSON-RPC envelope to the subscription's URL whenever it creates a matching signature. Pushes are fire-and-forget with a short timeout — a lost push never fails the originating request.
+
+The recovery path is client relay: `barter nudge` reads every bank's signatures via `get_deal` and delivers them to every other bank via the same `notify_signatures` method. Signatures carry their own authority (signer pubkey + ed25519 sig), so banks accept them from anyone. Clients watching a deal use `barter status` (on-demand `get_deal` polling); there is no WebSocket or SSE in v1 — a client UX choice, not a protocol requirement.
 
 ---
 
@@ -130,27 +138,35 @@ The CLI polls the bank inbox every 10 seconds. There is no WebSocket or SSE in v
 | Command | Purpose |
 |---|---|
 | `barter init --bank <url>` | Pin a bank URL+pubkey in `~/.barter/profile.json` |
-| `barter mint "<name>" [--integer] [--due YYYY-MM-DD] [--limit N]` | Mint a Promise at your default bank |
-| `barter open <promise-hash> --bank <url>` | Open an Account to receive someone else's Promise |
-| `barter trade --give ... --get ... --my-give-account ... --peer-give-account ... --peer-get-account ... --my-get-account ... --peer-pubkey ... --peer-bank ...` | Propose a bilateral trade (convenience wrapper) |
-| `barter deal <deal-file.json>` | Propose an N-party deal (any number of banks/holders) |
-| `barter confirm <tx-hash>` | Sign `confirm_receipt` as a holder |
-| `barter settle <tx-hash>` | Drive the settle cascade (lead settles first, then followers) |
-| `barter inbox [--bank <url>]` | List pending Txs and balances at a bank |
+| `barter mint "<name>" --amount N [--integer] [--due YYYY-MM-DD] [--limit N]` | Mint a Promise: builds two Pocket/Account pairs locally, the bank settles the first record pair immediately |
+| `barter account <promise-hash> [--name <pocket>]` | Author a receiving Account locally — no bank call; accounts are implicit |
+| `barter invite --give <promise>:N --get <promise>:N` | Offer a swap: prints a signed `barter://` string with account hashes + bundled Account bodies |
+| `barter trade --invite "<barter://...>"` | Initiate a bilateral swap from an invite: records on both banks, cross-subscriptions, lead Tx, deal token |
+| `barter deal <deal-file.json>` | Initiate an N-party deal (any number of banks/holders); prints one deal token per other holder |
+| `barter accept "<barterdeal:...>"` | Verify a deal token against the banks (`get_deal`), follow-sign your own Tx, submit |
+| `barter status <deal-ulid>` | Watch a deal you initiated (per-bank leg states) |
+| `barter nudge <deal-ulid>` | Relay signatures between banks by hand — un-sticks a deal whose pushes were lost |
+| `barter subscribe --bank <url> --url <push-url> ...` | Register a standing signature fan-out (manual escape hatch; `trade`/`deal` subscribe for you) |
+| `barter inbox [--bank <url>]` | List your accounts (with balances) at a bank |
 
-The trade command is verbose because v1 requires 8 hashes explicitly. The invite-string format (`barter://...`) is implemented but not yet wired to the trade command's hot path; that is a v1.5 UX improvement.
+There is no `confirm` and no `settle`: a holder accepting a deal signs their own Tx (which IS the receipt confirmation), and the banks settle on their own.
 
-### 5.2 Deal state machine (client-side)
+### 5.2 Deal orchestration (client-side)
 
-`apps/cli/src/dealstate.ts` tracks the local state of a deal from proposal through settlement. It stores the full graph (the one thing the protocol says the client legitimately knows) and coordinates the multi-bank calls.
+`apps/cli/src/orchestrate.ts` is the initiator's path, split in two:
 
-`apps/cli/src/orchestrate.ts` contains the topological settle logic: leads first, then followers in dependency order.
+- `createRecordsAndLead()` — wave 1: `create_records` on every bank, cross-subscribe the banks to each other's deal signatures, sign and submit the initiator's own Tx as `lead`. The client's active role ends here.
+- `relayAll()` — the `barter nudge` path: collect every bank's signatures via `get_deal` and deliver them to every other bank via `notify_signatures`.
 
-### 5.3 Profile storage
+`makeDealTokens()` encodes one signed `barterdeal:` token per follow holder (their unsigned Tx, the record bodies, the bank URLs), and `submitFollow()` is the `barter accept` half. `apps/cli/src/dealstate.ts` persists the initiator's deal state under `~/.barter/deals/`, keyed by the deal ULID — holder Txs, per-bank legs, record bodies — so `status` and `nudge` work after the fact.
+
+### 5.3 Profile storage and the local doc store
 
 User keys are stored in `~/.barter/profile.json` as raw base58 private keys. There is no encryption, no passphrase, no hardware wallet integration. This is acceptable for a demo and unacceptable for production. v1.5 will add Argon2id or PBKDF2 key encryption.
 
-> **Implementation detail:** How you store user keys is entirely up to you. The protocol only sees the pubkey on the wire.
+Client-authored docs live in `~/.barter/docs/`, keyed by content hash (`apps/cli/src/docstore.ts`). Account bodies travel with later requests (invites, deal files, `create_records`/`submit_tx` `docs[]`); **Pocket bodies never leave the machine** — banks only ever see the pocket hash inside an Account doc.
+
+> **Implementation detail:** How you store user keys and docs is entirely up to you. The protocol only sees the pubkey on the wire.
 
 ---
 
@@ -161,18 +177,19 @@ See `SCHEMA.md` for the full schema, table definitions, indexes, triggers, and i
 - `base58 TEXT` for all hashes, pubkeys, and signatures. No binary types — easier to debug, portable across languages.
 - `NUMERIC` for balances. Exact arithmetic; never floating point.
 - `TIMESTAMPTZ` for all timestamps.
-- `docs` table is append-only. Stores content-addressed docs (Promise, Pocket, Account, Tx, Signature, Order). `ON CONFLICT DO NOTHING` makes retries safe.
-- `ledger_records` table stores bank-minted records identified by ULID, not by content hash. Records reference each other and the Tx by ULID.
-- `accounts` is a materialized view of balance state, derivable from the doc stream but kept O(1) for queries.
-- `txs` holds per-bank leg state (role, predecessors, state). No bank sees the full graph.
-- `holds` has a partial unique index on `(account_hash, bank_pubkey) WHERE active` — the double-spend gate.
+- `docs` table is append-only. Stores content-addressed docs (Promise, Account, Tx, Signature, Order, Subscription — never Pocket bodies). `ON CONFLICT DO NOTHING` makes retries safe.
+- `ledger_records` stores bank-minted records identified by ULID, not by content hash. `pair_ulid` (the peer record) and `deal_ulid` (the grouping key) are mandatory; `tx_ulid` is an internal binding column set at `submit_tx` — the doc body carries no Tx reference.
+- `accounts` is a materialized view of balance state, derivable from the doc stream but kept O(1) for queries. Rows appear lazily when an Account doc is first presented (no pending/acknowledged dance).
+- `deal_legs` holds per-bank leg state, keyed `(deal_ulid, bank_pubkey)`: role, predecessors, the full bank list (the lead needs it to await all holds), and state `created → approved → held → settled / rejected`. No bank sees the full graph.
+- `holds` is keyed by `(account_hash, deal_ulid)` with a partial unique index on `(account_hash, bank_pubkey) WHERE active` — the double-spend gate.
+- `subscriptions` + `subscription_watches` back the signature fan-out: one watch row per record/hash/deal key.
 - `replay_window` is the replay-protection store.
-- `bank_peers` caches peer URLs. Vestigial on the trade path in v1 (banks don't call each other), kept for discovery.
+- `bank_peers` caches peer-bank URLs (pubkey → URL) for discovery; fan-out itself delivers to the URL named in the Subscription doc.
 
 You may use any database that can enforce:
 1. At most one active hold per account.
 2. Sum-to-zero (or sum-to-limit) on every settle.
-3. Atomic state transitions (propose → hold → confirm → settled).
+3. Atomic state transitions (created → approved → held → settled / rejected).
 
 SQLite with WAL mode, LevelDB with atomic batches, or an in-memory MVCC store would all work for smaller deployments.
 
@@ -187,8 +204,8 @@ SQLite with WAL mode, LevelDB with atomic batches, or an in-memory MVCC store wo
 | Client | Bun CLI | Web UI, mobile app, Telegram bot, AI agent loop |
 | Key storage (user) | `~/.barter/profile.json` (plaintext) | Browser localStorage + Argon2id, hardware wallet, OS keychain |
 | Key storage (bank) | Supabase Secrets env var | HashiCorp Vault, AWS KMS, HSM, plaintext on disk (don't) |
-| Inbox notification | 10s CLI polling | WebSocket, SSE, push notification, email digest |
-| Sweeper | 24h Postgres-based | Cron job, operator manual cleanup, no sweeper |
+| Signature delivery | Subscription push (fire-and-forget) + client relay (`barter nudge`) | WebSocket, SSE, message queue, gossip |
+| Deal watching | On-demand `get_deal` polling (`barter status`) | Push notification, email digest, long-polling |
 | Replay window | 100-ID LRU + 7-day TTL | Larger window, time-based only, in-memory Redis |
 | Migration policy | No in-place migrations after launch (wipe demo banks if schema changes) | Proper forward-compatible migrations, Blue/Green deploys |
 | Bank discovery | Hardcoded URL+pubkey in client config | Federated directory, on-chain registry, shared JSON file |
@@ -204,11 +221,13 @@ Honest list of limitations in this implementation:
 - **No web UI.** CLI only. Web is v1.5.
 - **No `barter doctor`.** Self-health-check command lands in v1.5.
 - **No cross-bank inbox aggregation.** Each `barter inbox` hits one bank.
-- **No automated multi-user confirm collection.** The client must reach each holder to gather `confirm_receipt` signatures; there is no push/notification layer (10s inbox polling only).
+- **No guaranteed push delivery.** Subscription fan-out is fire-and-forget with no retry; a lost push stalls the deal until any party relays the signatures (`barter nudge`).
+- **No automated follow-signature collection.** Deal tokens travel out of band; each follow holder must run `barter accept` themselves.
+- **No hold sweeper.** A hold orphaned by an abandoned deal stays until `reject_deal` releases it (see `TODOS.md`).
 - **No NFT-like unique Promises.** Issued Promises are fungible.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
 - **No key rotation or recovery.** Forever-key in v1.
-- **No automated settle-cascade retry.** If a downstream `settle_leg` fails, the client retries or the deal stalls with upstream legs already settled — the lead/follow risk (PROTOCOL.md §2), resolved socially.
+- **No rollback after a lead settles.** If a follow bank never settles, the lead is out — the lead/follow risk (PROTOCOL.md §2), resolved socially.
 
 See `TODOS.md` for the v1.5+ roadmap.
 
@@ -218,12 +237,11 @@ See `TODOS.md` for the v1.5+ roadmap.
 
 | Test suite | Command | Purpose |
 |---|---|---|
-| Protocol (Bun) | `bun run test` | Canonical JSON, crypto, schemas, invite format |
-| Protocol (Deno) | `bun run test:deno` | Same golden vectors under Deno — cross-runtime parity |
-| N-party (Deno) | `bun run test:nparty` | Full multi-bank settle cascade in a Deno test runner |
-| End-to-end | `./scripts/demo.sh` | Four simulated users mint and settle a branching multi-bank deal across live banks |
+| Protocol (Bun) | `bun run test` | Canonical JSON, crypto, schemas, invite/deal-token codecs, deal builder |
+| Deno suite | `bun run test:deno` | Everything Deno: the protocol golden vectors (cross-runtime parity) **plus** the full bank integration suite — `mint`, `direct_approval` (the bilateral walkthrough, reject paths, implicit accounts), `subscription` (fan-out, relay recovery, expiry), and `nparty` (four banks self-advance a branching deal to settled) |
+| End-to-end | `./scripts/demo.sh` | Four simulated users mint, initiate, accept, and watch a branching multi-bank deal settle across live banks |
 
-The Deno suite is load-bearing. If Bun and Deno disagree on a canonical hash, the protocol is broken. Run it before every release.
+The Deno suite is load-bearing twice over: if Bun and Deno disagree on a canonical hash the protocol is broken, and the bank tests are the only automated check of the advance engine. Run it before every release.
 
 ---
 

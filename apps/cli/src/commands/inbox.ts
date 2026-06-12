@@ -9,8 +9,6 @@ type ListAccountsResult = {
     promise_hash: string;
     pocket_hash: string;
     balance: string;
-    pending: string;
-    acknowledged: boolean;
   }>;
   promises: Record<string, { name?: string; bank?: string }>;
 };
@@ -32,11 +30,9 @@ export async function runInbox(argv: string[]): Promise<number> {
   for (const a of res.accounts) {
     const p = res.promises[a.promise_hash];
     const promiseLabel = p?.name ? `"${p.name}"` : `(${a.promise_hash.slice(0, 12)}...)`;
-    const ack = a.acknowledged ? "" : " [unacked]";
     const bal = String(a.balance).padStart(6);
-    const pen = String(a.pending);
     process.stdout.write(
-      `  ${promiseLabel.padEnd(22)} balance=${bal}  pending=${pen}${ack}\n` +
+      `  ${promiseLabel.padEnd(22)} balance=${bal}\n` +
         `    account: ${a.account_hash}\n`,
     );
   }

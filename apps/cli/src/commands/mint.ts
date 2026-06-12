@@ -1,7 +1,10 @@
-// `barter mint <name>` — issue a Promise on the user's home bank.
+// `barter mint <name> --amount N` — issue a Promise on the user's home bank.
 //
-// Builds and signs the Promise doc client-side, sends to the bank via
-// mint_promise RPC. Bank validates, stores, returns hashes + bank attestation.
+// Mint IS the first ledger record pair: the client authors the Promise plus
+// TWO Pocket/Account pairs locally (the issue account, which goes negative,
+// and the holding account, which goes positive), and the bank settles the
+// pair immediately. Pocket bodies never leave this machine — the bank only
+// sees the two distinct pocket hashes inside the Account docs.
 
 import {
   hashDoc,
@@ -10,10 +13,12 @@ import {
 } from "../../../../packages/protocol/src/index.ts";
 
 import { call, fetchBankPubkey } from "../client.ts";
+import { createLocalAccount } from "../docstore.ts";
 import { loadProfile, profilePrivateKeyBytes } from "../profile.ts";
 
 type MintArgs = {
   name?: string;
+  amount?: number;
   integer?: boolean;
   due?: string;
   limit?: number;
@@ -26,6 +31,7 @@ function parseArgs(argv: string[]): MintArgs {
     const a = argv[i];
     if (!a) continue;
     if (a === "--integer") args.integer = true;
+    else if (a === "--amount") args.amount = Number(argv[++i]);
     else if (a === "--due") args.due = argv[++i];
     else if (a === "--limit") args.limit = Number(argv[++i]);
     else if (a === "--bank") args.bank = argv[++i];
@@ -37,7 +43,12 @@ function parseArgs(argv: string[]): MintArgs {
 export async function runMint(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
   if (!args.name) {
-    process.stderr.write(`barter mint: <name> is required (e.g. 'barter mint "1 logo"')\n`);
+    process.stderr.write(`barter mint: <name> is required (e.g. 'barter mint "1 logo" --amount 5')\n`);
+    return 1;
+  }
+  const amount = args.amount ?? 1;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    process.stderr.write(`barter mint: --amount must be a positive number\n`);
     return 1;
   }
   const profile = loadProfile();
@@ -54,28 +65,34 @@ export async function runMint(argv: string[]): Promise<number> {
   if (args.integer !== undefined) promise.integer = args.integer;
   if (args.due) promise.due = args.due;
   if (args.limit !== undefined) promise.limit = args.limit;
-
   promise.sig = signDoc(promise, profilePrivateKeyBytes(profile));
 
-  const result = (await call(profile, "mint_promise", { promise }, {
-    bankUrl,
-    toBankPubkey: bankPubkey,
-  })) as {
+  // Two distinct pockets → two accounts: issue (negative) + holding (positive).
+  const promiseHash = hashDoc(promise);
+  const issue = createLocalAccount(profile, promiseHash, "issue");
+  const holding = createLocalAccount(profile, promiseHash, "holding");
+
+  const result = (await call(
+    profile,
+    "mint_promise",
+    { promise, debit_account: issue.account, credit_account: holding.account, amount },
+    { bankUrl, toBankPubkey: bankPubkey },
+  )) as {
     promise_hash: string;
-    pocket_hash: string;
-    account_hash: string;
-    bank_attestation: Record<string, unknown>;
+    debit_account_hash: string;
+    credit_account_hash: string;
+    deal: string;
   };
 
   process.stdout.write(
-    `minted "${args.name}"\n` +
-      `  promise hash:   ${result.promise_hash}\n` +
-      `  pocket hash:    ${result.pocket_hash}\n` +
-      `  account hash:   ${result.account_hash}\n` +
-      `  bank:           ${bankPubkey}\n` +
+    `minted ${amount} × "${args.name}"\n` +
+      `  promise hash:     ${result.promise_hash}\n` +
+      `  issue account:    ${result.debit_account_hash}  (balance −${amount})\n` +
+      `  holding account:  ${result.credit_account_hash}  (balance +${amount})\n` +
+      `  bank:             ${bankPubkey}\n` +
       `\n` +
-      `share this promise with others by sending them the promise hash.\n` +
-      `they can then propose a trade with you using 'barter trade'.\n`,
+      `share the promise hash with others; they trade against your holding account.\n` +
+      `offer a swap with 'barter invite'.\n`,
   );
   return 0;
 }

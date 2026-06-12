@@ -22,8 +22,6 @@ export type AccountRow = {
   pocket_hash: string;
   holder_pubkey: string;
   balance: string;
-  pending: string;
-  acknowledged: boolean;
 };
 
 export type LedgerRecordRow = {
@@ -32,10 +30,27 @@ export type LedgerRecordRow = {
   type: string;
   account: string;
   amount: string;
-  pair_ulid: string | null;
+  pair_ulid: string;
+  deal_ulid: string;
   tx_ulid: string | null;
   body: Record<string, unknown>;
   created_at: string;
+};
+
+export type LegRow = {
+  state: string;
+  role: string | null;
+  predecessors: string[];
+  banks: string[];
+};
+
+export type SubscriptionRow = {
+  subscription_hash: string;
+  bank_pubkey: string;
+  subscriber_pubkey: string;
+  url: string;
+  until: string | null;
+  active: boolean;
 };
 
 export class BankDB {
@@ -72,14 +87,14 @@ export class BankDB {
     return data as DocRow | null;
   }
 
-  /** Insert or update an Account row. Used by mint_promise (issuer's negative account) and open_account. */
+  /** Insert an Account row if absent. Accounts are implicit: rows appear the
+   *  first time the Account doc is presented (mint_promise, create_records,
+   *  submit_tx). Balance always starts at 0. */
   async upsertAccount(input: {
     accountHash: string;
     promiseHash: string;
     pocketHash: string;
     holderPubkey: string;
-    initialBalance?: number;
-    acknowledged?: boolean;
   }): Promise<void> {
     const { error } = await this.sb.from("accounts").upsert(
       {
@@ -88,9 +103,7 @@ export class BankDB {
         promise_hash: input.promiseHash,
         pocket_hash: input.pocketHash,
         holder_pubkey: input.holderPubkey,
-        balance: input.initialBalance ?? 0,
-        pending: 0,
-        acknowledged: input.acknowledged ?? false,
+        balance: 0,
       },
       { onConflict: "account_hash", ignoreDuplicates: true },
     );
@@ -137,13 +150,16 @@ export class BankDB {
 
   // ── ledger_records: bank-minted, ULID-identified ───────────────────────────
 
-  /** Create a ledger record. The bank assigns the ULID and guarantees uniqueness. */
+  /** Create a ledger record. The bank assigns the ULID and guarantees
+   *  uniqueness. `pairUlid` (the peer record) and `dealUlid` (the grouping
+   *  key) are mandatory. */
   async insertLedgerRecord(input: {
     ulid: string;
     type: "credit" | "debit";
     account: string;
     amount: number;
-    pairUlid?: string;
+    pairUlid: string;
+    dealUlid: string;
     body: Record<string, unknown>;
   }): Promise<void> {
     const { error } = await this.sb.from("ledger_records").insert({
@@ -152,10 +168,24 @@ export class BankDB {
       type: input.type,
       account: input.account,
       amount: input.amount,
-      pair_ulid: input.pairUlid ?? null,
+      pair_ulid: input.pairUlid,
+      deal_ulid: input.dealUlid,
       body: input.body,
     });
     if (error) throw new Error(`ledger_records.insert: ${error.message}`);
+  }
+
+  /** All records of a deal at this bank. The advance engine and get_deal
+   *  walk the deal through this. */
+  async getLedgerRecordsByDeal(dealUlid: string): Promise<LedgerRecordRow[]> {
+    const { data, error } = await this.sb
+      .from("ledger_records")
+      .select("*")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("deal_ulid", dealUlid)
+      .order("ulid");
+    if (error) throw new Error(`ledger_records.byDeal: ${error.message}`);
+    return (data as LedgerRecordRow[]) ?? [];
   }
 
   async getLedgerRecord(ulid: string): Promise<LedgerRecordRow | null> {
@@ -228,15 +258,15 @@ export class BankDB {
     return String(newBalance);
   }
 
-  /** Acquire a hold on an Account for a Tx. Returns true if acquired, false on conflict. */
+  /** Acquire a hold on an Account for a deal. Returns true if acquired, false on conflict. */
   async acquireHold(input: {
     accountHash: string;
-    txHash: string;
+    dealUlid: string;
     amount: number;
   }): Promise<boolean> {
     const { error } = await this.sb.from("holds").insert({
       account_hash: input.accountHash,
-      tx_hash: input.txHash,
+      deal_ulid: input.dealUlid,
       bank_pubkey: this.bankPubkey,
       amount: input.amount,
       active: true,
@@ -248,58 +278,181 @@ export class BankDB {
     return true;
   }
 
-  /** Release a hold (settle or reject path). */
-  async releaseHold(accountHash: string, txHash: string): Promise<void> {
+  /** Amount of the active hold on an account, or 0 if none. Used by the
+   *  approve-time balance check. */
+  async getActiveHoldAmount(accountHash: string): Promise<number> {
+    const { data, error } = await this.sb
+      .from("holds")
+      .select("amount")
+      .eq("account_hash", accountHash)
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("active", true)
+      .maybeSingle();
+    if (error) throw new Error(`holds.activeAmount: ${error.message}`);
+    return data ? Number(data.amount) : 0;
+  }
+
+  /** Release a single hold (settle or reject path). */
+  async releaseHold(accountHash: string, dealUlid: string): Promise<void> {
     const { error } = await this.sb
       .from("holds")
       .update({ active: false, released_at: new Date().toISOString() })
       .eq("account_hash", accountHash)
-      .eq("tx_hash", txHash)
+      .eq("deal_ulid", dealUlid)
       .eq("bank_pubkey", this.bankPubkey)
       .eq("active", true);
     if (error) throw new Error(`holds.release: ${error.message}`);
   }
 
-  /** Tx state machine helpers. Only writes fields that are explicitly set, so
-   *  a state-only update doesn't null out `role` / `predecessors` populated on a
-   *  previous call. Under the client-orchestrated N-party model each bank stores
-   *  its own role (lead|follow) and the predecessor banks it must observe a
-   *  `settle` from before settling its own leg. */
-  async upsertTx(input: {
-    txHash: string;
+  /** Release every active hold this bank placed for a deal (reject path). */
+  async releaseHoldsByDeal(dealUlid: string): Promise<void> {
+    const { error } = await this.sb
+      .from("holds")
+      .update({ active: false, released_at: new Date().toISOString() })
+      .eq("deal_ulid", dealUlid)
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("active", true);
+    if (error) throw new Error(`holds.releaseByDeal: ${error.message}`);
+  }
+
+  /** Leg state machine helpers, keyed (deal_ulid, bank). Only writes fields
+   *  that are explicitly set, so a state-only update doesn't null out the
+   *  topology fields populated at create_records. */
+  async upsertLeg(input: {
+    dealUlid: string;
     state: string;
     role?: string;
     predecessors?: string[];
+    banks?: string[];
   }): Promise<void> {
     const row: Record<string, unknown> = {
-      tx_hash: input.txHash,
+      deal_ulid: input.dealUlid,
       bank_pubkey: this.bankPubkey,
       state: input.state,
     };
     if (input.role !== undefined) row.role = input.role;
     if (input.predecessors !== undefined) row.predecessors = input.predecessors;
-    const { error } = await this.sb.from("txs").upsert(row, { onConflict: "tx_hash,bank_pubkey" });
-    if (error) throw new Error(`txs.upsert: ${error.message}`);
+    if (input.banks !== undefined) row.banks = input.banks;
+    const { error } = await this.sb.from("deal_legs").upsert(row, { onConflict: "deal_ulid,bank_pubkey" });
+    if (error) throw new Error(`deal_legs.upsert: ${error.message}`);
   }
 
-  /** Find a stored signature doc by signer + the (hash, action) it carries.
-   *  Used to check confirm/settle attestations without re-walking the doc
-   *  stream by hand. Returns the doc body, or null. */
+  async getLegState(dealUlid: string): Promise<LegRow | null> {
+    const { data, error } = await this.sb
+      .from("deal_legs")
+      .select("state, role, predecessors, banks")
+      .eq("deal_ulid", dealUlid)
+      .eq("bank_pubkey", this.bankPubkey)
+      .maybeSingle();
+    if (error) throw new Error(`deal_legs.getState: ${error.message}`);
+    if (!data) return null;
+    const row = data as { state: string; role: string | null; predecessors: unknown; banks: unknown };
+    return {
+      state: row.state,
+      role: row.role ?? null,
+      predecessors: Array.isArray(row.predecessors) ? (row.predecessors as string[]) : [],
+      banks: Array.isArray(row.banks) ? (row.banks as string[]) : [],
+    };
+  }
+
+  /** Find a stored signature doc by signer + (target, action). The target is
+   *  one of {hash, record, deal} — the three Signature anchor kinds. Returns
+   *  the doc body, or null. */
   async findActionSig(
     actorPubkey: string,
-    txHash: string,
+    target: { hash?: string; record?: string; deal?: string },
     action: string,
   ): Promise<Record<string, unknown> | null> {
+    const match: Record<string, string> = { action };
+    if (target.hash !== undefined) match.hash = target.hash;
+    if (target.record !== undefined) match.record = target.record;
+    if (target.deal !== undefined) match.deal = target.deal;
     const { data, error } = await this.sb
       .from("docs")
       .select("body")
       .eq("bank_pubkey", this.bankPubkey)
       .eq("type", "signature")
       .eq("pubkey", actorPubkey)
-      .contains("body", { hash: txHash, action })
+      .contains("body", match)
       .limit(1);
     if (error) throw new Error(`docs.findActionSig: ${error.message}`);
     return data && data[0] ? (data[0].body as Record<string, unknown>) : null;
+  }
+
+  /** All stored signature docs anchored to one target (deal, record, or
+   *  hash). Used by get_deal and the advance engine's proof checks. */
+  async listSignaturesByTarget(
+    target: { hash?: string; record?: string; deal?: string },
+  ): Promise<Array<Record<string, unknown>>> {
+    const match: Record<string, string> = {};
+    if (target.hash !== undefined) match.hash = target.hash;
+    if (target.record !== undefined) match.record = target.record;
+    if (target.deal !== undefined) match.deal = target.deal;
+    const { data, error } = await this.sb
+      .from("docs")
+      .select("body")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("type", "signature")
+      .contains("body", match);
+    if (error) throw new Error(`docs.sigsByTarget: ${error.message}`);
+    return (data ?? []).map((r) => r.body as Record<string, unknown>);
+  }
+
+  // ── subscriptions: signature fan-out targets ────────────────────────────
+
+  async insertSubscription(input: {
+    subscriptionHash: string;
+    subscriberPubkey: string;
+    url: string;
+    until?: string;
+    watchKeys: string[];
+  }): Promise<void> {
+    const { error } = await this.sb.from("subscriptions").upsert(
+      {
+        subscription_hash: input.subscriptionHash,
+        bank_pubkey: this.bankPubkey,
+        subscriber_pubkey: input.subscriberPubkey,
+        url: input.url,
+        until: input.until ?? null,
+        active: true,
+      },
+      { onConflict: "subscription_hash,bank_pubkey", ignoreDuplicates: true },
+    );
+    if (error) throw new Error(`subscriptions.upsert: ${error.message}`);
+    if (input.watchKeys.length === 0) return;
+    const { error: werr } = await this.sb.from("subscription_watches").upsert(
+      input.watchKeys.map((k) => ({
+        bank_pubkey: this.bankPubkey,
+        watch_key: k,
+        subscription_hash: input.subscriptionHash,
+      })),
+      { onConflict: "bank_pubkey,watch_key,subscription_hash", ignoreDuplicates: true },
+    );
+    if (werr) throw new Error(`subscription_watches.upsert: ${werr.message}`);
+  }
+
+  /** Active, unexpired subscriptions watching any of the given keys. */
+  async findSubscriptionsByWatchKeys(keys: string[]): Promise<SubscriptionRow[]> {
+    if (keys.length === 0) return [];
+    const { data, error } = await this.sb
+      .from("subscription_watches")
+      .select("subscription_hash")
+      .eq("bank_pubkey", this.bankPubkey)
+      .in("watch_key", keys);
+    if (error) throw new Error(`subscription_watches.byKeys: ${error.message}`);
+    const hashes = [...new Set((data ?? []).map((r) => r.subscription_hash as string))];
+    if (hashes.length === 0) return [];
+    const { data: subs, error: serr } = await this.sb
+      .from("subscriptions")
+      .select("*")
+      .eq("bank_pubkey", this.bankPubkey)
+      .eq("active", true)
+      .in("subscription_hash", hashes);
+    if (serr) throw new Error(`subscriptions.byHashes: ${serr.message}`);
+    const now = Date.now();
+    return ((subs as SubscriptionRow[]) ?? []).filter(
+      (s) => !s.until || new Date(s.until).getTime() > now,
+    );
   }
 
   /** Record (or refresh) a peer bank URL we just heard from. */
@@ -325,27 +478,6 @@ export class BankDB {
       .maybeSingle();
     if (error) throw new Error(`bank_peers.lookup: ${error.message}`);
     return (data?.peer_url as string) ?? null;
-  }
-
-  async getTxState(txHash: string): Promise<{
-    state: string;
-    role: string | null;
-    predecessors: string[];
-  } | null> {
-    const { data, error } = await this.sb
-      .from("txs")
-      .select("state, role, predecessors")
-      .eq("tx_hash", txHash)
-      .eq("bank_pubkey", this.bankPubkey)
-      .maybeSingle();
-    if (error) throw new Error(`txs.getState: ${error.message}`);
-    if (!data) return null;
-    const row = data as { state: string; role: string | null; predecessors: unknown };
-    return {
-      state: row.state,
-      role: row.role ?? null,
-      predecessors: Array.isArray(row.predecessors) ? (row.predecessors as string[]) : [],
-    };
   }
 
   /**

@@ -10,9 +10,8 @@
   ],
   "scripts": {
     "test": "bun --filter '@barter.game/protocol' test",
-    "test:deno": "deno test --allow-read",
-    "test:nparty": "deno test --allow-read --allow-env --node-modules-dir=auto supabase/functions/_shared/bank/test-deno/nparty.deno-test.ts",
-    "test:all": "bun run test && bun run test:deno && bun run test:nparty",
+    "test:deno": "deno test --allow-read --allow-env --node-modules-dir=auto",
+    "test:all": "bun run test && bun run test:deno",
     "build": "bun --filter '*' build",
     "typecheck": "bun --filter '*' typecheck",
     "build:website": "cd website && hugo",

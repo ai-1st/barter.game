@@ -32,8 +32,6 @@ export const getAccountBalance: Handler = async (params, ctx) => {
     pocket_hash: accountRow.pocket_hash,
     holder_pubkey: accountRow.holder_pubkey,
     balance: accountRow.balance,
-    pending: accountRow.pending,
-    acknowledged: accountRow.acknowledged,
   };
 };
 

@@ -42,9 +42,9 @@ barter.game/
 │       ├── src/
 │       │   ├── canonical.ts  # RFC 8785 hand-rolled canonicalizer (load-bearing)
 │       │   ├── crypto.ts     # ed25519 sign/verify, SHA-256, base58
-│       │   ├── schemas.ts    # Runtime doc validators (plain TS predicates)
-│       │   ├── invite.ts     # barter:// invite string encode/decode
-│       │   ├── deal.ts       # Deal-graph builder: records, Tx hash, roles, predecessors
+│       │   ├── schemas.ts    # Runtime doc validators (plain TS predicates, incl. Subscription)
+│       │   ├── invite.ts     # barter:// invite strings + barterdeal: deal-token codec
+│       │   ├── deal.ts       # Deal builder: per-holder Txs, lead/follow roles, settle topology
 │       │   └── index.ts      # Re-exports
 │       ├── test/             # Bun test suite
 │       └── test-deno/        # Deno test suite (same golden vectors)
@@ -54,21 +54,24 @@ barter.game/
 │       │   ├── index.ts      # CLI entrypoint (command router)
 │       │   ├── client.ts     # HTTP RPC client
 │       │   ├── profile.ts    # ~/.barter/profile.json read/write
-│       │   ├── dealstate.ts  # Local deal state tracking
-│       │   ├── orchestrate.ts # Topological settle logic (lead → followers)
-│       │   └── commands/     # init, mint, open, trade, deal, confirm, settle, inbox
+│       │   ├── docstore.ts   # ~/.barter/docs/ — client-held docs; Pocket bodies never leave
+│       │   ├── dealstate.ts  # ~/.barter/deals/ — initiator's deal state, keyed by deal ULID
+│       │   ├── orchestrate.ts # createRecordsAndLead / submitFollow / relayAll (banks self-advance)
+│       │   └── commands/     # init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
 │       └── package.json
 ├── supabase/
-│   ├── migrations/           # Postgres SQL schema
+│   ├── migrations/           # Postgres SQL schema (single baseline migration)
 │   ├── functions/
-│   │   ├── _shared/bank/     # Shared bank code (rpc, handlers, db, peer)
+│   │   ├── _shared/bank/     # Shared bank code (rpc, handlers, advance engine, subscriptions, db)
 │   │   │   ├── rpc.ts        # Envelope validation, sig check, replay window, dispatch
 │   │   │   ├── registry.ts   # Method name → handler map
 │   │   │   ├── server.ts     # Bank bootstrap: load key, start HTTP listener
 │   │   │   ├── db.ts         # Postgres queries
-│   │   │   ├── peer.ts       # HTTP client for bank-to-bank calls (mostly vestigial)
-│   │   │   ├── handlers/     # One file per RPC method
-│   │   │   └── test-deno/    # N-party Deno integration test
+│   │   │   ├── advance.ts    # Advance engine: legs self-advance through hold → settle
+│   │   │   ├── subscriptions.ts # Signature fan-out (bank-signed notify_signatures pushes)
+│   │   │   ├── peer.ts       # HTTP client for signed bank-to-bank calls
+│   │   │   ├── handlers/     # One file per RPC method (+ intake.ts shared doc intake)
+│   │   │   └── test-deno/    # Bank integration tests (mint, direct approval, subscriptions, N-party)
 │   │   ├── bank-alice/       # Edge Function entrypoint
 │   │   ├── bank-bob/
 │   │   ├── bank-carol/
@@ -104,12 +107,11 @@ bun run test:all
 
 | Command | Runtime | What it tests |
 |---|---|---|
-| `bun run test` | Bun | Protocol canonical JSON, crypto, schemas, invites |
-| `bun run test:deno` | Deno | Same golden vectors under Deno — **cross-runtime parity** |
-| `bun run test:nparty` | Deno | Full multi-bank settle cascade in Deno test runner |
+| `bun run test` | Bun | Protocol canonical JSON, crypto, schemas, invites/deal tokens, deal builder |
+| `bun run test:deno` | Deno | Golden vectors under Deno (**cross-runtime parity**) + the full bank integration suite: mint, direct approval, subscriptions/fan-out, N-party self-advance |
 | `./scripts/demo.sh` | Bash + Bun | End-to-end against live banks (needs deployed Supabase project) |
 
-The **Deno suite is load-bearing**. If Bun and Deno disagree on a canonical hash, every signature in the protocol becomes unverifiable across implementations. Run it before every release.
+The **Deno suite is load-bearing**. If Bun and Deno disagree on a canonical hash, every signature in the protocol becomes unverifiable across implementations — and the bank tests in it are the only automated check of the advance engine. Run it before every release.
 
 ### Individual workspace commands
 
@@ -179,7 +181,8 @@ export BARTER_PROJECT_URL=https://<your-ref>.supabase.co
 - **Bank keys**: Loaded from `Deno.env.get("BANK_<NAME>_PRIV_KEY")`. Never log them, never return them in RPC responses.
 - **Replay protection**: Every RPC envelope carries a ULID `id` bound to `(sender_pubkey, recipient_pubkey)`. The recipient stores seen triples in `replay_window` and rejects duplicates with `-32002`.
 - **Signature verification**: Every inbound request is verified against its `pubkey` before any handler runs. The `to` field must match the recipient bank's pubkey.
-- **Double-spend gate**: A partial unique index on `holds` enforces at most one active hold per account. Concurrent holds return `-32003`.
+- **Pocket privacy**: Banks must NEVER accept or store Pocket bodies — `account.pocket` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Pocket docs; do not add a server-side code path that receives one.
+- **Double-spend gate**: A partial unique index on `holds` enforces at most one active hold per account. Concurrent hold attempts surface as `-32003` or, inside the advance engine, a quiet back-off retried on the next event.
 - **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Promise sum to zero (or the agreed limit).
 - **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `.well-known/barter-bank.json` is fetched and compared against the pin; divergence fails closed.
 - **No RLS in v1**: Edge Functions use the service-role key. Direct DB access is operator-only. RLS is a v1.5 item.
@@ -188,13 +191,13 @@ export BARTER_PROJECT_URL=https://<your-ref>.supabase.co
 
 | File | Purpose | Read this if you are... |
 |---|---|---|
+| `SETTLEMENT_WALKTHROUGH.md` | **The canonical narrative** of the model — mint, direct approval, subscriptions, hold, settle. Read this first. | Touching anything protocol-adjacent |
 | `README.md` | Project intro, quickstart, CLI usage | New to the repo |
 | `ETHOS.md` | Design beliefs and priors | Changing protocol semantics |
 | `PROTOCOL.md` | **The invariant contract.** Every implementation must follow this. | Building a bank, client, or alternative implementation |
 | `IMPLEMENTATION.md` | How *this repo* implements v1 (file maps, design choices) | Modifying server or client code |
 | `SCHEMA.md` | Reference database schema | Changing migrations or DB queries |
 | `TODOS.md` | v1.5+ roadmap and speculative extensions | Planning new features |
-| `SETTLEMENT_WALKTHROUGH.md` | Step-by-step bilateral trade trace | Debugging settle logic |
 
 ## Deployment notes
 
@@ -237,7 +240,7 @@ cd website && hugo mod get && hugo --gc --minify
 - **Bank scoping**: Every bank-scoped table has `bank_pubkey TEXT NOT NULL`. Every query must filter on it. Missing the filter is a bug.
 - **Base58 everywhere**: Hashes, pubkeys, and signatures are stored as base58 strings in `TEXT` columns. No binary types.
 - `NUMERIC` for balances: Never use floating-point for ledger math.
-- **State machine driven by client**: Banks never advance state on their own. The client calls `propose_leg → hold_leg → confirm_receipt → settle_leg` in order. `reject_leg` terminates from any pre-settled state.
-- **Visibility boundary**: No bank ever sees another bank's records. A bank sees only the records of the promises it issues, the Tx hash list, and its immediate predecessor bank pubkeys.
+- **Banks self-advance**: Clients only create records (`create_records`) and submit holder-signed Txs (`submit_tx`). From there each bank advances its own leg `created → approved → held → settled` event-driven — `advanceDeal()` re-evaluates on every `submit_tx` / `notify_signatures`, with no cron or background worker. Signatures travel between banks via subscription fan-out, with client relay (`barter nudge`) as the floor. `reject_deal` terminates from any pre-settled state.
+- **Visibility boundary**: No bank ever sees another bank's records. A bank sees only the records of the promises it issues, the holder Txs that touch them, and the deal-level signatures of its peers.
 - **Migration policy (v1)**: No in-place migrations after launch. If schema changes, wipe demo banks. v1.5 will introduce forward-compatible migrations.
 - **Comments**: Load-bearing invariants are commented with `//` or `/* */` blocks. JSDoc is used for exported public APIs.

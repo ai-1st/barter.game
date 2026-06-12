@@ -8,6 +8,7 @@ import {
   validatePromise,
   validateRecord,
   validateSignature,
+  validateSubscription,
   validateTx,
 } from "../src/schemas.ts";
 
@@ -83,7 +84,6 @@ describe("Record validator", () => {
     amount: 1,
     account: HASH,
     pair: ULID,
-    tx: ULID,
   };
 
   test("accepts credit record", () => {
@@ -94,9 +94,17 @@ describe("Record validator", () => {
     expect(() => validateRecord({ ...valid, type: "debit" })).not.toThrow();
   });
 
-  test("rejects hash in pair / tx (must be ULID)", () => {
+  test("rejects missing pair (mandatory, bank-set)", () => {
+    const { pair: _pair, ...noPair } = valid;
+    expect(() => validateRecord(noPair)).toThrow(/pair/);
+  });
+
+  test("rejects hash in pair (must be ULID)", () => {
     expect(() => validateRecord({ ...valid, pair: HASH })).toThrow(/ULID/);
-    expect(() => validateRecord({ ...valid, tx: HASH })).toThrow(/ULID/);
+  });
+
+  test("rejects a tx back-reference in the doc body", () => {
+    expect(() => validateRecord({ ...valid, tx: ULID })).toThrow(/record.tx/);
   });
 
   test("rejects negative amount", () => {
@@ -126,7 +134,7 @@ describe("Tx + Signature validators", () => {
     ).toThrow(/ULID/);
   });
 
-  test("signature accepts known actions including v1's new 'timeout'", () => {
+  test("signature accepts known actions including 'timeout'", () => {
     expect(() =>
       validateSignature({
         type: "signature",
@@ -138,7 +146,38 @@ describe("Tx + Signature validators", () => {
     ).not.toThrow();
   });
 
-  test("signature rejects unknown action", () => {
+  test("signature accepts per-record and per-deal targets", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: ULID,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "settle", deal: ULID, seen: [HASH],
+      }),
+    ).not.toThrow();
+  });
+
+  test("signature with action requires exactly one of hash|record|deal", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve",
+      }),
+    ).toThrow(/exactly one/);
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", hash: HASH, record: ULID,
+      }),
+    ).toThrow(/exactly one/);
+  });
+
+  test("signature rejects 'ack' (removed) and unknown actions", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ack", hash: HASH,
+      }),
+    ).toThrow();
     expect(() =>
       validateSignature({
         type: "signature",
@@ -147,6 +186,59 @@ describe("Tx + Signature validators", () => {
         action: "bogus",
       }),
     ).toThrow();
+  });
+
+  test("signature rejects a hash where record/deal ULID is expected", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: HASH,
+      }),
+    ).toThrow(/ULID/);
+  });
+});
+
+describe("Subscription validator", () => {
+  const valid = {
+    type: "subscription" as const,
+    pubkey: PUBKEY,
+    ulid: ULID,
+    deals: [ULID],
+    url: "https://bank.example/rpc",
+  };
+
+  test("accepts a minimal valid subscription", () => {
+    expect(() => validateSubscription(valid)).not.toThrow();
+  });
+
+  test("accepts all three watch lists and until", () => {
+    expect(() =>
+      validateSubscription({
+        ...valid,
+        records: [ULID],
+        hashes: [HASH],
+        until: "2026-12-31",
+      }),
+    ).not.toThrow();
+  });
+
+  test("rejects when no watch keys at all", () => {
+    const { deals: _deals, ...noWatch } = valid;
+    expect(() => validateSubscription(noWatch)).toThrow(/at least one/);
+    expect(() => validateSubscription({ ...noWatch, records: [] })).toThrow(/at least one/);
+  });
+
+  test("rejects non-http(s) or invalid urls", () => {
+    expect(() => validateSubscription({ ...valid, url: "not a url" })).toThrow(/URL/);
+    expect(() => validateSubscription({ ...valid, url: "ftp://x.example" })).toThrow(/http/);
+  });
+
+  test("rejects hashes in records/deals (must be ULIDs)", () => {
+    expect(() => validateSubscription({ ...valid, records: [HASH] })).toThrow(/ULID/);
+    expect(() => validateSubscription({ ...valid, deals: [HASH] })).toThrow(/ULID/);
+  });
+
+  test("rejects bad until", () => {
+    expect(() => validateSubscription({ ...valid, until: "soon" })).toThrow(/date/);
   });
 });
 

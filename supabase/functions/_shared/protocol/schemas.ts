@@ -4,8 +4,8 @@
 // Doc schemas — TS types + runtime validators matching the design doc's
 // "Doc Schemas (restated, cite legacy types.ts)" section.
 //
-// We hand-roll the validators rather than pull in zod/valibot for v1 — six
-// doc types, ~20 fields total, the validators are short and the boundary
+// We hand-roll the validators rather than pull in zod/valibot for v1 — a
+// handful of doc types, the validators are short and the boundary
 // errors are part of the protocol surface (-32000), so explicit shape
 // checking lives at the protocol layer.
 
@@ -35,7 +35,8 @@ export type DocType =
   | "credit"
   | "debit"
   | "signature"
-  | "order";
+  | "order"
+  | "subscription";
 
 /** Promise: minted by Promise owner. Bound to an issuing bank pubkey. */
 export type Promise = BaseDoc & {
@@ -62,22 +63,22 @@ export type Account = BaseDoc & {
 
 /** Record: one half of a paired credit/debit accounting entry.
  *  Records are bank-minted and identified by ULID, not by content hash.
- *  `pair` links the debit and credit halves of a transfer (both ULIDs).
- *  `tx` is set when the record is bound to a Tx during propose_leg.
+ *  `pair` links the debit and credit halves of a transfer — mandatory, set by
+ *  the bank when it creates the pair. Records carry no Tx back-reference: the
+ *  binding direction is Tx → records.
  */
 export type LedgerRecord = BaseDoc & {
   type: "credit" | "debit";
   amount: number;
   account: Base58SHA256;
-  pair?: ULID;
-  tx?: ULID;
+  pair: ULID;
 };
 
-/** Tx: groups a set of Records into a barter deal.
- *  `records` holds bank-assigned ULIDs in transfer order.
- *  The Tx itself is still hashed for signing, but two independent builds of
- *  the same logical deal will produce different hashes (banks assign ULIDs),
- *  so the Tx hash is no longer a globally deterministic content address.
+/** Tx: ONE HOLDER's view of a deal. `pubkey` is the holder; `records` holds
+ *  the bank-assigned ULIDs of the ledger records sitting on that holder's
+ *  accounts (possibly at several banks), in transfer order. A lead/follow
+ *  Signature by the holder over the Tx hash authorizes banks to execute
+ *  those records.
  */
 export type Tx = BaseDoc & {
   type: "tx";
@@ -85,12 +86,21 @@ export type Tx = BaseDoc & {
   records: ULID[];
 };
 
-/** Signature: attestation doc. `sig` populated after signing. */
+/** Signature: attestation doc. `sig` populated after signing.
+ *  Exactly one target field accompanies an action:
+ *  - `hash`   — content-addressed docs: a holder's lead/follow over a Tx
+ *               hash, or a bank's approve over a Promise hash (mint).
+ *  - `record` — a bank's per-ledger-record approve/reject.
+ *  - `deal`   — leg-level hold/settle/reject, keyed by the deal ULID.
+ *  `seen` carries hashes of upstream settle Signature docs (the cross-bank
+ *  proof chain).
+ */
 export type Signature = BaseDoc & {
   type: "signature";
   hash?: Base58SHA256;
+  record?: ULID;
+  deal?: ULID;
   action?:
-    | "ack"
     | "approve"
     | "hold"
     | "settle"
@@ -98,7 +108,7 @@ export type Signature = BaseDoc & {
     | "lead"
     | "follow"
     | "timeout";
-  seen?: Base58Signature[];
+  seen?: Base58SHA256[];
   reason?: string;
   sig?: Base58Signature;
 };
@@ -115,7 +125,33 @@ export type Order = BaseDoc & {
   approvers?: Base58PubKey[]; // pubkeys whose sigs may substitute for the owner's
 };
 
-export type AnyDoc = Promise | Pocket | Account | LedgerRecord | Tx | Signature | Order;
+/** Subscription: the initiating party asks a bank to push the Signature docs
+ *  it creates concerning the watched items to `url`. `pubkey` is the creator
+ *  (who signs the request); `to` is the delivery target behind `url` — a
+ *  peer bank or another party — defaulting to the creator. This is how the
+ *  initiator chooses the topology: cross-subscribe the banks to each other,
+ *  subscribe only herself, or any mix. Fan-out is fire-and-forget; a lost
+ *  push is recovered by any party relaying the signatures itself.
+ */
+export type Subscription = BaseDoc & {
+  type: "subscription";
+  records?: ULID[];        // watch keys matching Signature.record
+  hashes?: Base58SHA256[]; // watch keys matching Signature.hash
+  deals?: ULID[];          // watch keys matching Signature.deal
+  url: string;             // http(s) endpoint to POST bank-signed notify envelopes to
+  to?: Base58PubKey;       // delivery target pubkey (defaults to the creator)
+  until?: DateString;      // optional expiry; banks may default one
+};
+
+export type AnyDoc =
+  | Promise
+  | Pocket
+  | Account
+  | LedgerRecord
+  | Tx
+  | Signature
+  | Order
+  | Subscription;
 
 // ------- Hash helpers -------
 // LedgerRecords are bank-minted by ULID and are NOT content-addressed.
@@ -125,6 +161,7 @@ export const hashPocket = (p: Pocket): Base58SHA256 => hashDoc(p);
 export const hashAccount = (a: Account): Base58SHA256 => hashDoc(a);
 export const hashTx = (t: Tx): Base58SHA256 => hashDoc(t);
 export const hashOrder = (o: Order): Base58SHA256 => hashDoc(o);
+export const hashSubscription = (s: Subscription): Base58SHA256 => hashDoc(s);
 
 // ------- Validators -------
 //
@@ -213,11 +250,12 @@ export function validateRecord(d: unknown): asserts d is LedgerRecord {
   if (typeof r.account !== "string" || !BASE58_RE.test(r.account)) {
     throw new TypeError("record.account must be a base58 hash");
   }
-  // pair and tx are ULIDs (bank-assigned), not content hashes.
-  for (const field of ["pair", "tx"]) {
-    if (r[field] !== undefined && (typeof r[field] !== "string" || !ULID_RE.test(r[field] as string))) {
-      throw new TypeError(`record.${field} must be a ULID if present`);
-    }
+  // pair is a ULID (bank-assigned), not a content hash. Mandatory.
+  if (typeof r.pair !== "string" || !ULID_RE.test(r.pair)) {
+    throw new TypeError("record.pair must be a ULID");
+  }
+  if (r.tx !== undefined) {
+    throw new TypeError("record.tx is not part of the doc body (binding is Tx → records)");
   }
 }
 
@@ -275,11 +313,24 @@ export function validateSignature(d: unknown): asserts d is Signature {
   if (s.hash !== undefined && (typeof s.hash !== "string" || !BASE58_RE.test(s.hash))) {
     throw new TypeError("signature.hash must be a base58 hash if present");
   }
+  for (const field of ["record", "deal"]) {
+    if (s[field] !== undefined && (typeof s[field] !== "string" || !ULID_RE.test(s[field] as string))) {
+      throw new TypeError(`signature.${field} must be a ULID if present`);
+    }
+  }
   const validActions = new Set([
-    "ack", "approve", "hold", "settle", "reject", "lead", "follow", "timeout",
+    "approve", "hold", "settle", "reject", "lead", "follow", "timeout",
   ]);
   if (s.action !== undefined && (typeof s.action !== "string" || !validActions.has(s.action))) {
     throw new TypeError(`signature.action must be one of ${[...validActions].join(",")}`);
+  }
+  if (s.action !== undefined) {
+    const targets = ["hash", "record", "deal"].filter((f) => s[f] !== undefined);
+    if (targets.length !== 1) {
+      throw new TypeError(
+        `signature with action must target exactly one of hash|record|deal, got ${targets.length}`,
+      );
+    }
   }
   if (s.sig !== undefined && (typeof s.sig !== "string" || !BASE58_RE.test(s.sig))) {
     throw new TypeError("signature.sig must be a base58 string if present");
@@ -293,6 +344,58 @@ export function validateSignature(d: unknown): asserts d is Signature {
         throw new TypeError("signature.seen[] must be base58 strings");
       }
     }
+  }
+}
+
+export function validateSubscription(d: unknown): asserts d is Subscription {
+  assertBaseDoc(d, "subscription");
+  const s = d as Record<string, unknown>;
+  for (const field of ["records", "deals"]) {
+    if (s[field] !== undefined) {
+      if (!Array.isArray(s[field])) {
+        throw new TypeError(`subscription.${field} must be an array if present`);
+      }
+      for (const v of s[field] as unknown[]) {
+        if (typeof v !== "string" || !ULID_RE.test(v)) {
+          throw new TypeError(`subscription.${field}[] must be ULIDs`);
+        }
+      }
+    }
+  }
+  if (s.hashes !== undefined) {
+    if (!Array.isArray(s.hashes)) {
+      throw new TypeError("subscription.hashes must be an array if present");
+    }
+    for (const v of s.hashes) {
+      if (typeof v !== "string" || !BASE58_RE.test(v)) {
+        throw new TypeError("subscription.hashes[] must be base58 hashes");
+      }
+    }
+  }
+  const watchCount =
+    ((s.records as unknown[] | undefined)?.length ?? 0) +
+    ((s.hashes as unknown[] | undefined)?.length ?? 0) +
+    ((s.deals as unknown[] | undefined)?.length ?? 0);
+  if (watchCount === 0) {
+    throw new TypeError("subscription must watch at least one record, hash, or deal");
+  }
+  if (typeof s.url !== "string") {
+    throw new TypeError("subscription.url must be a string");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(s.url);
+  } catch {
+    throw new TypeError("subscription.url must be a valid URL");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new TypeError("subscription.url must be http(s)");
+  }
+  if (s.to !== undefined && (typeof s.to !== "string" || !BASE58_RE.test(s.to))) {
+    throw new TypeError("subscription.to must be a base58 pubkey if present");
+  }
+  if (s.until !== undefined && (typeof s.until !== "string" || !DATE_RE.test(s.until))) {
+    throw new TypeError("subscription.until must be a YYYY-MM-DD date if present");
   }
 }
 
@@ -311,6 +414,7 @@ export function validateDoc(d: unknown): asserts d is AnyDoc {
     case "tx": return validateTx(d);
     case "signature": return validateSignature(d);
     case "order": return validateOrder(d);
+    case "subscription": return validateSubscription(d);
     default: throw new TypeError(`unknown doc.type: ${String(t)}`);
   }
 }

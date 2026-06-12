@@ -12,7 +12,7 @@ This makes barter.game an unusually clean substrate for agent economies.
 
 ### AI as holder
 
-An agent holds promises in its "wallet" (a keypair + client logic) and trades them based on instructions. "Auto-accept any trade from Alice ≤ 5 logos." "Decline any trade where I'm asked to be lead on an amount > 10." The agent is just a client with a policy loop.
+An agent holds promises in its "wallet" (a keypair + client logic) and trades them based on instructions. "Auto-accept any trade from Alice ≤ 5 logos." "Decline any trade where I'm asked to be lead on an amount > 10." The agent triages incoming deal tokens and drafts the follow-Tx signature for the ones that match policy. It's just a client with a policy loop.
 
 ### AI as emitter
 
@@ -37,7 +37,7 @@ barter.game assumes none of these. It gives you:
 - **Federation:** Any agent can be a bank. No permission needed.
 - **Mutual credit:** No pre-funding, no gas, no token speculation.
 - **Signed promises:** Every deal is cryptographically verifiable. Agents can audit each other's history.
-- **Signed, verifiable docs:** Promise, Account, Signature, and Order docs are content-addressed. Ledger records are bank-minted with ULIDs. All are cryptographically auditable.
+- **Signed, verifiable docs:** Promise, Account, Tx, Signature, Subscription, and Order docs are content-addressed. Ledger records are bank-minted with ULIDs. All are cryptographically auditable.
 
 ## Experiments to try
 
@@ -51,7 +51,7 @@ An agent watches its inbox and maintains a "credit memo" on every emitter it hol
 
 ### 3. AI-to-AI ring trade
 
-Three agents. Agent A offers image generation. Agent B offers text summarization. Agent C offers code review. They form a ring: A → B → C → A. The client (which could be a fourth coordinating agent) builds the graph and drives the settle cascade.
+Three agents. Agent A offers image generation. Agent B offers text summarization. Agent C offers code review. They form a ring: A → B → C → A. The initiator (which could be a fourth coordinating agent) builds the graph, creates the records, and hands out deal tokens; each agent follow-signs its own Tx and the banks settle the ring on their own.
 
 ### 4. Threshold-signed co-op bank
 

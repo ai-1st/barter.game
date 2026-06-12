@@ -78,9 +78,10 @@ mechanism, no "cancel this signature" operation, and no TTL.
 the holder maintains sufficient balance in the relevant account. The only limit
 is the account itself.
 - **Cancellation is mechanical, not administrative.** A holder who wants to stop
-offering a promise empties the corresponding account. A bank that wishes to
-release a hold without settling issues a `reject` signature on the Tx, which
-becomes part of the public audit trail.
+offering a promise empties the corresponding account. A bank that refuses a
+record issues a `reject` signature on the record(s); releasing a hold without
+settling is a `reject` over the deal. Both become part of the public audit
+trail.
 - **No clock synchronization.** Removing time-based expiry eliminates an entire
 class of distributed-system bugs: clock skew, NTP failures, timezone confusion,
 and race conditions around boundary timestamps. The only ordering guarantee is
@@ -108,7 +109,9 @@ Promise, Pocket, Account, Order, and Signature docs are hashed by their
 canonical JSON form. References between these docs use those hashes.
 Nothing has an ID assigned by a server. Two banks that store the same
 Promise doc store it under the same hash. Audit means walking the hash
-graph; verification means re-hashing.
+graph; verification means re-hashing. Banks store the docs presented to
+them; the only artifacts a bank creates are ledger records and
+signatures.
 
 **Ledger records are the exception.** A `LedgerRecord` is minted by the
 bank that issues it, assigned a ULID by that bank, and referenced by
@@ -140,3 +143,12 @@ The code is public. The schema is public. The keys are yours. If we
 disappear, you still have the protocol. If you don't like our bank, run
 your own. If you don't trust any bank, your friends can run one. The
 sovereignty in "be your own bank" includes the right to leave.
+
+## 10. Open by default — moderation is key-blocking, not gatekeeping
+
+A bank accepts anything tied to promises that reference it: any minting,
+any docs, any signed call, from anyone. There is no registration step, no
+allowlist, no approval queue. Every call is signed, so abuse has a name —
+and the bank's recourse is to block the abuser's issuer key, not to put a
+gate in front of everyone else. Gatekeeping is how alternative currencies
+die before they start; key-blocking is how an open system stays usable.
