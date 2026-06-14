@@ -6,9 +6,7 @@
     "npm:@scure/base@^2.2.0": "2.2.0",
     "npm:@supabase/supabase-js@^2.45.0": "2.50.0",
     "npm:@types/bun@latest": "1.3.14",
-    "npm:typescript@^5.6.0": "5.8.3",
-    "npm:ulid@*": "2.4.0",
-    "npm:ulid@^2.3.0": "2.4.0"
+    "npm:typescript@^5.6.0": "5.8.3"
   },
   "npm": {
     "@noble/ed25519@3.1.0": {
@@ -125,13 +123,22 @@
       "integrity": "sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg=="
     }
   },
+  "remote": {
+    "https://esm.sh/@noble/ed25519@3.1.0": "289489284e4618d2bcb009677acc757ae188df831724ad5688a071aefc83be48",
+    "https://esm.sh/@noble/ed25519@3.1.0/denonext/ed25519.mjs": "5fd1899d384ca0fc5fdfcc576cdb7cc30aae7085bda5ffa5e6f8a6ff067d828d",
+    "https://esm.sh/@noble/hashes@2.2.0/denonext/_md.mjs": "e243c7ab62f616117b15a25112fa315e5d7c2da2c595ebb336050a9996556e86",
+    "https://esm.sh/@noble/hashes@2.2.0/denonext/_u64.mjs": "bf8938289ab1dfd5e87f3a9db9823cfc7386427d08958a5f6c74e7a67db43bf0",
+    "https://esm.sh/@noble/hashes@2.2.0/denonext/sha2.mjs": "37af844c4f78c0158bd33b7c4f6fa7780410cf5cf91254349b97f142c4fcad80",
+    "https://esm.sh/@noble/hashes@2.2.0/denonext/utils.mjs": "b080a64690ba87d0a59cf9c29a3030b67230445e4615f4a9ca2be66a2190ffc7",
+    "https://esm.sh/@noble/hashes@2.2.0/sha2.js": "5e49936c41b220838e59aebd8b5c31c609ecfa3d55abb2429affff3166dbf47c",
+    "https://esm.sh/@scure/base@1.2.0": "1848b85486a0a7097f76712b72dd77dd8b596c4c727e9b58ff3b57e73d73a03a",
+    "https://esm.sh/@scure/base@1.2.0/denonext/base.mjs": "7e76ff532c445180133988555a3d0e10b501cdce91fcfb0e361aa85fb24d51d0",
+    "https://esm.sh/@scure/base@2.2.0": "6278892d0fbf735fd6348350ba6079ba526dc894b64b80c9b5585ff39f5f9c97",
+    "https://esm.sh/@scure/base@2.2.0/denonext/base.mjs": "29cb4009638c708f02554bd4c18d2fccba88e43d275df86d0081a2689a1deead",
+    "https://esm.sh/ulid@2.3.0": "eaec41b54ea2a4dcf265607ae1db42f7e8ba32033601fa5e74a11014444b920f",
+    "https://esm.sh/ulid@2.3.0/denonext/ulid.mjs": "a546c524dbf79e65e3db42f89a8d5d9a7920b682c26fe053a7643873d0533fef"
+  },
   "workspace": {
-    "dependencies": [
-      "npm:@noble/ed25519@^3.1.0",
-      "npm:@noble/hashes@^2.2.0",
-      "npm:@scure/base@^2.2.0",
-      "npm:ulid@*"
-    ],
     "packageJson": {
       "dependencies": [
         "npm:@types/bun@latest",

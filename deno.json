@@ -5,10 +5,10 @@
   },
   "unstable": ["kv"],
   "imports": {
-    "@noble/ed25519": "npm:@noble/ed25519@^3.1.0",
-    "@noble/hashes/sha2.js": "npm:@noble/hashes@^2.2.0/sha2.js",
-    "@scure/base": "npm:@scure/base@^2.2.0",
-    "ulid": "npm:ulid"
+    "@noble/ed25519": "https://esm.sh/@noble/ed25519@3.1.0",
+    "@noble/hashes/sha2.js": "https://esm.sh/@noble/hashes@2.2.0/sha2.js",
+    "@scure/base": "https://esm.sh/@scure/base@2.2.0",
+    "ulid": "https://esm.sh/ulid@2.3.0"
   },
   "exclude": [
     "node_modules",
@@ -28,6 +28,10 @@
     "app": "barter-game-banks"
   }
 }
+
+
+
+
 
 
 
