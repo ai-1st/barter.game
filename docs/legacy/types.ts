@@ -69,13 +69,13 @@ export type BaseDoc = {
  * using a hash property, then its sole purpose is to acknowledge the existence of other signatures.
  * - action: an optional field indicating the signee's statement
  *   - ack: indicates that the signee has seen the referenced document
- *   - approve: the signee (bank) confirms the validity and feasibility of the transaction record 
+ *   - ready: the signee (bank) confirms the validity and feasibility of the transaction record 
  * (e.g. the account exists and there are enough funds);
  *   - lead: the holder authorizes its bank to initiate hold and settlement ahead of other tx participants
  *   - follow: the holder authorizes its bank to hold only after other tx participants hold, and to settle only after they settle
- *   - hold: the signee (bank) has successfully put a hold on the funds preparing to transfer them out from the account
- *   - settle: the signee (bank) has successfully updated the account balances
- *   - reject: the signee refuses to process the document
+ *   - held: the signee (bank) has successfully put a hold on the funds preparing to transfer them out from the account
+ *   - settled: the signee (bank) has successfully updated the account balances
+ *   - rejected: the signee refuses to process the document
  * - seen: optional references to other pre-existing signatures. This forms a directed acyclic graph of signatures 
  * and establishes a partial order.
  * - reason: optional human-readable reason for action, mostly relevant for rejections.

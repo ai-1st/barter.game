@@ -194,7 +194,8 @@ export BARTER_PROJECT_URL=https://<your-ref>.supabase.co
 | `IMPLEMENTATION.md` | How *this repo* implements v1 (file maps, design choices) | Modifying server or client code |
 | `SCHEMA.md` | Reference database schema | Changing migrations or DB queries |
 | `TODOS.md` | v1.5+ roadmap and speculative extensions | Planning new features |
-| `SETTLEMENT_WALKTHROUGH.md` | Step-by-step bilateral trade trace | Debugging settle logic |
+| `MASTER-INPUT.md` | Source-of-truth design input from the product owner | Understanding product decisions before updating the protocol contract |
+| `scenarios/*.md` | Step-by-step user/matchmaker/bank interaction traces | Implementing or debugging specific flows |
 
 ## Deployment notes
 
