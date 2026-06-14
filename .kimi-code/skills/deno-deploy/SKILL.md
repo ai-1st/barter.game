@@ -151,6 +151,34 @@ Common failures:
 | `Missing required option --runtime-mode` | `--runtime-mode` omitted | Use `--runtime-mode dynamic` |
 | `Missing required option --source` | `--source github --owner --repo` omitted | Add GitHub source flags |
 | `Missing required option --region` | `--region` omitted | Add `--region global` |
+| Build fails when importing protocol/crypto | New Deno Deploy doesn't resolve `npm:` specifiers | Map bare specifiers to `https://esm.sh/...` in `deno.json` |
+
+## Import maps for Deno Deploy
+
+New Deno Deploy (console.deno.com) currently does **not** resolve `npm:` specifiers. The project keeps the protocol library's source imports as bare specifiers (e.g. `@noble/ed25519`) and resolves them differently per runtime:
+
+- **Bun**: uses `node_modules` via `packages/protocol/package.json`.
+- **Deno / Deno Deploy**: uses `deno.json` import map pointing to `https://esm.sh/...` URLs.
+
+Current `deno.json` mappings (check `deno.json` for the live versions):
+
+```json
+{
+  "imports": {
+    "@noble/ed25519": "https://esm.sh/@noble/ed25519@3.1.0",
+    "@noble/hashes/sha2.js": "https://esm.sh/@noble/hashes@2.2.0/sha2.js",
+    "@scure/base": "https://esm.sh/@scure/base@2.2.0",
+    "ulid": "https://esm.sh/ulid@2.3.0"
+  }
+}
+```
+
+After changing import URLs, run both test suites before deploying:
+
+```bash
+bun run test
+bun run test:deno
+```
 
 ## Rotating keys
 
