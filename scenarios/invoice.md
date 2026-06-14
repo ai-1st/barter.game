@@ -51,15 +51,11 @@ Bbank stores the Order, verifies Alice's account, derives an Offer hiding Alice'
 
 Bob obtains the invoice Offer hash out-of-band (QR code, link, etc.). He wants to pay `10` Bpromise.
 
-Bob generates a `deal` ULID and calls `create_records` on Bbank with an `offer_match` request:
+Bob calls `create_records` on Bbank with an `offer_match` request:
 
 ```json
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "lead",
-    "predecessors": [],
-    "banks": [Bbank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <invoice-offer-hash>,
@@ -86,8 +82,7 @@ Bob builds a Tx referencing the invoice Offer:
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<bob-debit-ulid>, <alice-credit-ulid>],
+  records: [<bob-debit-hash>, <alice-credit-hash>],
   offer: <invoice-offer-hash>
 }
 ```

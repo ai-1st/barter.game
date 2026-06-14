@@ -17,18 +17,12 @@ Alice (the coordinator) builds two explicit transfers:
 1. At Abank: debit Alice's Apromise account, credit Bob's Apromise account, amount `1`.
 2. At Bbank: debit Bob's Bpromise account, credit Alice's Bpromise account, amount `1`.
 
-Alice generates a shared `deal` ULID and computes the topology: Abank is lead, Bbank is follow with Abank as its predecessor.
-
 Alice calls `create_records` on each bank:
 
 ```json
 // to Abank
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "lead",
-    "predecessors": [],
-    "banks": [Abank.pub, Bbank.pub],
     "requests": [
       { "type": "transfer",
         "promise_hash": <apromise-hash>,
@@ -37,8 +31,8 @@ Alice calls `create_records` on each bank:
         "credit_account_hash": <bob-apromise-account> }
     ],
     "record_subscriptions": [
-      { "record": <alice-apromise-debit-ulid>, "url": <bbank-notify-url> },
-      { "record": <bob-apromise-credit-ulid>, "url": <bbank-notify-url> }
+      { "record": <alice-apromise-debit-hash>, "url": <bbank-notify-url> },
+      { "record": <bob-apromise-credit-hash>, "url": <bbank-notify-url> }
     ]
   },
   "pubkey": A.pub, "to": Abank.pub }
@@ -46,10 +40,6 @@ Alice calls `create_records` on each bank:
 // to Bbank
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "follow",
-    "predecessors": [Abank.pub],
-    "banks": [Abank.pub, Bbank.pub],
     "requests": [
       { "type": "transfer",
         "promise_hash": <bpromise-hash>,
@@ -58,18 +48,18 @@ Alice calls `create_records` on each bank:
         "credit_account_hash": <alice-bpromise-account> }
     ],
     "record_subscriptions": [
-      { "record": <bob-bpromise-debit-ulid>, "url": <abank-notify-url> },
-      { "record": <alice-bpromise-credit-ulid>, "url": <abank-notify-url> }
+      { "record": <bob-bpromise-debit-hash>, "url": <abank-notify-url> },
+      { "record": <alice-bpromise-credit-hash>, "url": <abank-notify-url> }
     ]
   },
   "pubkey": A.pub, "to": Bbank.pub }
 ```
 
-Each bank mints a debit/credit record pair, stores them, and returns the record bodies including ULIDs and `pair` values.
+Each bank mints a debit/credit record pair, stores them, and returns the record bodies including hashes and `pair` values.
 
 ## Phase 1 — Build and submit holder Txs
 
-Alice and Bob each build their own Tx. They share the same `deal` ULID.
+Alice and Bob each build their own Tx containing the record hashes that touch their accounts.
 
 **Alice's Tx (ATx):**
 ```ts
@@ -77,8 +67,7 @@ Alice and Bob each build their own Tx. They share the same `deal` ULID.
   type: "tx",
   pubkey: A.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<alice-apromise-debit-ulid>, <alice-bpromise-credit-ulid>]
+  records: [<alice-apromise-debit-hash>, <alice-bpromise-credit-hash>]
 }
 ```
 
@@ -88,8 +77,7 @@ Alice and Bob each build their own Tx. They share the same `deal` ULID.
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<bob-bpromise-debit-ulid>, <bob-apromise-credit-ulid>]
+  records: [<bob-bpromise-debit-hash>, <bob-apromise-credit-hash>]
 }
 ```
 
@@ -143,20 +131,20 @@ Abank and Bbank now have valid holder authorization for every record they own.
 
 ## Phase 2 — Hold
 
-Abank's leg is touched by Alice's `lead` Tx. Once all its records are `ready`, Abank's advance engine acquires the hold on Alice's debit account and issues a deal-level `hold` Signature.
+Abank's records are touched by Alice's `lead` Tx. Once all its records are `ready`, Abank's advance engine acquires the hold on Alice's debit account and issues record-level `hold` Signatures.
 
-Bbank's leg is touched only by `follow` Txs. Bbank's advance engine holds only after it sees that Abank has issued `hold`. Abank's `hold` Signature reaches Bbank via subscription fan-out (or client relay with `notify_signatures` if a push is lost). Bbank then acquires its hold on Bob's debit account and issues its own deal-level `hold` Signature.
+Bbank's records are touched only by `follow` Txs. Bbank's advance engine holds only after it sees that Abank has issued `hold` on its own records. Abank's `hold` Signatures reach Bbank via subscription fan-out (or client relay with `notify_signatures` if a push is lost). Bbank then acquires its hold on Bob's debit account and issues its own record-level `hold` Signatures.
 
 ## Phase 3 — Settle
 
-Abank is lead and has no predecessor dependency. Once Abank has observed a `hold` Signature from Bbank and its own leg is held, its advance engine applies the balances:
+Abank is lead and has no predecessor dependency. Once Abank has observed record-level `hold` Signatures from Bbank on the corresponding records, its advance engine applies the balances:
 
 - Alice's Apromise account: `-1`.
 - Bob's Apromise account: `+1`.
 
-Abank releases holds and issues record-level `settle` Signatures, citing Bbank's `hold` as appropriate.
+Abank releases holds and issues record-level `settle` Signatures, citing Bbank's `hold` as appropriate in `Signature.seen`.
 
-Bbank is follower. Once it has verified Abank's deal-level `settle` Signature (received via fan-out or client relay from `get_deal` → `notify_signatures`), its advance engine applies balances:
+Bbank is follower. Once it has verified Abank's record-level `settle` Signatures (received via fan-out or client relay from `get_record_signatures` → `notify_signatures`), its advance engine applies balances:
 
 - Bob's Bpromise account: `-1`.
 - Alice's Bpromise account: `+1`.

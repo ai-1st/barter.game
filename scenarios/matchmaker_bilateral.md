@@ -45,11 +45,9 @@ The matchmaker subscribes to Offer streams from Abank and Bbank by sending a `Su
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Banks push Alice's and Bob's Offer `ack` Signatures (and any later Offer-derived signatures matching the watch keys) to the matchmaker's URL.
+Banks push Alice's and Bob's Offer signatures (and any later Offer-derived signatures matching the watch keys) to the matchmaker's URL.
 
 ## Phase 1 — Matchmaker creates records at each bank
-
-The matchmaker generates a shared `deal` ULID. Abank is lead; Bbank is follow with Abank as its predecessor.
 
 The matchmaker cannot see Alice's or Bob's account hashes, but they know the Offer hashes and their own accounts. They call `create_records` with `offer_match` requests.
 
@@ -58,10 +56,6 @@ The matchmaker cannot see Alice's or Bob's account hashes, but they know the Off
 ```json
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "lead",
-    "predecessors": [],
-    "banks": [Abank.pub, Bbank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <alice-apromise-offer-hash>,
@@ -73,9 +67,9 @@ The matchmaker cannot see Alice's or Bob's account hashes, but they know the Off
         "account_hash": <matchmaker-apromise-account> }
     ],
     "record_subscriptions": [
-      { "record": <alice-apromise-debit-90>, "url": <bbank-notify-url> },
-      { "record": <bob-apromise-credit-90>, "url": <bbank-notify-url> },
-      { "record": <matchmaker-apromise-credit-10>, "url": <bbank-notify-url> }
+      { "record": <alice-apromise-debit-90-hash>, "url": <bbank-notify-url> },
+      { "record": <bob-apromise-credit-90-hash>, "url": <bbank-notify-url> },
+      { "record": <matchmaker-apromise-credit-10-hash>, "url": <bbank-notify-url> }
     ]
   },
   "pubkey": M.pub, "to": Abank.pub }
@@ -93,10 +87,6 @@ Abank returns all four record bodies.
 ```json
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "follow",
-    "predecessors": [Abank.pub],
-    "banks": [Abank.pub, Bbank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <bob-bpromise-offer-hash>,
@@ -108,9 +98,9 @@ Abank returns all four record bodies.
         "account_hash": <matchmaker-bpromise-account> }
     ],
     "record_subscriptions": [
-      { "record": <bob-bpromise-debit-90>, "url": <abank-notify-url> },
-      { "record": <alice-bpromise-credit-90>, "url": <abank-notify-url> },
-      { "record": <matchmaker-bpromise-credit-10>, "url": <abank-notify-url> }
+      { "record": <bob-bpromise-debit-90-hash>, "url": <abank-notify-url> },
+      { "record": <alice-bpromise-credit-90-hash>, "url": <abank-notify-url> },
+      { "record": <matchmaker-bpromise-credit-10-hash>, "url": <abank-notify-url> }
     ]
   },
   "pubkey": M.pub, "to": Bbank.pub }
@@ -123,7 +113,7 @@ Bbank mints:
 
 ## Phase 2 — Matchmaker builds Txs
 
-All three parties share the same `deal` ULID. Each party builds a Tx containing only the records that touch their accounts.
+All three parties build their own Txs containing only the record hashes that touch their accounts.
 
 **Alice's Tx:**
 ```ts
@@ -131,8 +121,7 @@ All three parties share the same `deal` ULID. Each party builds a Tx containing 
   type: "tx",
   pubkey: A.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<alice-apromise-debit-90>, <alice-bpromise-credit-90>],
+  records: [<alice-apromise-debit-90-hash>, <alice-bpromise-credit-90-hash>],
   offer: <alice-apromise-offer-hash>
 }
 ```
@@ -143,8 +132,7 @@ All three parties share the same `deal` ULID. Each party builds a Tx containing 
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<bob-bpromise-debit-90>, <bob-apromise-credit-90>],
+  records: [<bob-bpromise-debit-90-hash>, <bob-apromise-credit-90-hash>],
   offer: <bob-bpromise-offer-hash>
 }
 ```
@@ -155,8 +143,7 @@ All three parties share the same `deal` ULID. Each party builds a Tx containing 
   type: "tx",
   pubkey: M.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<matchmaker-apromise-credit-10>, <matchmaker-bpromise-credit-10>],
+  records: [<matchmaker-apromise-credit-10-hash>, <matchmaker-bpromise-credit-10-hash>],
   offer: <alice-apromise-offer-hash>   // or any offer authorizing the matchmaker's credit
 }
 ```
@@ -203,13 +190,13 @@ The matchmaker repeats the same three `submit_tx` calls at Bbank.
 
 ## Phase 4 — Hold
 
-Abank sees that all its records are `ready` and at least one touching Tx is `lead` (Alice's Offer is `lead`, and the matchmaker signed as `lead`). Abank's advance engine acquires holds on Alice's debit account and issues a deal-level `hold` Signature.
+Abank sees that all its records are `ready` and at least one touching Tx is `lead` (Alice's Offer is `lead`, and the matchmaker signed as `lead`). Abank's advance engine acquires holds on Alice's debit account and issues record-level `hold` Signatures.
 
-Bbank is follower (none of the touching Txs are `lead` from Bbank's perspective; Bob's Offer is `lead` for Bpromise but it's an Offer, and the matchmaker's Tx might be follow). Bbank waits until it sees Abank's `hold` Signature via subscription fan-out (or client relay with `get_deal` → `notify_signatures`), then acquires holds on Bob's debit account and issues its own deal-level `hold` Signature.
+Bbank is follower (none of the touching Txs are `lead` from Bbank's perspective; Bob's Offer is `lead` for Bpromise but it's an Offer, and the matchmaker's Tx might be follow). Bbank waits until it sees Abank's `hold` Signatures via subscription fan-out (or client relay with `get_record_signatures` → `notify_signatures`), then acquires holds on Bob's debit account and issues its own record-level `hold` Signatures.
 
 ## Phase 5 — Settle
 
-Abank is lead and has no predecessor dependency. Once Abank has observed a `hold` Signature from Bbank, its advance engine applies balances:
+Abank is lead and has no predecessor dependency. Once Abank has observed record-level `hold` Signatures from Bbank on the corresponding records, its advance engine applies balances:
 
 - Alice: `-100` Apromise.
 - Bob: `+90` Apromise.
@@ -217,7 +204,7 @@ Abank is lead and has no predecessor dependency. Once Abank has observed a `hold
 
 Abank issues `settle` Signatures.
 
-Bbank is follower. Once it has verified Abank's deal-level `settle` Signature via fan-out or client relay, its advance engine applies balances:
+Bbank is follower. Once it has verified Abank's record-level `settle` Signatures via fan-out or client relay, its advance engine applies balances:
 
 - Bob: `-100` Bpromise.
 - Alice: `+90` Bpromise.

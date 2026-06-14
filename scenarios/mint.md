@@ -70,19 +70,16 @@ Abank stores:
 - Two Account docs.
 - (Pocket bodies are never stored by the bank.)
 
-Abank mints a debit/credit record pair under a fresh deal ULID for the requested `amount` and applies the deltas immediately:
+Abank mints a debit/credit record pair for the requested `amount` and applies the deltas immediately:
 
 - `<issuance-account>`: `-10` (the negative-balance issuance row).
 - `<inventory-account>`: `+10` (the positive-balance inventory row).
 
 The Promise now exists with a net-zero position across the two issuer accounts: `-10 + 10 = 0`. The issuer creates value by transferring from the negative-balance row to a holder.
 
-## Step 4 — Abank issues attestation signatures
+## Step 4 — Abank issues settlement signatures
 
-Abank creates and signs:
-
-- A `Signature` over the Promise hash with `action="ack"`.
-- A deal-level `Signature` with `action="settle"` for the freshly created leg.
+Abank creates and signs record-level `settle` Signatures for each of the freshly created records. No separate `ack` attestation is needed; the Promise itself is the signed declaration.
 
 Abank returns these signatures and the record pair to Alice.
 
@@ -92,7 +89,6 @@ Alice now has:
 
 - A published Promise at `<promise-hash>`.
 - Two Accounts at Abank for that Promise.
-- An Abank `ack` attestation for the Promise.
 - A settled debit/credit record pair showing the Promise's initial position.
 
 She can now receive consulting-hour payments into the inventory account or transfer consulting hours out of the issuance account.

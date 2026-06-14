@@ -51,15 +51,11 @@ Abank stores the Order, derives and signs an Offer, and returns the Offer hash.
 
 Bob obtains the cheque Offer hash. He wants to cash `5` Apromise into his account.
 
-Bob generates a `deal` ULID and calls `create_records` on Abank:
+Bob calls `create_records` on Abank:
 
 ```json
 { "method": "create_records",
   "params": {
-    "deal": <deal-ulid>,
-    "role": "lead",
-    "predecessors": [],
-    "banks": [Abank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <cheque-offer-hash>,
@@ -84,8 +80,7 @@ Bob builds a Tx referencing the cheque Offer:
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  deal: <deal-ulid>,
-  records: [<alice-debit-ulid>, <bob-credit-ulid>],
+  records: [<alice-debit-hash>, <bob-credit-hash>],
   offer: <cheque-offer-hash>
 }
 ```
