@@ -276,4 +276,4 @@ curl https://<your-ref>.supabase.co/functions/v1/bank-alice/
 
 You now have a bank. Tell your friends about it. They run `barter init` against your URL and you're a tiny central bank in a federation of exactly however many people you've invited.
 
-> **Not using Supabase?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in PROTOCOL.md §9, (3) a way to expose `POST /rpc` and `GET /.well-known/barter-bank.json`. The rest is up to you.
+> **Not using Supabase?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in PROTOCOL.md §9, (3) a way to expose `POST /rpc` and `GET /barter-bank.json` under the bank's canonical URL. The rest is up to you.

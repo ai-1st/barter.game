@@ -38,14 +38,14 @@ export async function callPeer(args: PeerCallArgs): Promise<PeerResult> {
   }
 }
 
-/** Resolve a peer's pubkey from its .well-known endpoint. */
+/** Resolve a peer's pubkey from its discovery endpoint. */
 export async function resolvePeerPubkey(bankUrl: string): Promise<string> {
-  const url = `${bankUrl.replace(/\/$/, "")}/.well-known/barter-bank.json`;
+  const url = `${bankUrl.replace(/\/$/, "")}/barter-bank.json`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
   const body = await res.json();
   if (typeof body.pubkey !== "string") {
-    throw new Error(`peer ${bankUrl} .well-known missing pubkey`);
+    throw new Error(`peer ${bankUrl} barter-bank.json missing pubkey`);
   }
   return body.pubkey;
 }

@@ -46,7 +46,7 @@ If you're building a bank from scratch:
 6. [ ] Implement the advance engine: legs self-advance created → approved → held → settled, evaluated on every incoming signature.
 7. [ ] Enforce **sum-to-zero** on every settle.
 8. [ ] Enforce **at most one active hold per account**.
-9. [ ] Expose `GET /.well-known/barter-bank.json`.
+9. [ ] Expose `GET <bank-url>/barter-bank.json`.
 10. [ ] Write a client that can run a trade end-to-end (mint → invite → trade → accept), bilateral or N-party.
 10. [ ] Run it against the reference banks to verify interop.
 

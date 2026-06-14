@@ -28,7 +28,7 @@ This is the most dangerous piece to get wrong. If your canonicalizer produces di
 A bank is an ed25519 keypair. The private key must be:
 - Loaded at startup.
 - Never exposed to clients.
-- Used to sign all RPC responses and `.well-known/barter-bank.json`.
+- Used to sign all RPC responses and `<bank-url>/barter-bank.json`.
 
 The pubkey is the bank's identity. Every RPC envelope has a `to` field that must match this pubkey; reject if it doesn't.
 
@@ -111,7 +111,7 @@ When the advance engine acquires holds, check for another active hold on the sam
 
 ## 7. Expose discovery
 
-Implement `GET /.well-known/barter-bank.json`:
+Implement `GET <bank-url>/barter-bank.json`:
 
 ```json
 {

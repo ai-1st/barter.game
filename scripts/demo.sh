@@ -35,7 +35,7 @@ DEAL_FILE=/tmp/barter-demo-deal.json
 step()   { printf "\n\033[1;36m═══ %s ═══\033[0m\n" "$*"; }
 detail() { printf "  %s\n" "$*"; }
 cli()    { bun run apps/cli/src/index.ts "$@"; }
-pubof()  { curl -fsS "$1/.well-known/barter-bank.json" | jq -r .pubkey; }
+pubof()  { curl -fsS "$1/barter-bank.json" | jq -r .pubkey; }
 
 cd "$(dirname "$0")/.."
 

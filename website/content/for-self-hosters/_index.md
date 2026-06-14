@@ -52,7 +52,7 @@ Don't want Supabase? No problem. You need four things:
 
 Any language, any framework. You just need to handle:
 - `POST /rpc` — the JSON-RPC envelope
-- `GET /.well-known/barter-bank.json` — bank identity discovery
+- `GET <bank-url>/barter-bank.json` — bank identity discovery
 
 ### 2. An ed25519 keypair
 
@@ -71,7 +71,7 @@ Implement the methods in `PROTOCOL.md` §7. The reference handlers in `supabase/
 
 ## Security checklist
 
-- [ ] **Pin your bank's pubkey everywhere.** Clients should store `{pubkey, url}` and reject `.well-known` responses that diverge.
+- [ ] **Pin your bank's pubkey everywhere.** Clients should store `{pubkey, url}` and reject `barter-bank.json` responses that diverge.
 - [ ] **Backup your private key.** Lose it and every Promise issued by your bank becomes orphaned.
 - [ ] **Rate-limit RPC endpoints.** Even cheap verification adds up.
 - [ ] **Don't expose your database directly.** The Edge Function / server is the trust boundary.
@@ -83,7 +83,7 @@ Your bank does not need permission from anyone to join the network. There is no 
 
 1. Hardcoding your URL+pubkey in their config.
 2. Receiving an invite string from one of your users.
-3. Checking `.well-known/barter-bank.json` and comparing against a pinned pubkey.
+3. Checking `<bank-url>/barter-bank.json` and comparing against a pinned pubkey.
 
 In v1.5 we may add a federated directory. For now, word of mouth is the discovery mechanism — which is exactly right for the trust model.
 

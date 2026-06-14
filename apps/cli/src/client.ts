@@ -18,14 +18,14 @@ export class RpcError extends Error {
   }
 }
 
-/** Fetch the bank's pubkey from /.well-known. Used to populate the `to` field. */
+/** Fetch the bank's pubkey from <bank-url>/barter-bank.json. Used to populate the `to` field. */
 export async function fetchBankPubkey(bankUrl: string): Promise<string> {
-  const url = `${bankUrl.replace(/\/$/, "")}/.well-known/barter-bank.json`;
+  const url = `${bankUrl.replace(/\/$/, "")}/barter-bank.json`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
   const body = await res.json();
   if (typeof body.pubkey !== "string") {
-    throw new Error(`bank ${bankUrl} .well-known response missing pubkey`);
+    throw new Error(`bank ${bankUrl} barter-bank.json response missing pubkey`);
   }
   return body.pubkey;
 }

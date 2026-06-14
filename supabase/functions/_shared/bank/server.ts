@@ -64,7 +64,7 @@ export function startBank(opts: { name: string }): void {
     }
     const url = new URL(req.url);
 
-    if (url.pathname.endsWith("/.well-known/barter-bank.json")) {
+    if (url.pathname.endsWith("/barter-bank.json")) {
       return json({
         pubkey: keyState.pubkey,
         url: canonicalBankUrl(req),

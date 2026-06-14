@@ -184,7 +184,7 @@ export BARTER_PROJECT_URL=https://<your-ref>.supabase.co
 - **Pocket privacy**: Banks must NEVER accept or store Pocket bodies — `account.pocket` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Pocket docs; do not add a server-side code path that receives one.
 - **Double-spend gate**: A partial unique index on `holds` enforces at most one active hold per account. Concurrent hold attempts surface as `-32003` or, inside the advance engine, a quiet back-off retried on the next event.
 - **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Promise sum to zero (or the agreed limit).
-- **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `.well-known/barter-bank.json` is fetched and compared against the pin; divergence fails closed.
+- **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `<bank-url>/barter-bank.json` is fetched and compared against the pin; divergence fails closed.
 - **No RLS in v1**: Edge Functions use the service-role key. Direct DB access is operator-only. RLS is a v1.5 item.
 
 ## Key documentation (read before making changes)

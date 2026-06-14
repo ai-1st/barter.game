@@ -456,7 +456,7 @@ Address: BaseDoc & {
 }
 ```
 
-Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by presenting a signed Address doc with a newer ULID. The canonical discovery endpoint is `.well-known/barter-bank.json` (§10.1); Address docs allow a bank to announce URL changes in a verifiable, self-signed form.
+Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by presenting a signed Address doc with a newer ULID. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (§10.1); Address docs allow a bank to announce URL changes in a verifiable, self-signed form.
 
 > **Invariant:** Address docs are signed by the bank they describe. A newer ULID overrides an older one for the same pubkey.
 
@@ -649,10 +649,10 @@ The approve-time balance check (§2.0) is computed net of active holds, so a dea
 
 ### 10.1 Discovery
 
-Banks publish their identity at:
+A bank's **canonical URL** is the base path clients use for that bank. Different banks MAY live at different paths on the same domain — for example `https://example.com/banks/alice` and `https://example.com/banks/bob`. The bank exposes its identity document at:
 
 ```
-GET <bank-url>/.well-known/barter-bank.json
+GET <bank-url>/barter-bank.json
 
 → {
     "pubkey": "<base58>",
@@ -662,28 +662,28 @@ GET <bank-url>/.well-known/barter-bank.json
   }
 ```
 
-The `url` field is the canonical RPC URL — the location clients should use, not necessarily the one they fetched from (banks behind reverse proxies need this).
+The `url` field is the canonical RPC URL — the location clients should use. It MUST be a prefix of the URL from which `barter-bank.json` was fetched.
 
-Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have heard from, sourced from `.well-known` files and from explicitly presented **Address** docs (§5.11). Under the client-orchestrated trade path (§2, §7) banks do not call each other, so peer caching is vestigial on the hot path in v1 — kept for discovery and future bank-to-bank features.
+Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have heard from, sourced from discovery documents and from explicitly presented **Address** docs (§5.11). Under the client-orchestrated trade path (§2, §7) banks do not call each other, so peer caching is vestigial on the hot path in v1 — kept for discovery and future bank-to-bank features.
 
 ### 10.2 Pubkey pinning (security)
 
-`.well-known` is **not a trust anchor**. A compromised DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
+The discovery document is **not a trust anchor**. A compromised DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
 
 - The client config map stores `{pubkey, url}` per bank.
 - Invite strings carry `<pubkey>@<bank-url>` syntax (see §11).
-- `.well-known` is fetched and *compared* against the pinned pubkey; if divergent, the operation fails closed.
+- `barter-bank.json` is fetched and *compared* against the pinned pubkey; if divergent, the operation fails closed.
 
 In the v1 trust model the OOB channel that establishes the relationship already conveys the pubkey, so pinning is cheap.
 
-> **Invariant:** The `.well-known` format and the pinning semantics are protocol. How the client stores its config is an implementation detail.
+> **Invariant:** The `barter-bank.json` format and the pinning semantics are protocol. How the client stores its config is an implementation detail.
 
 ### 10.3 Address directory API
 
-In addition to `.well-known`, banks expose a public Address directory:
+In addition to `barter-bank.json`, banks expose a public Address directory under their canonical URL:
 
-- `GET /address/<pubkey>` — return the Address doc for the pubkey, or `404` if none is found.
-- `POST /address` — create or update the Address doc for the pubkey. The bank stores the Address only if it is signed by the pubkey it describes and its ULID is newer than any existing Address for that pubkey.
+- `GET <bank-url>/address/<pubkey>` — return the Address doc for the pubkey, or `404` if none is found.
+- `POST <bank-url>/address` — create or update the Address doc for the pubkey. The bank stores the Address only if it is signed by the pubkey it describes and its ULID is newer than any existing Address for that pubkey.
 
 This allows a bank to announce URL changes in a self-sovereign way: any party can present a newer signed Address to any bank directory, and the directory replaces the old entry.
 
@@ -752,7 +752,7 @@ These are out of scope for v1. An implementation MAY add them, but they are not 
 - **No NFT-like Promises.** Issued Promises are fungible.
 - **No automated settle-cascade retry.** The advance engine re-evaluates whenever a new signature arrives, but if a follower bank goes permanently offline after the lead settles, the lead remains settled — the lead/follow risk (§2), resolved socially. The protocol provides only `reject_deal` for pre-settled aborts.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
-- **No global bank discovery directory.** `.well-known`, Address docs, and direct URL+pubkey pinning are the v1 baseline; a global federated directory is a v1.5+ extension.
+- **No global bank discovery directory.** `barter-bank.json`, Address docs, and direct URL+pubkey pinning are the v1 baseline; a global federated directory is a v1.5+ extension.
 
 ---
 
