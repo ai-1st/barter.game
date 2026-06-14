@@ -22,5 +22,14 @@
       "packages/**/test-deno/*.deno-test.ts",
       "apps/bank/test-deno/*.deno-test.ts"
     ]
+  },
+  "deploy": {
+    "org": "ai-1st",
+    "app": "barter-game-banks"
   }
 }
+
+
+
+
+
