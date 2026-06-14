@@ -191,7 +191,8 @@ export BARTER_PROJECT_URL=https://<your-ref>.supabase.co
 
 | File | Purpose | Read this if you are... |
 |---|---|---|
-| `SETTLEMENT_WALKTHROUGH.md` | **The canonical narrative** of the model — mint, direct approval, subscriptions, hold, settle. Read this first. | Touching anything protocol-adjacent |
+| `MASTER-INPUT.md` | **Source-of-truth design input** from the product owner — mint, direct approval, subscriptions, hold, settle. Read this first. | Touching anything protocol-adjacent |
+| `scenarios/*.md` | Step-by-step user/matchmaker/bank interaction traces | Implementing or debugging specific flows |
 | `README.md` | Project intro, quickstart, CLI usage | New to the repo |
 | `ETHOS.md` | Design beliefs and priors | Changing protocol semantics |
 | `PROTOCOL.md` | **The invariant contract.** Every implementation must follow this. | Building a bank, client, or alternative implementation |

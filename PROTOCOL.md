@@ -2,7 +2,7 @@
 
 > **This document is the protocol contract.** Every implementation of barter.game v1 MUST follow the rules in this file. Where it says "MUST," compatibility depends on it. Where it says "SHOULD," interoperability is smoother if you do. Anything not in this document is an implementation detail — you may change it.
 >
-> If you are building your own bank or client, read this file first, then see `IMPLEMENTATION.md` for how the reference team chose to build it. `SETTLEMENT_WALKTHROUGH.md` is the canonical narrative of one bilateral deal end to end.
+> If you are building your own bank or client, read this file first, then see `IMPLEMENTATION.md` for how the reference team chose to build it. `MASTER-INPUT.md` is the source-of-truth design narrative from the product owner; `scenarios/*.md` are step-by-step interaction traces.
 
 A federated mutual-credit ledger. A deal is a chain of paired credit/debit transfers — one or more holders moving promises among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
