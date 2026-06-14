@@ -51,11 +51,15 @@ Abank stores the Order, derives and signs an Offer, and returns the Offer hash.
 
 Bob obtains the cheque Offer hash. He wants to cash `5` Apromise into his account.
 
-Bob calls `create_records` on Abank:
+Bob generates a `deal` ULID and calls `create_records` on Abank:
 
 ```json
 { "method": "create_records",
   "params": {
+    "deal": <deal-ulid>,
+    "role": "lead",
+    "predecessors": [],
+    "banks": [Abank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <cheque-offer-hash>,
@@ -91,8 +95,7 @@ Because the cheque Offer is `lead=true`, Bob does **not** need to provide a hold
 ```json
 { "method": "submit_tx",
   "params": {
-    "tx": <bob-tx>,
-    "predecessors": []
+    "tx": <bob-tx>
   },
   "pubkey": B.pub, "to": Abank.pub }
 ```
@@ -103,11 +106,11 @@ Abank verifies:
 - The records match the cheque terms.
 - Alice has enough free balance.
 
-Abank issues `ready`, `hold`, and `settle` as conditions allow.
+Abank issues per-record `ready` Signatures. Because Abank is the only bank in the deal, its advance engine then acquires the hold and applies settle automatically.
 
 ## Result
 
 - Alice's Apromise balance decreases by `5`.
 - Bob's Apromise balance increases by `5`.
 - Bob cashed the cheque without Alice's live involvement; the signed cheque Offer was the authorization.
-- Abank has issued verifiable `settle` signatures.
+- Abank has issued verifiable `settle` Signatures.

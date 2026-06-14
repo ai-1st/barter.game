@@ -5,15 +5,15 @@ Alice and Bob each mint promises into some accounts in their banks. As a result 
 There is no separate call to open an account; the user just provides the Pocket hashes and Account and Promise objects.
 Banks store the docs and sigatures presented to them. The only thing they create is signatures.
 
-Account: BaseDoc & {
-  type: "account";
+Account: {
+  holder: Base58PubKey;   // pubkey of the holder
   pocket: Base58SHA256;   // hash of holder's Pocket doc
   promise: Base58SHA256;  // hash of the Promise this account holds
 }
 
 Pocket: BaseDoc & {
   type: "pocket";
-  name: string;           // local label, typically not public
+  name: string;           // a local label, typically not public
 }
 
 Promise: BaseDoc & {

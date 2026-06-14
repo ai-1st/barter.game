@@ -51,11 +51,15 @@ Bbank stores the Order, verifies Alice's account, derives an Offer hiding Alice'
 
 Bob obtains the invoice Offer hash out-of-band (QR code, link, etc.). He wants to pay `10` Bpromise.
 
-Bob calls `create_records` on Bbank with an `offer_match` request:
+Bob generates a `deal` ULID and calls `create_records` on Bbank with an `offer_match` request:
 
 ```json
 { "method": "create_records",
   "params": {
+    "deal": <deal-ulid>,
+    "role": "lead",
+    "predecessors": [],
+    "banks": [Bbank.pub],
     "requests": [
       { "type": "offer_match",
         "offer_hash": <invoice-offer-hash>,
@@ -94,8 +98,7 @@ Bob signs the Tx with `action="follow"` (paying an invoice is a follow action) a
 { "method": "submit_tx",
   "params": {
     "tx": <bob-tx>,
-    "holder_signature": <bob-follow-sig>,
-    "predecessors": []
+    "holder_signature": <bob-follow-sig>
   },
   "pubkey": B.pub, "to": Bbank.pub }
 ```
@@ -106,11 +109,11 @@ Bbank verifies:
 - The Offer is valid, bank-signed, and matches the records.
 - Bob has enough free balance.
 
-Bbank issues `ready`, then `hold`, then `settle` in response to successive `submit_tx` calls (or all at once if conditions allow).
+Bbank issues per-record `ready` Signatures. Because Bbank is the only bank in the deal, its advance engine then acquires the hold and applies settle automatically.
 
 ## Result
 
 - Bob's Bpromise balance decreases by `10`.
 - Alice's Bpromise balance increases by `10`.
 - Alice never had to sign; the invoice Offer authorized the credit.
-- Bbank has issued verifiable `settle` signatures on both records.
+- Bbank has issued verifiable `settle` Signatures on both records.
