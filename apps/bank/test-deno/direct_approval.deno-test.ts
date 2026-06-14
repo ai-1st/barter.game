@@ -1,6 +1,6 @@
 // The bilateral walkthrough, client-relay topology: no subscriptions at all.
 // The deal stalls exactly where the protocol says it must, and the client
-// un-sticks it by relaying signatures via get_deal → notify_signatures.
+// un-sticks it by relaying signatures via get_session → notify_signatures.
 //
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/direct_approval.deno-test.ts
 
@@ -10,8 +10,8 @@ import { mintPromise } from "../handlers/mint_promise.ts";
 import { createRecords } from "../handlers/create_records.ts";
 import { submitTx } from "../handlers/submit_tx.ts";
 import { notifySignatures } from "../handlers/notify_signatures.ts";
-import { getDeal } from "../handlers/get_deal.ts";
-import { rejectDeal } from "../handlers/reject_deal.ts";
+import { getSession } from "../handlers/get_session.ts";
+import { rejectSession } from "../handlers/reject_session.ts";
 import { assert, closeTestKv, ctx, eq, key, openTestKv, type Key } from "./helpers.ts";
 
 function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
@@ -45,11 +45,15 @@ function holderSig(holder: Key, txHash: string, action: "lead" | "follow") {
   return sig;
 }
 
-/** Client relay: carry every signature one bank has to another bank. */
-async function relay(store: { kv: Deno.Kv }, from: Key, to: Key, deal: string, sender: Key) {
-  const view = await getDeal({ deal }, ctx(store.kv, from, sender.pub)) as {
+/** Client relay: carry every signature one bank has for its session to another bank. */
+async function relay(store: { kv: Deno.Kv }, from: Key, to: Key, session: string, sender: Key) {
+  const view = await getSession({ session }, ctx(store.kv, from, sender.pub)) as {
     signatures: Array<Record<string, unknown>>;
   };
+  console.error(`relay ${from.pub.slice(0, 8)} -> ${to.pub.slice(0, 8)} session=${session.slice(0, 8)}:`, view.signatures.map((s) => {
+    const b = s as Record<string, string>;
+    return { action: b.action, pubkey: b.pubkey.slice(0, 8), session: b.session?.slice(0, 8) };
+  }));
   await notifySignatures({ signatures: view.signatures }, ctx(store.kv, to, sender.pub));
 }
 
@@ -66,6 +70,10 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
     const aliceHour = accountDoc(alice, hour.promiseHash, "main");
 
     const deal = newUlid();
+    const sessionA = newUlid();
+    const sessionB = newUlid();
+    console.error("sessions", { sessionA, sessionB, equal: sessionA === sessionB });
+    const sessions = { [bA.pub]: sessionA, [bB.pub]: sessionB };
     const transfers: TransferSpec[] = [
       { promise: logo.promiseHash, issuerBank: bA.pub, amount: 1, from: { holder: alice.pub, account: logo.holding }, to: { holder: bob.pub, account: bobLogo.hash } },
       { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
@@ -74,7 +82,7 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
     const banks = [bA.pub, bB.pub];
     const resA = await createRecords(
       {
-        deal,
+        session: sessionA,
         role: "lead",
         predecessors: [],
         banks,
@@ -85,7 +93,7 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
     ) as { records: Array<Record<string, unknown>> };
     const resB = await createRecords(
       {
-        deal,
+        session: sessionB,
         role: "follow",
         predecessors: [bA.pub],
         banks,
@@ -112,29 +120,40 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
       await submitTx({ tx: aTx.tx, holder_signature: holderSig(alice, aTx.txHash, "lead") }, ctx(tk.kv, bank, alice.pub));
     }
 
-    const legBeforeB = await ctx(tk.kv, bA, alice.pub).db.getLegState(deal);
+    const legBeforeB = await ctx(tk.kv, bA, alice.pub).db.getLegState(sessionA);
     eq(legBeforeB?.state, "created", "Abank leg before BTx");
 
     for (const bank of [bA, bB]) {
       await submitTx({ tx: bTx.tx, holder_signature: holderSig(bob, bTx.txHash, "follow") }, ctx(tk.kv, bank, alice.pub));
     }
 
-    const legAHeld = await ctx(tk.kv, bA, alice.pub).db.getLegState(deal);
-    const legBHeld = await ctx(tk.kv, bB, alice.pub).db.getLegState(deal);
+    const legAHeld = await ctx(tk.kv, bA, alice.pub).db.getLegState(sessionA);
+    const legBHeld = await ctx(tk.kv, bB, alice.pub).db.getLegState(sessionB);
     eq(legAHeld?.state, "held", "Abank stalls at held without relay");
     eq(legBHeld?.state, "held", "Bbank stalls at held without relay");
 
-    await relay(tk, bB, bA, deal, alice);
-    const legASettled = await ctx(tk.kv, bA, alice.pub).db.getLegState(deal);
+    await relay(tk, bB, bA, sessionB, alice);
+    const legASettled = await ctx(tk.kv, bA, alice.pub).db.getLegState(sessionA);
     eq(legASettled?.state, "settled", "Abank settles after seeing Bbank hold");
 
-    await relay(tk, bA, bB, deal, alice);
-    const legBSettled = await ctx(tk.kv, bB, alice.pub).db.getLegState(deal);
+    const aSigs = await ctx(tk.kv, bA, alice.pub).db.listSignaturesByTarget({ session: sessionA });
+    const aSettleCheck = aSigs.find((s) => s.action === "settle" && s.pubkey === bA.pub);
+    assert(aSettleCheck !== undefined, "Abank settle sig must exist after settle");
+
+    const legBBeforeRelay = await ctx(tk.kv, bB, alice.pub).db.getLegState(sessionB);
+    console.error("bB state before relay bA->bB:", legBBeforeRelay?.state);
+    await relay(tk, bA, bB, sessionA, alice);
+    const legBSettled = await ctx(tk.kv, bB, alice.pub).db.getLegState(sessionB);
     eq(legBSettled?.state, "settled", "Bbank settles after Abank settle");
 
-    const view = await getDeal({ deal }, ctx(tk.kv, bB, alice.pub)) as { signatures: Array<Record<string, unknown>> };
+    const view = await getSession({ session: sessionB }, ctx(tk.kv, bB, alice.pub)) as { signatures: Array<Record<string, unknown>> };
+    console.error("bB signatures:", view.signatures.map((s) => {
+      const b = s as Record<string, string>;
+      return { action: b.action, pubkey: b.pubkey.slice(0, 8), session: b.session };
+    }));
     const bSettle = view.signatures.find((s) => s.action === "settle" && s.pubkey === bB.pub)!;
-    const aSettle = view.signatures.find((s) => s.action === "settle" && s.pubkey === bA.pub)!;
+    const aSettle = view.signatures.find((s) => s.action === "settle" && s.pubkey === bA.pub);
+    assert(aSettle !== undefined, "Bbank view must contain Abank settle after relay");
     assert(((bSettle.seen as string[]) ?? []).includes(hashDoc(aSettle)), "Bbank settle must cite Abank settle");
 
     const bal = async (bank: Key, acct: string) => Number((await ctx(tk.kv, bank, alice.pub).db.getAccount(acct))?.balance);
@@ -156,7 +175,7 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
   }
 });
 
-Deno.test("insufficient non-issuer balance draws a per-record reject; reject_deal unwinds", async () => {
+Deno.test("insufficient non-issuer balance draws a per-record reject; reject_session unwinds", async () => {
   const tk = await openTestKv();
   try {
     const alice = key(), bob = key();
@@ -165,10 +184,10 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
     const hour = await mint(tk, bB, bob, "1 hour", 1);
     const aliceHour = accountDoc(alice, hour.promiseHash, "main");
 
-    const deal1 = newUlid();
+    const session1 = newUlid();
     const r1 = await createRecords(
       {
-        deal: deal1,
+        session: session1,
         role: "lead",
         predecessors: [],
         banks: [bB.pub],
@@ -178,7 +197,7 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
       ctx(tk.kv, bB, bob.pub),
     ) as { records: Array<Record<string, unknown>> };
     const built1 = buildDeal(
-      { deal: deal1, initiator: bob.pub, leadBanks: [bB.pub], transfers: [
+      { deal: newUlid(), initiator: bob.pub, leadBanks: [bB.pub], transfers: [
         { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
       ] },
       { [bB.pub]: r1.records.map((r) => r.ulid as string) },
@@ -187,14 +206,14 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
       const u = plan.holder === bob.pub ? bob : alice;
       await submitTx({ tx: plan.tx, holder_signature: holderSig(u, plan.txHash, plan.role) }, ctx(tk.kv, bB, bob.pub));
     }
-    const leg1 = await ctx(tk.kv, bB, bob.pub).db.getLegState(deal1);
+    const leg1 = await ctx(tk.kv, bB, bob.pub).db.getLegState(session1);
     eq(leg1?.state, "settled", "single-bank deal settles by itself");
     eq(Number((await ctx(tk.kv, bB, bob.pub).db.getAccount(aliceHour.hash))?.balance), 1, "Alice holds 1 hour");
 
-    const deal2 = newUlid();
+    const session2 = newUlid();
     const r2 = await createRecords(
       {
-        deal: deal2,
+        session: session2,
         role: "lead",
         predecessors: [],
         banks: [bB.pub],
@@ -203,7 +222,7 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
       ctx(tk.kv, bB, alice.pub),
     ) as { records: Array<Record<string, unknown>> };
     const built2 = buildDeal(
-      { deal: deal2, initiator: alice.pub, leadBanks: [bB.pub], transfers: [
+      { deal: newUlid(), initiator: alice.pub, leadBanks: [bB.pub], transfers: [
         { promise: hour.promiseHash, issuerBank: bB.pub, amount: 2, from: { holder: alice.pub, account: aliceHour.hash }, to: { holder: bob.pub, account: hour.holding } },
       ] },
       { [bB.pub]: r2.records.map((r) => r.ulid as string) },
@@ -219,8 +238,8 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
     assert(String(rejectSig!.reason).includes("insufficient"), "reject carries a reason");
     eq(res.leg_state, "created", "leg never approves with a rejected record");
 
-    const rej = await rejectDeal({ deal: deal2, reason: "abandoning" }, ctx(tk.kv, bB, alice.pub)) as { state: string };
-    eq(rej.state, "rejected", "reject_deal marks the leg rejected");
+    const rej = await rejectSession({ session: session2, reason: "abandoning" }, ctx(tk.kv, bB, alice.pub)) as { state: string };
+    eq(rej.state, "rejected", "reject_session marks the leg rejected");
     eq(Number((await ctx(tk.kv, bB, alice.pub).db.getAccount(aliceHour.hash))?.balance), 1, "balances untouched");
   } finally {
     await closeTestKv(tk);

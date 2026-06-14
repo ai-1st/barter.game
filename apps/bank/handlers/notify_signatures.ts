@@ -3,13 +3,14 @@
 // Signatures carry their own authority (signer pubkey + ed25519 sig over
 // the doc), so the bank accepts them from anyone: a peer bank pushing per a
 // Subscription, or a client relaying after a lost push. Each valid
-// signature is stored, then every deal it touches is advanced — this is the
-// event that un-blocks waiting legs (a lead bank waiting on peer holds, a
-// follow bank waiting on predecessor settles).
+// signature is stored, then every session it touches — plus every local
+// session still in play — is advanced. A peer's hold/settle targets the
+// peer's own session, so the receiving bank must also re-evaluate its own
+// pending sessions when such signatures arrive.
 
 import { hashDoc, verifyDoc, validateSignature } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
-import { advanceDeal } from "../advance.ts";
+import { advanceSession } from "../advance.ts";
 
 type NotifySignaturesParams = { signatures: Array<Record<string, unknown>> };
 
@@ -20,7 +21,7 @@ export const notifySignatures: Handler = async (params, ctx) => {
   }
 
   const stored: string[] = [];
-  const dealsTouched = new Set<string>();
+  const sessionsTouched = new Set<string>();
 
   for (const s of p.signatures) {
     try {
@@ -34,13 +35,18 @@ export const notifySignatures: Handler = async (params, ctx) => {
     const hash = hashDoc(s);
     await ctx.db.insertDoc({ hash, type: "signature", pubkey: s.pubkey as string, body: s });
     stored.push(hash);
-    if (typeof s.deal === "string") dealsTouched.add(s.deal as string);
+    if (typeof s.session === "string") sessionsTouched.add(s.session as string);
   }
 
-  // A new peer signature may unblock a leg — evaluate each touched deal.
-  for (const deal of dealsTouched) {
-    await advanceDeal(deal, ctx);
+  // A new peer signature may unblock one of our sessions: peer holds/settles
+  // target the peer's session, not ours, so we also re-evaluate every local
+  // non-terminal session. advanceSession is idempotent and no-ops if nothing
+  // changed.
+  const localSessions = await ctx.db.listPendingSessions();
+
+  for (const session of new Set([...sessionsTouched, ...localSessions])) {
+    await advanceSession(session, ctx);
   }
 
-  return { stored: stored.length, deals_advanced: [...dealsTouched] };
+  return { stored: stored.length, sessions_advanced: [...new Set([...sessionsTouched, ...localSessions])] };
 };

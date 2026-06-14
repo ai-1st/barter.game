@@ -32,7 +32,8 @@ export type DocType =
   | "signature"
   | "order"
   | "offer"
-  | "subscription";
+  | "subscription"
+  | "address";
 
 /** Promise: minted by Promise owner. Bound to an issuing bank pubkey. */
 export type Promise = BaseDoc & {
@@ -62,12 +63,12 @@ export type Account = {
 };
 
 /** Record: one half of a paired credit/debit accounting entry.
- *  Records are bank-minted and identified by ULID, not by content hash.
- *  `pair` links the debit and credit halves of a transfer — mandatory, set by
- *  the bank when it creates the pair. Records carry no Tx back-reference: the
+ *  Records are bank-minted and are now content-addressed by hash. `pair`
+ *  links the debit and credit halves of a transfer — mandatory, set by the
+ *  bank when it creates the pair. Records carry no Tx back-reference: the
  *  binding direction is Tx → records.
  */
-export type LedgerRecord = BaseDoc & {
+export type RecordDoc = BaseDoc & {
   type: "credit" | "debit";
   amount: number;
   account: Base58SHA256;
@@ -75,56 +76,60 @@ export type LedgerRecord = BaseDoc & {
 };
 
 /** Tx: ONE HOLDER's view of a deal. `pubkey` is the holder; `records` holds
- *  the bank-assigned ULIDs of the ledger records sitting on that holder's
- *  accounts (possibly at several banks), in transfer order. A lead/follow
- *  Signature by the holder over the Tx hash authorizes banks to execute
- *  those records.
+ *  the content-addressed hashes of the records on that holder's accounts
+ *  (possibly at several banks), in transfer order. A lead/follow Signature
+ *  by the holder over the Tx hash authorizes banks to execute those records.
+ *  Txs are per-party and carry no shared deal/session id.
  */
 export type Tx = BaseDoc & {
   type: "tx";
   order?: Base58SHA256;
   offer?: Base58SHA256;
-  records: ULID[];
+  records: Base58SHA256[];
 };
 
 /** Signature: attestation doc. `sig` populated after signing.
- *  Exactly one target field accompanies an action:
- *  - `hash`   — content-addressed docs: a holder's lead/follow over a Tx
- *               hash, or a bank's ack over a Promise/Offer/Address hash.
- *  - `record` — a bank's per-ledger-record ready/reject.
- *  - `deal`   — leg-level hold/settle/reject, keyed by the deal ULID.
+ *  Targets use ONLY content addressing (`hash`).
+ *  - holder `lead`/`follow` signatures target a Tx hash.
+ *  - bank `ready`/`hold`/`settle`/`reject` signatures target a record hash.
+ *  - Promise / Address / Offer signatures omit `action` and target the doc hash.
  *  `seen` carries hashes of upstream settle Signature docs (the cross-bank
  *  proof chain).
  */
 export type Signature = BaseDoc & {
   type: "signature";
   hash?: Base58SHA256;
-  record?: ULID;
-  deal?: ULID;
   action?:
-    | "ack"
     | "ready"
     | "hold"
     | "settle"
     | "reject"
     | "lead"
-    | "follow"
-    | "timeout";
+    | "follow";
   seen?: Base58SHA256[];
   reason?: string;
   sig?: Base58Signature;
 };
 
-/** Order: standing instruction authorizing a bank to process matching Txs. */
+/** Order: standing instruction authorizing a bank to process matching records. */
 export type Order = BaseDoc & {
   type: "order";
-  credit: Base58SHA256;      // account to credit (what holder wants to receive)
-  debit: Base58SHA256;       // account to debit (what holder is willing to give)
-  rate: number;              // debit_amount / credit_amount; must be positive
-  min: number;               // minimum credit amount per matched Tx
-  limit: number;             // maximum cumulative debit amount
-  lead: boolean;             // if true, authorizes lead role for matched Txs
-  approvers?: Base58PubKey[]; // pubkeys whose sigs may substitute for the owner's
+  rate: number; // debit_amount / credit_amount; must be positive
+  debit?: {
+    account: Base58SHA256; // account to debit
+    promise: Base58SHA256; // promise being given
+    min: number; // minimum amount to debit per match
+    max: number; // maximum amount to debit per match
+  };
+  credit?: {
+    account: Base58SHA256; // account to credit
+    promise: Base58SHA256; // promise being received
+    min: number; // minimum amount to credit per match
+    max: number; // maximum amount to credit per match
+  };
+  credit_account_limit?: number; // maximum amount allowed in the credit account
+  credit_order_limit?: number; // maximum cumulative amount processed through this order
+  lead: boolean; // if true, authorizes lead role for matched records
 };
 
 /** Offer: bank-issued derivation of an Order. The bank exposes the Order's
@@ -132,60 +137,83 @@ export type Order = BaseDoc & {
  */
 export type Offer = BaseDoc & {
   type: "offer";
-  order: Base58SHA256;       // hash of the original order
-  rate: number;              // debit_amount / credit_amount; must be positive
+  order: Base58SHA256; // hash of the original order
+  rate: number; // debit_amount / credit_amount; must be positive
   debit?: {
-    promise: Base58SHA256;   // promise being given
-    min: number;             // minimum amount to debit per match
-    max: number;             // maximum amount to debit per match
+    promise: Base58SHA256; // promise being given
+    min: number; // minimum amount to debit per match
+    max: number; // maximum amount to debit per match
   };
   credit?: {
-    promise: Base58SHA256;   // promise being received
-    min: number;             // minimum amount to credit per match
-    max: number;             // maximum amount to credit per match
+    promise: Base58SHA256; // promise being received
+    min: number; // minimum amount to credit per match
+    max: number; // maximum amount to credit per match
   };
-  lead: boolean;             // if true, the order can be executed without explicit credit-holder confirmation
+  lead: boolean; // if true, the order can be executed without explicit credit-holder confirmation
 };
 
 /** Subscription: the initiating party asks a bank to push the Signature docs
- *  it creates concerning the watched items to `url`. `pubkey` is the creator
+ *  it creates concerning the watched hashes to `url`. `pubkey` is the creator
  *  (who signs the request); `to` is the delivery target behind `url` — a
- *  peer bank or another party — defaulting to the creator. This is how the
- *  initiator chooses the topology: cross-subscribe the banks to each other,
- *  subscribe only herself, or any mix. Fan-out is fire-and-forget; a lost
- *  push is recovered by any party relaying the signatures itself.
+ *  peer bank or another party — defaulting to the creator. Fan-out is
+ *  fire-and-forget; a lost push is recovered by any party relaying the
+ *  signatures itself.
  */
 export type Subscription = BaseDoc & {
   type: "subscription";
-  records?: ULID[];        // watch keys matching Signature.record
   hashes?: Base58SHA256[]; // watch keys matching Signature.hash
-  deals?: ULID[];          // watch keys matching Signature.deal
-  url: string;             // http(s) endpoint to POST bank-signed notify envelopes to
-  to?: Base58PubKey;       // delivery target pubkey (defaults to the creator)
-  until?: DateString;      // optional expiry; banks may default one
+  url: string; // http(s) endpoint to POST bank-signed notify envelopes to
+  to?: Base58PubKey; // delivery target pubkey (defaults to the creator)
+  until?: DateString; // optional expiry; banks may default one
+};
+
+/** RecordSubscription: lightweight routing hint passed to create_records.
+ *  Not a BaseDoc; not signed.
+ */
+export type RecordSubscription = {
+  record: Base58SHA256;
+  url: string;
+};
+
+/** OfferSubscription: lightweight routing hint for offer streams.
+ *  Not a BaseDoc; not signed.
+ */
+export type OfferSubscription = {
+  promise: Base58SHA256;
+  intention: "sell" | "buy";
+  url: string;
+};
+
+/** Address: self-certified endpoint directory entry for a pubkey. */
+export type Address = BaseDoc & {
+  type: "address";
+  url: string; // canonical endpoint URL for this pubkey
 };
 
 export type AnyDoc =
   | Promise
   | Pocket
   | Account
-  | LedgerRecord
+  | RecordDoc
   | Tx
   | Signature
   | Order
   | Offer
-  | Subscription;
+  | Subscription
+  | Address;
 
 // ------- Hash helpers -------
-// LedgerRecords are bank-minted by ULID and are NOT content-addressed.
+// Records are now content-addressed.
 
 export const hashPromise = (p: Promise): Base58SHA256 => hashDoc(p);
 export const hashPocket = (p: Pocket): Base58SHA256 => hashDoc(p);
 export const hashAccount = (a: Account): Base58SHA256 => hashDoc(a);
+export const hashRecord = (r: RecordDoc): Base58SHA256 => hashDoc(r);
 export const hashTx = (t: Tx): Base58SHA256 => hashDoc(t);
 export const hashOrder = (o: Order): Base58SHA256 => hashDoc(o);
 export const hashOffer = (o: Offer): Base58SHA256 => hashDoc(o);
 export const hashSubscription = (s: Subscription): Base58SHA256 => hashDoc(s);
+export const hashAddress = (a: Address): Base58SHA256 => hashDoc(a);
 
 // ------- Validators -------
 //
@@ -240,6 +268,9 @@ export function validatePocket(d: unknown): asserts d is Pocket {
   if (typeof p.name !== "string") {
     throw new TypeError("pocket.name must be a string");
   }
+  if (p.sig !== undefined) {
+    throw new TypeError("pocket.sig is not part of the doc body (pockets are unsigned)");
+  }
 }
 
 export function validateAccount(d: unknown): asserts d is Account {
@@ -265,9 +296,12 @@ export function validateAccount(d: unknown): asserts d is Account {
   if (a.ulid !== undefined) {
     throw new TypeError("account.ulid is not part of the doc body");
   }
+  if (a.sig !== undefined) {
+    throw new TypeError("account.sig is not part of the doc body (accounts are unsigned)");
+  }
 }
 
-export function validateRecord(d: unknown): asserts d is LedgerRecord {
+export function validateRecord(d: unknown): asserts d is RecordDoc {
   if (d === null || typeof d !== "object" || Array.isArray(d)) {
     throw new TypeError("record must be an object");
   }
@@ -304,8 +338,8 @@ export function validateTx(d: unknown): asserts d is Tx {
     throw new TypeError("tx.records must be a non-empty array");
   }
   for (const r of t.records) {
-    if (typeof r !== "string" || !ULID_RE.test(r)) {
-      throw new TypeError("tx.records[] must be ULIDs");
+    if (typeof r !== "string" || !BASE58_RE.test(r)) {
+      throw new TypeError("tx.records[] must be base58 record hashes");
     }
   }
   if (t.order !== undefined && (typeof t.order !== "string" || !BASE58_RE.test(t.order))) {
@@ -319,35 +353,68 @@ export function validateTx(d: unknown): asserts d is Tx {
   }
 }
 
+function validateOrderSide(
+  s: unknown,
+  side: "debit" | "credit",
+): asserts s is { account: string; promise: string; min: number; max: number } {
+  if (s === undefined) return;
+  if (s === null || typeof s !== "object" || Array.isArray(s)) {
+    throw new TypeError(`order.${side} must be an object if present`);
+  }
+  const o = s as Record<string, unknown>;
+  for (const f of ["account", "promise"] as const) {
+    if (typeof o[f] !== "string" || !BASE58_RE.test(o[f] as string)) {
+      throw new TypeError(`order.${side}.${f} must be a base58 hash`);
+    }
+  }
+  for (const f of ["min", "max"] as const) {
+    if (typeof o[f] !== "number" || !Number.isFinite(o[f]) || (o[f] as number) < 0) {
+      throw new TypeError(`order.${side}.${f} must be a non-negative finite number`);
+    }
+  }
+  if (o.min! > o.max!) {
+    throw new TypeError(`order.${side}.min must not exceed max`);
+  }
+}
+
 export function validateOrder(d: unknown): asserts d is Order {
   assertBaseDoc(d, "order");
   const o = d as Record<string, unknown>;
-  for (const field of ["credit", "debit"]) {
-    if (typeof o[field] !== "string" || !BASE58_RE.test(o[field] as string)) {
-      throw new TypeError(`order.${field} must be a base58 hash`);
-    }
-  }
+  validateOrderSide(o.debit, "debit");
+  validateOrderSide(o.credit, "credit");
   if (typeof o.rate !== "number" || !Number.isFinite(o.rate) || o.rate <= 0) {
     throw new TypeError("order.rate must be a positive finite number");
-  }
-  if (typeof o.min !== "number" || !Number.isFinite(o.min) || o.min < 0) {
-    throw new TypeError("order.min must be a non-negative finite number");
-  }
-  if (typeof o.limit !== "number" || !Number.isFinite(o.limit) || o.limit <= 0) {
-    throw new TypeError("order.limit must be a positive finite number");
   }
   if (typeof o.lead !== "boolean") {
     throw new TypeError("order.lead must be a boolean");
   }
-  if (o.approvers !== undefined) {
-    if (!Array.isArray(o.approvers)) {
-      throw new TypeError("order.approvers must be an array if present");
+  for (const f of ["credit_account_limit", "credit_order_limit"] as const) {
+    if (o[f] !== undefined && (typeof o[f] !== "number" || !Number.isFinite(o[f]) || (o[f] as number) < 0)) {
+      throw new TypeError(`order.${f} must be a non-negative finite number if present`);
     }
-    for (const a of o.approvers) {
-      if (typeof a !== "string" || !BASE58_RE.test(a)) {
-        throw new TypeError("order.approvers[] must be base58 pubkeys");
-      }
-    }
+  }
+}
+
+function validateOfferSide(
+  s: unknown,
+  side: "debit" | "credit",
+): asserts s is { promise: string; min: number; max: number } {
+  if (s === undefined) return;
+  if (s === null || typeof s !== "object" || Array.isArray(s)) {
+    throw new TypeError(`offer.${side} must be an object if present`);
+  }
+  const o = s as Record<string, unknown>;
+  if (typeof o.promise !== "string" || !BASE58_RE.test(o.promise)) {
+    throw new TypeError(`offer.${side}.promise must be a base58 hash`);
+  }
+  if (typeof o.min !== "number" || !Number.isFinite(o.min) || o.min < 0) {
+    throw new TypeError(`offer.${side}.min must be a non-negative finite number`);
+  }
+  if (typeof o.max !== "number" || !Number.isFinite(o.max) || o.max <= 0) {
+    throw new TypeError(`offer.${side}.max must be a positive finite number`);
+  }
+  if (o.min > o.max) {
+    throw new TypeError(`offer.${side}.min must not exceed max`);
   }
 }
 
@@ -363,23 +430,8 @@ export function validateOffer(d: unknown): asserts d is Offer {
   if (typeof o.lead !== "boolean") {
     throw new TypeError("offer.lead must be a boolean");
   }
-  for (const side of ["debit", "credit"] as const) {
-    const s = o[side];
-    if (s === undefined) continue;
-    if (s === null || typeof s !== "object" || Array.isArray(s)) {
-      throw new TypeError(`offer.${side} must be an object if present`);
-    }
-    const sideObj = s as Record<string, unknown>;
-    if (typeof sideObj.promise !== "string" || !BASE58_RE.test(sideObj.promise)) {
-      throw new TypeError(`offer.${side}.promise must be a base58 hash`);
-    }
-    if (typeof sideObj.min !== "number" || !Number.isFinite(sideObj.min) || sideObj.min < 0) {
-      throw new TypeError(`offer.${side}.min must be a non-negative finite number`);
-    }
-    if (typeof sideObj.max !== "number" || !Number.isFinite(sideObj.max) || sideObj.max <= 0) {
-      throw new TypeError(`offer.${side}.max must be a positive finite number`);
-    }
-  }
+  validateOfferSide(o.debit, "debit");
+  validateOfferSide(o.credit, "credit");
 }
 
 export function validateSignature(d: unknown): asserts d is Signature {
@@ -388,24 +440,19 @@ export function validateSignature(d: unknown): asserts d is Signature {
   if (s.hash !== undefined && (typeof s.hash !== "string" || !BASE58_RE.test(s.hash))) {
     throw new TypeError("signature.hash must be a base58 hash if present");
   }
-  for (const field of ["record", "deal"]) {
-    if (s[field] !== undefined && (typeof s[field] !== "string" || !ULID_RE.test(s[field] as string))) {
-      throw new TypeError(`signature.${field} must be a ULID if present`);
-    }
-  }
   const validActions = new Set([
-    "ack", "ready", "hold", "settle", "reject", "lead", "follow", "timeout",
+    "ready", "hold", "settle", "reject", "lead", "follow",
   ]);
   if (s.action !== undefined && (typeof s.action !== "string" || !validActions.has(s.action))) {
     throw new TypeError(`signature.action must be one of ${[...validActions].join(",")}`);
   }
-  if (s.action !== undefined) {
-    const targets = ["hash", "record", "deal"].filter((f) => s[f] !== undefined);
-    if (targets.length !== 1) {
-      throw new TypeError(
-        `signature with action must target exactly one of hash|record|deal, got ${targets.length}`,
-      );
-    }
+  // With action, hash must be present (all actioned signatures are content-addressed now).
+  if (s.action !== undefined && typeof s.hash !== "string") {
+    throw new TypeError("signature with action must have a hash target");
+  }
+  // Promise / Address / Offer signatures omit action but still require a hash target.
+  if (s.hash === undefined) {
+    throw new TypeError("signature must have a hash target");
   }
   if (s.sig !== undefined && (typeof s.sig !== "string" || !BASE58_RE.test(s.sig))) {
     throw new TypeError("signature.sig must be a base58 string if present");
@@ -425,15 +472,14 @@ export function validateSignature(d: unknown): asserts d is Signature {
 export function validateSubscription(d: unknown): asserts d is Subscription {
   assertBaseDoc(d, "subscription");
   const s = d as Record<string, unknown>;
-  for (const field of ["records", "deals"]) {
-    if (s[field] !== undefined) {
-      if (!Array.isArray(s[field])) {
-        throw new TypeError(`subscription.${field} must be an array if present`);
-      }
-      for (const v of s[field] as unknown[]) {
-        if (typeof v !== "string" || !ULID_RE.test(v)) {
-          throw new TypeError(`subscription.${field}[] must be ULIDs`);
-        }
+  // Records are now content-addressed hashes; the subscription watches hash targets.
+  if (s.records !== undefined) {
+    if (!Array.isArray(s.records)) {
+      throw new TypeError("subscription.records must be an array if present");
+    }
+    for (const v of s.records as unknown[]) {
+      if (typeof v !== "string" || !BASE58_RE.test(v)) {
+        throw new TypeError("subscription.records[] must be base58 hashes");
       }
     }
   }
@@ -449,10 +495,9 @@ export function validateSubscription(d: unknown): asserts d is Subscription {
   }
   const watchCount =
     ((s.records as unknown[] | undefined)?.length ?? 0) +
-    ((s.hashes as unknown[] | undefined)?.length ?? 0) +
-    ((s.deals as unknown[] | undefined)?.length ?? 0);
+    ((s.hashes as unknown[] | undefined)?.length ?? 0);
   if (watchCount === 0) {
-    throw new TypeError("subscription must watch at least one record, hash, or deal");
+    throw new TypeError("subscription must watch at least one record hash or doc hash");
   }
   if (typeof s.url !== "string") {
     throw new TypeError("subscription.url must be a string");
@@ -474,6 +519,22 @@ export function validateSubscription(d: unknown): asserts d is Subscription {
   }
 }
 
+export function validateAddress(d: unknown): asserts d is Address {
+  assertBaseDoc(d, "address");
+  const a = d as Record<string, unknown>;
+  if (typeof a.url !== "string") {
+    throw new TypeError("address.url must be a string");
+  }
+  try {
+    const parsed = new URL(a.url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new TypeError("address.url must be http(s)");
+    }
+  } catch {
+    throw new TypeError("address.url must be a valid http(s) URL");
+  }
+}
+
 /** Validator dispatch by doc.type. Used in RPC envelope validation. */
 export function validateDoc(d: unknown): asserts d is AnyDoc {
   if (d === null || typeof d !== "object" || Array.isArray(d)) {
@@ -491,6 +552,7 @@ export function validateDoc(d: unknown): asserts d is AnyDoc {
     case "order": return validateOrder(d);
     case "offer": return validateOffer(d);
     case "subscription": return validateSubscription(d);
+    case "address": return validateAddress(d);
     default: throw new TypeError(`unknown doc.type: ${String(t)}`);
   }
 }

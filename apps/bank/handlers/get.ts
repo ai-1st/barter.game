@@ -1,6 +1,6 @@
 // Read-only handlers and Address directory storage.
 
-import { hashDoc, signDoc, validateDoc, verifyDoc } from "../../../packages/protocol/src/index.ts";
+import { hashDoc, validateAddress, verifyDoc } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler, type RpcContext } from "../rpc.ts";
 
 export const getPromise: Handler = async (params, ctx) => {
@@ -46,29 +46,32 @@ export const listAccounts: Handler = async (_params, ctx) => {
 
 /**
  * Store or update an Address doc for the pubkey it describes.
- * A newer Address (by ULID) for the same pubkey replaces the older one.
- * Used by both the JSON-RPC method and the plain HTTP POST /address endpoint.
+ * Address docs are signed by the pubkey they describe (user-signed), not by
+ * the bank. A newer Address (by ULID) for the same pubkey replaces the older
+ * one. Used by both the JSON-RPC method and the plain HTTP POST /address
+ * endpoint.
  */
 export async function submitAddress(
   addressDoc: unknown,
-  ctx: Pick<RpcContext, "db" | "bankPrivateKey">,
+  ctx: Pick<RpcContext, "db">,
 ): Promise<Record<string, unknown>> {
   if (addressDoc === null || typeof addressDoc !== "object" || Array.isArray(addressDoc)) {
     throw new Error("address must be an object");
   }
-  const a = addressDoc as Record<string, unknown>;
-  if (a.type !== "address") throw new Error("doc.type must be 'address'");
-  if (typeof a.pubkey !== "string" || typeof a.ulid !== "string" || typeof a.url !== "string") {
-    throw new Error("address must have pubkey, ulid, and url");
+  try {
+    validateAddress(addressDoc);
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : "address validation failed");
   }
-  // Verify the address signature if present.
-  if (typeof a.sig === "string") {
-    if (!verifyDoc(a, a.sig, a.pubkey)) {
-      throw new Error("address signature invalid");
-    }
+  const a = addressDoc as Record<string, unknown>;
+  if (typeof a.sig !== "string") {
+    throw new Error("address must be signed by the pubkey it describes");
+  }
+  if (!verifyDoc(a, a.sig, a.pubkey as string)) {
+    throw new Error("address signature invalid");
   }
 
-  const existing = await ctx.db.getDoc(a.pubkey);
+  const existing = await ctx.db.getDoc(a.pubkey as string);
   if (existing && existing.type === "address") {
     const old = existing.body as Record<string, unknown>;
     if (typeof old.ulid === "string" && old.ulid >= a.ulid) {
@@ -76,12 +79,7 @@ export async function submitAddress(
     }
   }
 
-  // If no sig, sign it as this bank (for self-published addresses).
-  if (typeof a.sig !== "string") {
-    a.sig = signDoc(a, ctx.bankPrivateKey);
-  }
-
   const hash = hashDoc(a);
-  await ctx.db.insertDoc({ hash, type: "address", pubkey: a.pubkey, body: a });
+  await ctx.db.insertDoc({ hash, type: "address", pubkey: a.pubkey as string, body: a });
   return a;
 }

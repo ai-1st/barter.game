@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   hashPromise,
   validateAccount,
+  validateAddress,
   validateDoc,
   validateOffer,
   validateOrder,
@@ -86,6 +87,30 @@ describe("Pocket / Account validators", () => {
       }),
     ).toThrow(/pubkey/);
   });
+
+  test("account rejects a sig field (accounts are unsigned)", () => {
+    expect(() =>
+      validateAccount({
+        type: "account",
+        holder: PUBKEY,
+        pocket: HASH,
+        promise: HASH,
+        sig: "abc",
+      }),
+    ).toThrow(/sig/);
+  });
+
+  test("pocket rejects a sig field (pockets are unsigned)", () => {
+    expect(() =>
+      validatePocket({
+        type: "pocket",
+        pubkey: PUBKEY,
+        ulid: ULID,
+        name: "default",
+        sig: "abc",
+      }),
+    ).toThrow(/sig/);
+  });
 });
 
 describe("Record validator", () => {
@@ -134,95 +159,100 @@ describe("Record validator", () => {
 });
 
 describe("Tx + Signature validators", () => {
-  test("tx requires non-empty records array of ULIDs", () => {
+  test("tx requires non-empty records array of record hashes", () => {
     expect(() =>
-      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID, ULID] }),
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [HASH, HASH] }),
     ).not.toThrow();
     expect(() =>
       validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [] }),
     ).toThrow();
     expect(() =>
-      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [HASH] }),
-    ).toThrow(/ULID/);
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID] }),
+    ).toThrow(/base58/);
   });
 
   test("tx accepts optional order or offer hash, but not both", () => {
     expect(() =>
-      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], order: HASH }),
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [HASH], order: HASH }),
     ).not.toThrow();
     expect(() =>
-      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], offer: HASH }),
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [HASH], offer: HASH }),
     ).not.toThrow();
     expect(() =>
-      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], order: HASH, offer: HASH }),
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [HASH], order: HASH, offer: HASH }),
     ).toThrow(/at most one/);
   });
 
-  test("signature accepts known actions including 'timeout'", () => {
+  test("signature accepts bank actions over record hashes", () => {
     expect(() =>
       validateSignature({
         type: "signature",
         pubkey: PUBKEY,
         ulid: ULID,
-        action: "timeout",
+        action: "ready",
         hash: HASH,
       }),
     ).not.toThrow();
-  });
-
-  test("signature accepts per-record and per-deal targets", () => {
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", record: ULID,
-      }),
-    ).not.toThrow();
-    expect(() =>
-      validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "settle", deal: ULID, seen: [HASH],
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "settle", hash: HASH, seen: [HASH],
       }),
     ).not.toThrow();
   });
 
-  test("signature with action requires exactly one of hash|record|deal", () => {
+  test("signature accepts holder lead/follow over tx hash", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "lead", hash: HASH,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "follow", hash: HASH,
+      }),
+    ).not.toThrow();
+  });
+
+  test("signature accepts hash-only attestation for Promise/Address", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, hash: HASH,
+      }),
+    ).not.toThrow();
+  });
+
+  test("signature with action requires a hash target", () => {
     expect(() =>
       validateSignature({
         type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready",
       }),
-    ).toThrow(/exactly one/);
-    expect(() =>
-      validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", hash: HASH, record: ULID,
-      }),
-    ).toThrow(/exactly one/);
+    ).toThrow(/hash/);
   });
 
-  test("signature accepts 'ack' and rejects removed 'approve'", () => {
+  test("signature requires a hash target even without action", () => {
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID,
+      }),
+    ).toThrow(/hash/);
+  });
+
+  test("signature rejects removed ack/timeout actions and deal/session targets", () => {
     expect(() =>
       validateSignature({
         type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ack", hash: HASH,
       }),
-    ).not.toThrow();
+    ).toThrow();
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: ULID,
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "timeout", hash: HASH,
       }),
     ).toThrow();
     expect(() =>
       validateSignature({
-        type: "signature",
-        pubkey: PUBKEY,
-        ulid: ULID,
-        action: "bogus",
-      }),
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", record: ULID,
+      } as unknown as Record<string, unknown>),
     ).toThrow();
-  });
-
-  test("signature rejects a hash where record/deal ULID is expected", () => {
-    expect(() =>
-      validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", record: HASH,
-      }),
-    ).toThrow(/ULID/);
   });
 });
 
@@ -231,7 +261,7 @@ describe("Subscription validator", () => {
     type: "subscription" as const,
     pubkey: PUBKEY,
     ulid: ULID,
-    deals: [ULID],
+    hashes: [HASH],
     url: "https://bank.example/rpc",
   };
 
@@ -239,19 +269,18 @@ describe("Subscription validator", () => {
     expect(() => validateSubscription(valid)).not.toThrow();
   });
 
-  test("accepts all three watch lists and until", () => {
+  test("accepts record hashes and until", () => {
     expect(() =>
       validateSubscription({
         ...valid,
-        records: [ULID],
-        hashes: [HASH],
+        records: [HASH],
         until: "2026-12-31",
       }),
     ).not.toThrow();
   });
 
   test("rejects when no watch keys at all", () => {
-    const { deals: _deals, ...noWatch } = valid;
+    const { hashes: _hashes, ...noWatch } = valid;
     expect(() => validateSubscription(noWatch)).toThrow(/at least one/);
     expect(() => validateSubscription({ ...noWatch, records: [] })).toThrow(/at least one/);
   });
@@ -261,13 +290,35 @@ describe("Subscription validator", () => {
     expect(() => validateSubscription({ ...valid, url: "ftp://x.example" })).toThrow(/http/);
   });
 
-  test("rejects hashes in records/deals (must be ULIDs)", () => {
-    expect(() => validateSubscription({ ...valid, records: [HASH] })).toThrow(/ULID/);
-    expect(() => validateSubscription({ ...valid, deals: [HASH] })).toThrow(/ULID/);
+  test("rejects ULIDs in records (must be base58 hashes)", () => {
+    expect(() => validateSubscription({ ...valid, records: [ULID] })).toThrow(/base58/);
   });
 
   test("rejects bad until", () => {
     expect(() => validateSubscription({ ...valid, until: "soon" })).toThrow(/date/);
+  });
+});
+
+describe("Address validator", () => {
+  const valid = {
+    type: "address" as const,
+    pubkey: PUBKEY,
+    ulid: ULID,
+    url: "https://bank.example/rpc",
+  };
+
+  test("accepts a minimal valid address", () => {
+    expect(() => validateAddress(valid)).not.toThrow();
+  });
+
+  test("rejects missing or invalid url", () => {
+    expect(() => validateAddress({ ...valid, url: undefined } as unknown as Record<string, unknown>)).toThrow(/url/);
+    expect(() => validateAddress({ ...valid, url: "not a url" })).toThrow(/URL/);
+    expect(() => validateAddress({ ...valid, url: "ftp://x.example" })).toThrow(/http/);
+  });
+
+  test("rejects a BaseDoc field mismatch", () => {
+    expect(() => validateAddress({ type: "address", pubkey: "0bad", ulid: ULID, url: "https://x" })).toThrow();
   });
 });
 
@@ -276,26 +327,19 @@ describe("Order validator", () => {
     type: "order" as const,
     pubkey: PUBKEY,
     ulid: ULID,
-    credit: HASH,
-    debit: HASH,
     rate: 1.5,
-    min: 0.1,
-    limit: 100,
     lead: false,
+    debit: { account: HASH, promise: HASH, min: 0.1, max: 10 },
+    credit: { account: HASH, promise: HASH, min: 0.1, max: 10 },
   };
 
   test("accepts a minimal valid order", () => {
     expect(() => validateOrder(valid)).not.toThrow();
   });
 
-  test("accepts approvers when valid", () => {
-    expect(() =>
-      validateOrder({ ...valid, approvers: [PUBKEY] }),
-    ).not.toThrow();
-  });
-
-  test("rejects missing credit hash", () => {
-    expect(() => validateOrder({ ...valid, credit: "" })).toThrow();
+  test("accepts invoice/cheque specializations (one side omitted)", () => {
+    expect(() => validateOrder({ ...valid, debit: undefined })).not.toThrow();
+    expect(() => validateOrder({ ...valid, credit: undefined })).not.toThrow();
   });
 
   test("rejects non-positive rate", () => {
@@ -304,19 +348,15 @@ describe("Order validator", () => {
   });
 
   test("rejects negative min", () => {
-    expect(() => validateOrder({ ...valid, min: -0.1 })).toThrow();
+    expect(() => validateOrder({ ...valid, debit: { ...valid.debit, min: -0.1 } })).toThrow();
   });
 
-  test("rejects non-positive limit", () => {
-    expect(() => validateOrder({ ...valid, limit: 0 })).toThrow();
+  test("rejects min > max", () => {
+    expect(() => validateOrder({ ...valid, debit: { ...valid.debit, min: 20, max: 10 } })).toThrow();
   });
 
   test("rejects non-boolean lead", () => {
     expect(() => validateOrder({ ...valid, lead: "yes" as unknown as boolean })).toThrow();
-  });
-
-  test("rejects invalid approvers", () => {
-    expect(() => validateOrder({ ...valid, approvers: ["0bad"] })).toThrow();
   });
 });
 
@@ -376,12 +416,19 @@ describe("validateDoc dispatch", () => {
         type: "order",
         pubkey: PUBKEY,
         ulid: ULID,
-        credit: HASH,
-        debit: HASH,
         rate: 1,
-        min: 0,
-        limit: 10,
         lead: true,
+      }),
+    ).not.toThrow();
+  });
+
+  test("routes address to validateAddress", () => {
+    expect(() =>
+      validateDoc({
+        type: "address",
+        pubkey: PUBKEY,
+        ulid: ULID,
+        url: "https://bank.example/rpc",
       }),
     ).not.toThrow();
   });

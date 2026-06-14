@@ -3,7 +3,7 @@
 // Subscription pushes are fire-and-forget; if one is lost a bank may sit
 // waiting for a peer signature it never received. Signatures carry their
 // own authority, so the client can deliver them by hand: read every bank's
-// signatures (get_deal) and notify every other bank. Each delivery
+// signatures (get_session) and notify every other bank. Each delivery
 // re-evaluates the advance engine.
 
 import { loadProfile } from "../profile.ts";

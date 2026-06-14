@@ -28,22 +28,18 @@ export DENO_DEPLOY_TOKEN=ddo_...
 
 The bank server lives in `apps/bank/main.ts` and imports `packages/protocol/` via relative paths, so deploy from the repo root.
 
+If the app does not exist yet, the first deploy will create it automatically:
+
 ```bash
-deno deploy create \
+cd /Users/xo/barter.game
+deno deploy \
   --org ai-1st \
   --app barter-game-banks \
-  --source github \
-  --owner ai-1st \
-  --repo barter.game \
-  --app-directory . \
-  --entrypoint apps/bank/main.ts \
-  --runtime-mode dynamic \
-  --region global
+  --prod \
+  --no-wait
 ```
 
-- `--runtime-mode dynamic` is required for `Deno.serve`.
-- `--region global` (or `us`, `eu`).
-- Source GitHub means pushes can auto-deploy; manual deploys still work with the same app.
+For a GitHub-connected app with autodeploy, use the Deno Deploy dashboard or CLI's Git source flags (`--source github --owner ai-1st --repo barter.game --entrypoint apps/bank/main.ts --runtime-mode dynamic --region global`).
 
 ## Provision and assign KV
 
@@ -92,7 +88,13 @@ deno deploy env add \
 ### From a `.env` file
 
 ```bash
-deno deploy env load --org ai-1st --app barter-game-banks --quiet ./bank-keys.env
+deno deploy env load --org ai-1st --app barter-game-banks ./bank-keys.env
+```
+
+To overwrite existing values, add `--replace`:
+
+```bash
+deno deploy env load --org ai-1st --app barter-game-banks --replace ./bank-keys.env
 ```
 
 List current vars:
@@ -105,18 +107,16 @@ deno deploy env list --org ai-1st --app barter-game-banks
 
 ```bash
 cd /Users/xo/barter.game
-deno deploy . \
+deno deploy \
   --org ai-1st \
   --app barter-game-banks \
   --prod \
-  --ignore=node_modules \
-  --ignore=old \
-  --ignore=website \
-  --ignore=apps/cli
+  --no-wait
 ```
 
 - Omit `--prod` for a preview deployment.
 - Add `--no-wait` to return immediately without waiting for the build.
+- The deploy uploads the working directory; `node_modules`, `old`, `website`, and `apps/cli` are harmless but can be ignored if desired.
 
 ## Verify the deployment
 
@@ -126,9 +126,11 @@ The app exposes:
 - `GET /<name>/barter-bank.json` — discovery doc
 - `POST /<name>/rpc` — JSON-RPC endpoint
 
+For this app the canonical URL is:
+
 ```bash
-curl https://<app>-<org>.deno.dev/
-curl https://<app>-<org>.deno.dev/alice/barter-bank.json
+curl https://barter-game-banks.ai-1st.deno.net/
+curl https://barter-game-banks.ai-1st.deno.net/alice/barter-bank.json
 ```
 
 ## Logs and troubleshooting
@@ -151,6 +153,7 @@ Common failures:
 | `Missing required option --runtime-mode` | `--runtime-mode` omitted | Use `--runtime-mode dynamic` |
 | `Missing required option --source` | `--source github --owner --repo` omitted | Add GitHub source flags |
 | `Missing required option --region` | `--region` omitted | Add `--region global` |
+| `barter-bank.json` returns `bank-not-found` | `BANK_<NAME>_PRIV_KEY` env vars not set | Generate keys and `deno deploy env load` them, then redeploy |
 | Build fails when importing protocol/crypto | New Deno Deploy doesn't resolve `npm:` specifiers | Map bare specifiers to `https://esm.sh/...` in `deno.json` |
 
 ## Import maps for Deno Deploy

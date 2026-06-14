@@ -25,14 +25,14 @@ export type AccountRow = {
   balance: string;
 };
 
-export type LedgerRecordRow = {
+export type RecordRow = {
   ulid: string;
   bank_pubkey: string;
   type: string;
   account: string;
   amount: string;
   pair_ulid: string;
-  deal_ulid: string;
+  session: string;
   tx_ulid: string | null;
   body: Record<string, unknown>;
 };
@@ -137,54 +137,54 @@ export class BankDB {
     return out;
   }
 
-  // ── ledger_records: bank-minted, ULID-identified ───────────────────────────
+  // ── records: bank-minted, ULID-identified ───────────────────────────
 
-  async insertLedgerRecord(input: {
+  async insertRecord(input: {
     ulid: string;
     type: "credit" | "debit";
     account: string;
     amount: number;
     pairUlid: string;
-    dealUlid: string;
+    session: string;
     body: Record<string, unknown>;
   }): Promise<void> {
-    const row: LedgerRecordRow = {
+    const row: RecordRow = {
       ulid: input.ulid,
       bank_pubkey: this.bankPubkey,
       type: input.type,
       account: input.account,
       amount: String(input.amount),
       pair_ulid: input.pairUlid,
-      deal_ulid: input.dealUlid,
+      session: input.session,
       tx_ulid: null,
       body: input.body,
     };
     await this.kv.atomic()
-      .set(K(this.bankPubkey, "ledger_records", input.ulid), row)
-      .set(K(this.bankPubkey, "ledger_records_by_deal", input.dealUlid, input.ulid), row)
+      .set(K(this.bankPubkey, "records", input.ulid), row)
+      .set(K(this.bankPubkey, "records_by_session", input.session, input.ulid), row)
       .commit();
   }
 
-  /** All records of a deal at this bank, sorted by ULID. */
-  async getLedgerRecordsByDeal(dealUlid: string): Promise<LedgerRecordRow[]> {
-    const prefix = K(this.bankPubkey, "ledger_records_by_deal", dealUlid);
-    const entries = this.kv.list<LedgerRecordRow>({ prefix });
-    const out: LedgerRecordRow[] = [];
+  /** All records of a session at this bank, sorted by ULID. */
+  async getRecordsBySession(session: string): Promise<RecordRow[]> {
+    const prefix = K(this.bankPubkey, "records_by_session", session);
+    const entries = this.kv.list<RecordRow>({ prefix });
+    const out: RecordRow[] = [];
     for await (const entry of entries) out.push(entry.value);
     out.sort((a, b) => a.ulid.localeCompare(b.ulid));
     return out;
   }
 
-  async getLedgerRecord(ulid: string): Promise<LedgerRecordRow | null> {
-    const res = await this.kv.get<LedgerRecordRow>(K(this.bankPubkey, "ledger_records", ulid));
+  async getRecord(ulid: string): Promise<RecordRow | null> {
+    const res = await this.kv.get<RecordRow>(K(this.bankPubkey, "records", ulid));
     return res.value;
   }
 
-  /** Look up multiple ledger records by ULID. Returns a ulid → body map. */
-  async getLedgerRecordsByUlids(ulids: string[]): Promise<Record<string, Record<string, unknown>>> {
+  /** Look up multiple records by ULID. Returns a ulid → body map. */
+  async getRecordsByUlids(ulids: string[]): Promise<Record<string, Record<string, unknown>>> {
     if (ulids.length === 0) return {};
-    const keys = ulids.map((u) => K(this.bankPubkey, "ledger_records", u));
-    const entries = await this.kv.getMany<LedgerRecordRow[]>(keys);
+    const keys = ulids.map((u) => K(this.bankPubkey, "records", u));
+    const entries = await this.kv.getMany<RecordRow[]>(keys);
     const out: Record<string, Record<string, unknown>> = {};
     for (let i = 0; i < ulids.length; i++) {
       const row = entries[i].value;
@@ -193,17 +193,17 @@ export class BankDB {
     return out;
   }
 
-  /** Bind ledger records to a Tx by setting their tx_ulid. */
+  /** Bind records to a Tx by setting their tx_ulid. */
   async bindRecordsToTx(ulids: string[], txUlid: string): Promise<void> {
     for (const ulid of ulids) {
-      const key = K(this.bankPubkey, "ledger_records", ulid);
-      const res = await this.kv.get<LedgerRecordRow>(key);
+      const key = K(this.bankPubkey, "records", ulid);
+      const res = await this.kv.get<RecordRow>(key);
       if (!res.value) continue;
       const row = { ...res.value, tx_ulid: txUlid };
-      const dealKey = K(this.bankPubkey, "ledger_records_by_deal", row.deal_ulid, ulid);
+      const sessionKey = K(this.bankPubkey, "records_by_session", row.session, ulid);
       await this.kv.atomic()
         .set(key, row)
-        .set(dealKey, row)
+        .set(sessionKey, row)
         .commit();
     }
   }
@@ -229,64 +229,64 @@ export class BankDB {
     return row.balance;
   }
 
-  /** Acquire a hold on an Account for a deal. Returns true if acquired, false on conflict. */
+  /** Acquire a hold on an Account for a session. Returns true if acquired, false on conflict. */
   async acquireHold(input: {
     accountHash: string;
-    dealUlid: string;
+    session: string;
     amount: number;
   }): Promise<boolean> {
     const key = K(this.bankPubkey, "holds", input.accountHash);
-    const res = await this.kv.get<{ deal_ulid: string; amount: number; active: boolean }>(key);
+    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(key);
     if (res.value?.active) {
-      // Idempotent re-hold for the same deal.
-      return res.value.deal_ulid === input.dealUlid;
+      // Idempotent re-hold for the same session.
+      return res.value.session === input.session;
     }
     const ok = await this.kv.atomic()
       .check(res)
-      .set(key, { deal_ulid: input.dealUlid, amount: input.amount, active: true })
+      .set(key, { session: input.session, amount: input.amount, active: true })
       .commit();
     return ok.ok;
   }
 
   /** Amount of the active hold on an account, or 0 if none. */
   async getActiveHoldAmount(accountHash: string): Promise<number> {
-    const res = await this.kv.get<{ deal_ulid: string; amount: number; active: boolean }>(
+    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(
       K(this.bankPubkey, "holds", accountHash),
     );
     return res.value?.active ? res.value.amount : 0;
   }
 
   /** Release a single hold (settle or reject path). */
-  async releaseHold(accountHash: string, dealUlid: string): Promise<void> {
+  async releaseHold(accountHash: string, session: string): Promise<void> {
     const key = K(this.bankPubkey, "holds", accountHash);
-    const res = await this.kv.get<{ deal_ulid: string; amount: number; active: boolean }>(key);
-    if (!res.value || !res.value.active || res.value.deal_ulid !== dealUlid) return;
+    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(key);
+    if (!res.value || !res.value.active || res.value.session !== session) return;
     await this.kv.atomic()
       .check(res)
       .set(key, { ...res.value, active: false })
       .commit();
   }
 
-  /** Release every active hold this bank placed for a deal (reject path). */
-  async releaseHoldsByDeal(dealUlid: string): Promise<void> {
+  /** Release every active hold this bank placed for a session (reject path). */
+  async releaseHoldsBySession(session: string): Promise<void> {
     const prefix = K(this.bankPubkey, "holds");
-    const entries = this.kv.list<{ deal_ulid: string; active: boolean }>({ prefix });
+    const entries = this.kv.list<{ session: string; active: boolean }>({ prefix });
     for await (const entry of entries) {
-      if (entry.value.deal_ulid === dealUlid && entry.value.active) {
+      if (entry.value.session === session && entry.value.active) {
         await this.kv.set(entry.key, { ...entry.value, active: false });
       }
     }
   }
 
-  /** Leg state machine helpers, keyed (deal_ulid, bank). */
+  /** Leg state machine helpers, keyed by per-bank session ULID. */
   async upsertLeg(input: {
-    dealUlid: string;
+    session: string;
     state: string;
     role?: string;
     predecessors?: string[];
     banks?: string[];
   }): Promise<void> {
-    const key = K(this.bankPubkey, "legs", input.dealUlid);
+    const key = K(this.bankPubkey, "legs", input.session);
     const res = await this.kv.get<LegRow>(key);
     const prev = res.value;
     const row: LegRow = {
@@ -298,15 +298,27 @@ export class BankDB {
     await this.kv.set(key, row);
   }
 
-  async getLegState(dealUlid: string): Promise<LegRow | null> {
-    const res = await this.kv.get<LegRow>(K(this.bankPubkey, "legs", dealUlid));
+  async getLegState(session: string): Promise<LegRow | null> {
+    const res = await this.kv.get<LegRow>(K(this.bankPubkey, "legs", session));
     return res.value;
+  }
+
+  /** All local leg sessions that are not in a terminal state. */
+  async listPendingSessions(): Promise<string[]> {
+    const prefix = K(this.bankPubkey, "legs");
+    const out: string[] = [];
+    for await (const entry of this.kv.list<LegRow>({ prefix })) {
+      if (entry.value.state !== "settled" && entry.value.state !== "rejected") {
+        out.push(String(entry.key.at(-1)));
+      }
+    }
+    return out;
   }
 
   /** Find a stored signature doc by signer + (target, action). */
   async findActionSig(
     actorPubkey: string,
-    target: { hash?: string; record?: string; deal?: string },
+    target: { hash?: string; record?: string; session?: string },
     action: string,
   ): Promise<Record<string, unknown> | null> {
     const prefix = K(this.bankPubkey, "docs");
@@ -318,7 +330,7 @@ export class BankDB {
       if (b.pubkey !== actorPubkey || b.action !== action) continue;
       if (target.hash !== undefined && b.hash !== target.hash) continue;
       if (target.record !== undefined && b.record !== target.record) continue;
-      if (target.deal !== undefined && b.deal !== target.deal) continue;
+      if (target.session !== undefined && b.session !== target.session) continue;
       return b;
     }
     return null;
@@ -326,7 +338,7 @@ export class BankDB {
 
   /** All stored signature docs anchored to one target. */
   async listSignaturesByTarget(
-    target: { hash?: string; record?: string; deal?: string },
+    target: { hash?: string; record?: string; session?: string },
   ): Promise<Array<Record<string, unknown>>> {
     const prefix = K(this.bankPubkey, "docs");
     const entries = this.kv.list<DocRow>({ prefix });
@@ -337,7 +349,7 @@ export class BankDB {
       const b = row.body;
       if (target.hash !== undefined && b.hash !== target.hash) continue;
       if (target.record !== undefined && b.record !== target.record) continue;
-      if (target.deal !== undefined && b.deal !== target.deal) continue;
+      if (target.session !== undefined && b.session !== target.session) continue;
       out.push(b);
     }
     return out;

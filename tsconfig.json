@@ -13,7 +13,8 @@
     "declaration": true,
     "sourceMap": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true
   },
   "exclude": ["node_modules", "dist"]
 }

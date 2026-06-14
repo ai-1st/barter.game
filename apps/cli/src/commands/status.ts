@@ -1,7 +1,7 @@
 // `barter status <deal>` — watch a deal the local profile initiated.
 //
 // Banks self-advance; the client just observes. Reads the locally-saved
-// deal state and polls get_deal on every participating bank.
+// deal state and polls get_session on every participating bank.
 
 import { loadProfile } from "../profile.ts";
 import { fetchLegStates } from "../orchestrate.ts";

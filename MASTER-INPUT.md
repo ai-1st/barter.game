@@ -3,7 +3,7 @@ Alice and Bob are users of the system. Abank and Bbank are their respective bank
 Alice and Bob each mint promises into some accounts in their banks. As a result of minting they have two accounts for each promise - one with negative amount, one with positive amount. Promise minting is an API request to the bank signed by the issuer key. To have two distinct accounts for the same promise the user needs to provide two distinct Pocket hashes.
 
 There is no separate call to open an account; the user just provides the Pocket hashes and Account and Promise objects.
-Banks store the docs and sigatures presented to them. The only thing they create is signatures.
+Banks store the docs and signatures presented to them. The only thing they create is records and signatures.
 
 Account: {
   holder: Base58PubKey;   // pubkey of the holder
@@ -35,21 +35,21 @@ Bob also creates Pocket and Account objects for Abank.
 
 # Direct approval
 
-Alice contacts Abank to create a pair of ledger records to transfer Apromise from Alice to Bob
-Alice contacts Bbank to create a pair of ledger records to transfer Bpromise from Bob to Alice
+Alice contacts Abank to create a pair of records to transfer Apromise from Alice to Bob
+Alice contacts Bbank to create a pair of records to transfer Bpromise from Bob to Alice
 
-LedgerRecord: BaseDoc & {
+Record: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
   account: Base58SHA256;  // hash of the Account doc (still content-addressed)
   pair: ULID;             // mandatory ULID of the peer record (set by the bank at creation)
 }
 
-Once having the ledger record hashes, Alice creates two Tx objects: ATx and BTx
+Once having the record hashes, Alice creates two Tx objects: ATx and BTx
 
 Tx: BaseDoc & {
   type: "tx";
-  records: ULID[];           // ordered list of record ULIDs touching this holder
+  records: Base58SHA256[];           // ordered list of record hashes touching this holder
   order?: Base58SHA256;      // holder-issued authorization document (see below)
   offer?: Base58SHA256;    // bank-issued derived authorization document (See below)
 }
@@ -57,9 +57,9 @@ Tx: BaseDoc & {
 ATx binds together the debit of Apromise and credit of Bpromise in Alice's accounts - this is her view of the deal.
 BTx binds together the credit of Apromise and debit of Bpromise in Bob's accounts - this is his view of the deal.
 
-A signed Tx acts as an authorization for the bank to execute the ledger records. Tx can also be authorized by an order, an invoice, or a cheque.
+A signed Tx acts as an authorization for the bank to execute the records. Tx can also be authorized by an order, an invoice, or a cheque.
 
-Holders sign only Tx, Orders, Invoices and Cheques. Banks sign Ledger Records.
+Holders sign only Tx, Orders, Invoices and Cheques. Banks sign records and Address. Users sign Address (both banks and users can have URL with an API, users API aggregates all their promises across banks and other things - TBD.
 
 Alice signs ATx as "lead" and presents the signed ATx to Abank and Bbank together with Subscription objects that instruct the banks to inform each other about signatures issued.
 
@@ -69,18 +69,18 @@ RecordSubscription: {
   url: string; // url where new signatures on the record get published to
 }
 
-The banks issue these signatures on the ledger records. The signatures are issued on each of the paired records simultaneously and then fanned out through subscriptions. Each signature includes other prior signatures of the Tx in "seen" field. The bank MUST include signatures in the "seen" field that were required to sign/advance the record.
+The banks issue these signatures on the records. The 2 signatures are issued on each of the paired records simultaneously and then fanned out through subscriptions. Each signature includes other prior signatures of the Tx in "seen" field. The bank MUST include signatures in the "seen" field that were required to sign/advance the record.
 - "ready" meaning the bank is seeing a valid authorization, there are enough funds, no limits are exeeded and the bank is generally ready to proceed. this signature does not depend on other banks, it is bank's own validation and a heartbeat signal to others
-- "held" meaning the funds are being held in the debit account and expected in the credit account, lead bank does this only when all other records in Tx are "ready", follow bank does this only when all other records in Tx are "held". "held" may apply to the funds that are expected to arrive. This enables pass-through accounts in a single deal. Q - any potential issues with this?
-- "settled" meaning the funds are being settled. Again the lead settles when others hold; followers settles after others settle.
-- "rejected" meaning the bank rejected the record due to some reason specified in the rejection message in the signature. "rejected" may be issued any time even after "settled" - eg. if the bank is rolling back some fraudulent transfer. Each bank implements it own policies. Built-in non-repudiation: the protocol allows parties to collect cryptographic evidence of the sequence of events (based on "seen" in signatures) and use it to dispute stuck, aborted or rolled back transactions.
+- "hold" meaning the funds are being held in the debit account and expected in the credit account, lead bank does this only when all other records in Tx are "ready", follow bank does this only when all other records in Tx are "hold". "hold" may apply to the funds that are expected to arrive. This enables pass-through accounts in a single deal. Q - any potential issues with this?
+- "settle" meaning the funds are being settled. Again the lead settles when others hold; followers settles after others settle.
+- "reject" meaning the bank rejected the record due to some reason specified in the rejection message in the signature. "reject" may be issued any time even after "settle" - eg. if the bank is rolling back some fraudulent transfer. Each bank implements it own policies. Built-in non-repudiation: the protocol allows parties to collect cryptographic evidence of the sequence of events (based on "seen" in signatures) and use it to dispute stuck, aborted or rolled back transactions.
 
-Abank checks the limits and validity of ledger records and issues "ready" or "rejected" signature on the debit of Apromise.
-Bbank checks the limits and validity of ledger records and issues "ready" or "rejected" signature on the credit of Bpromise.
+Abank checks the limits and validity of records and issues "ready" or "reject" signature on the debit of Apromise.
+Bbank checks the limits and validity of records and issues "ready" or "reject" signature on the credit of Bpromise.
 
-Bob signs BTx as "follow" and presents the signed ATx to Abank.
-Abank checks the limits and validity of ledger records and issues "ready" or "rejected" signature on the credit of Apromise.
-Bbank checks the limits and validity of ledger records and issues "ready" or "rejected" signature on the debit of Bpromise.
+Bob signs BTx as "follow" and presents the signed BTx to Abank.
+Abank checks the limits and validity of records and issues "ready" or "reject" signature on the credit of Apromise.
+Bbank checks the limits and validity of records and issues "ready" or "reject" signature on the debit of Bpromise.
 
 Abank and Bbank send the signatures to subscribers. Depending on circumstances they can be sending to each other directly, or through a proxy - the party driving the deal decides on how much privacy is required when setting subscriptions.
 
@@ -88,11 +88,11 @@ Banks send signatures back in response to API call with docs. So a holder sends 
 
 Bank API allows any party to query signatures given the record hash. Record hash thus acts as an access key and enables polling for signatures if subscriber push wasn't set up or failed. Alice's client app may poll the banks for signatures to track the progress of the deal.
 
-Once Abank sees the "ready" for all records in Tx and sees "lead" signature from Alice on Tx, it knows it has to advance, and issues "held" signatures on own ledger records. Sends them over to Bbank. Bbank holds too. If Bbank rejects, Abank rejects too, using Bbank rejection as the reason.
+Once Abank sees the "ready" for all records in Tx and sees "lead" signature from Alice on Tx, it knows it has to advance, and issues "hold" signatures on own records. Sends them over to Bbank. Bbank holds too. If Bbank rejects, Abank rejects too, using Bbank rejection as the reason.
 
 Same round for settlement.
 
-One weird bank behavior of a bank is to neither reject nor advance. While this is out of scope for v1, a reputation service may independently check Tx, ledger records, existing signatures, then present these documents to the bank once again, and then poll for signatures - if the bank is not processing it may be blacklisted. The bank may re-issue the same type of signature with an updated "reason" field to explain its position.
+One weird bank behavior of a bank is to neither reject nor advance. While this is out of scope for v1, a reputation service may independently check Tx, records, existing signatures, then present these documents to the bank once again, and then poll for signatures - if the bank is not processing it may be blacklisted. The bank may re-issue the same type of signature with an updated "reason" field to explain its position.
 
 # Standing Order
 
@@ -155,7 +155,7 @@ OfferSubscription: {
   url: string; // url where new offers for the promise get published to
 }
 
-So Alice sends her Order and Accounts to both banks with publish_offer = TRUE, they both generate Offers and make them discoverable through the API. Banks lazily unpublish Offers for Orders that are exceeding limits. Alice is offering up to 100 Apromises for 90 Bpromises.
+So Alice sends her Order and Accounts to both banks with publish_offer = TRUE parameter to the call, they both generate Offers and make them discoverable through the API. Banks lazily unpublish Offers for Orders that are exceeding limits. Alice is offering up to 100 Apromises for 90 Bpromises.
 
 Bob happens to also publish an Offer for exchange up to 100 Bpromises for 90 Apromises.
 
@@ -187,7 +187,7 @@ Banks maintain a registry of addresses and fan out own address changes when ever
  * Address document contains the endpoints used to communicate with the bank
  * - url is the current endpoint of the bank
  * 
- * The bnk may issue a signed address with a newer ulid to update the url/ledger.
+ * The bank may issue a signed address with a newer ulid to update the url/ledger.
  * 
  * Banks maintain public directories of address docs, indexed by pubkey. The address doc for a pubkey
  * can be updated by any anonymnous user on the internet, provided they have a signed address doc with a newer ulid.
@@ -203,15 +203,13 @@ export type Address = BaseDoc & {
 }
 
 # Bank public API summary
-- ledger record signatures, to whoever has the hash
+- record signatures, to whoever has the hash
 - promises by hash, only the ones that issuers marked as "public" - bank custom API
 - list of promises, only the ones that issuers marked as "discoverable" and hosted by this bank
 - list of all promises known to this bank, including the ones hosted in other banks
 - offers per promise hash and intention
 - signature, promise and offer subscriptions
 - get address by pubkey (addresses are auto-updated when a new ulid for the same pubkey is presented)
-- invoice by hash
-- checkque by hash
 - anything else missing?
 
 # Link sharing
@@ -229,9 +227,36 @@ Different banks may get it differently.
 # Discussion points
 
 Do banks allow minting any promise? v1 - yes
-Do banks accept new ledger records for new accounts and new promises? v1 - yes, they just need to make sure the pomise references the bank
-v1: Banks accept and store any docs/signatures that are linked to promises uthat are referencing this bank.
-All calls to bank APIs are signed by the issuer. Banks may block spammers and abusers based on their issuer key.
+Do banks accept new records for new accounts and new promises? v1 - yes, they just need to make sure the pomise references the bank
+v1: Banks accept and store any docs/signatures that are linked to promises that are referencing this bank.
+All calls to bank APIs are signed by the caller. Banks may block spammers and abusers based on their key.
 
 Do banks communicate directly or indirectly? - v1 - depends on how subscriptions are set up. could you an anonimizing proxy 
-so that bacnks even don't know what is the counterparty bank
+so that banks even don't know what is the counterparty bank
+
+# Notes in no particular order:
+- signatures can only use content addressing (hash field)
+```ts
+Signature: BaseDoc & {
+  type: "signature";
+  hash?: Base58SHA256;       // content-addressed target (Tx hash, Promise hash, Offer hash)
+  action?: "ready" | "hold" | "settle" | "reject" // bank signatures
+         | "lead" | "follow"; // holder signatures, action is not required when signing Promise or Address
+  seen?: Base58SHA256[];     // hashes of prior Signature docs
+  reason?: string;
+  sig?: Base58Signature;     // ed25519 sig over canonical(doc minus sig)
+}
+```
+- do not use .well-known notation; there could be many banks using different paths on a common domain
+- users do not sign Account, Pocket
+- users sign Promise, Order, Tx, Address
+- banks sign Record, Offer (instead of "LedgerRecord" just use "Record"), Address
+- all bank requests are signed by the caller and are idempotent, so we are not worried about 3-rd party replay of the requests (or do we? are there any cases when request replay could hurt us?)
+- mint call does not need to pass "pocket" docs - banks do not need to know the properties of pockets, they only need to get account objects to check the promise hash
+- mint call should take "amount" and the bank should immediately create records with the given amount and issue "settle" sig (no need for "ready" and "hold" since this is the same bank)
+- account balances start showing -X and X in the respective accounts
+- there is no "shared `deal` ULID". Every party has their own view of the deal as a Tx object which describes what this party gets and what it gives. Only the matchmaker sees the whole deal structure, but they use internal identification and don't need to share it externally
+- create_records call should take only amount and 2 account objects and return 2 record objects; these records are created as "draft" records - the bank stores them using a separate primary key with "draft" prefix so that they don't slow down account balance calculation. once the records get signed - the bank copies them into another PK starting with "ready", "hold" or "settle"
+- Tx MUST reference records by hash
+- RecordSubscription and OfferSubscription are not derived from BaseDoc, do not have ulid/pubkey and do not need to be signed
+- 

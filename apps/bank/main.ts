@@ -98,10 +98,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: "invalid-json" }, 400);
     }
     try {
-      const stored = await submitAddress(body, {
-        db,
-        bankPrivateKey: bank.privateKey,
-      });
+      const stored = await submitAddress(body, { db });
       return json(stored);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

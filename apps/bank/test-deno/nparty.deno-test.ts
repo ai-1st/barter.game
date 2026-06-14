@@ -78,6 +78,12 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
       ]);
 
       const deal = newUlid();
+      const sessionByBank: Record<string, string> = {
+        [bA.pub]: newUlid(),
+        [bB.pub]: newUlid(),
+        [bC.pub]: newUlid(),
+        [bD.pub]: newUlid(),
+      };
       const spec = { deal, initiator: A.pub, leadBanks: [bA.pub, bB.pub], transfers };
 
       const order = [bA.pub, bB.pub, bC.pub, bD.pub];
@@ -91,7 +97,7 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
           .map((t) => ({ type: "transfer" as const, promise_hash: t.promise, amount: t.amount, debit_account_hash: t.from.account, credit_account_hash: t.to.account }));
         const res = await createRecords(
           {
-            deal,
+            session: sessionByBank[bankPub],
             role: preds[bankPub].length === 0 ? "lead" : "follow",
             predecessors: preds[bankPub],
             banks: order,
@@ -108,6 +114,10 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
         eq(JSON.stringify(leg.predecessors.slice().sort()), JSON.stringify(preds[leg.bank].slice().sort()), `predecessors for ${leg.bank}`);
       }
 
+      // Cross-subscribe banks to each other's sessions: for each ordered pair
+      // (thisBank, peerBank), thisBank watches its own session and pushes to
+      // peerBank's URL. Collectively every bank receives every other bank's
+      // signatures.
       for (const bankPub of order) {
         for (const peerPub of order) {
           if (peerPub === bankPub) continue;
@@ -115,7 +125,7 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
             type: "subscription",
             pubkey: A.pub,
             ulid: newUlid(),
-            deals: [deal],
+            sessions: [sessionByBank[bankPub]],
             url: bankUrl(nameByPub.get(peerPub)!),
             to: peerPub,
           };
@@ -143,12 +153,12 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
       }
 
       for (const bankPub of order) {
-        const leg = await ctx(tk.kv, bankByPub.get(bankPub)!, A.pub).db.getLegState(deal);
+        const leg = await ctx(tk.kv, bankByPub.get(bankPub)!, A.pub).db.getLegState(sessionByBank[bankPub]);
         eq(leg?.state, "settled", `leg state at ${nameByPub.get(bankPub)}`);
       }
 
       const settleOf = async (bank: Key) => {
-        const sigs = await ctx(tk.kv, bank, A.pub).db.listSignaturesByTarget({ deal });
+        const sigs = await ctx(tk.kv, bank, A.pub).db.listSignaturesByTarget({ session: sessionByBank[bank.pub] });
         for (const s of sigs) {
           if (s.pubkey === bank.pub && s.action === "settle") return s;
         }

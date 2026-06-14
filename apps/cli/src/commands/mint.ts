@@ -81,7 +81,7 @@ export async function runMint(argv: string[]): Promise<number> {
     promise_hash: string;
     debit_account_hash: string;
     credit_account_hash: string;
-    deal: string;
+    session: string;
   };
 
   process.stdout.write(

@@ -11,14 +11,14 @@
 //
 // The bank checks the limits and validity of each record it owns and issues
 // a per-record `ready` or `reject` Signature. Once EVERY record this bank
-// owns under the deal is bound to a holder-signed Tx and bank-ready, the
+// owns under the session is bound to a holder-signed Tx and bank-ready, the
 // leg advances to `approved` and the bank self-advances (holds, then
 // settles per the lead/follow order) — see advance.ts.
 
 import { hashDoc, newUlid, signDoc, verifyDoc, validateSignature, validateTx } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler, type RpcContext } from "../rpc.ts";
-import type { LedgerRecordRow } from "../db.ts";
-import { advanceDeal } from "../advance.ts";
+import type { RecordRow } from "../db.ts";
+import { advanceSession } from "../advance.ts";
 import { fanoutSignatures } from "../subscriptions.ts";
 import { intakeDocs } from "./intake.ts";
 
@@ -77,22 +77,22 @@ export const submitTx: Handler = async (params, ctx) => {
   await intakeDocs(p.docs, ctx);
 
   // This bank's slice of the Tx — records it owns. Others are invisible.
-  const recordBodies = await ctx.db.getLedgerRecordsByUlids(tx.records);
+  const recordBodies = await ctx.db.getRecordsByUlids(tx.records);
   const ownedUlids = tx.records.filter((u) => recordBodies[u] !== undefined);
   if (ownedUlids.length === 0) {
     throw new RpcError(RpcErrors.VALIDATION, "this bank owns no records in tx.records[]");
   }
 
-  // All owned records must belong to one deal, and every record a holder
+  // All owned records must belong to one session, and every record a holder
   // authorizes must sit on the holder's own account.
-  let deal: string | null = null;
-  const rows: LedgerRecordRow[] = [];
+  let session: string | null = null;
+  const rows: RecordRow[] = [];
   for (const u of ownedUlids) {
-    const row = await ctx.db.getLedgerRecord(u);
+    const row = await ctx.db.getRecord(u);
     if (!row) throw new RpcError(RpcErrors.UNKNOWN_DOC, `record ${u} not found at this bank`);
-    if (deal === null) deal = row.deal_ulid;
-    if (row.deal_ulid !== deal) {
-      throw new RpcError(RpcErrors.VALIDATION, "tx.records span multiple deals at this bank");
+    if (session === null) session = row.session;
+    if (row.session !== session) {
+      throw new RpcError(RpcErrors.VALIDATION, "tx.records span multiple sessions at this bank");
     }
     if (row.tx_ulid !== null && row.tx_ulid !== tx.ulid) {
       throw new RpcError(RpcErrors.VALIDATION, `record ${u} is already bound to another tx`);
@@ -135,12 +135,12 @@ export const submitTx: Handler = async (params, ctx) => {
     recordSigs.push(sig);
   }
 
-  // Leg gate: approved once EVERY record this bank owns under the deal is
+  // Leg gate: approved once EVERY record this bank owns under the session is
   // Tx-bound and carries a bank ready.
-  const leg = await ctx.db.getLegState(deal!);
+  const leg = await ctx.db.getLegState(session!);
   let legState = leg?.state ?? "created";
   if (legState === "created") {
-    const allRecords = await ctx.db.getLedgerRecordsByDeal(deal!);
+    const allRecords = await ctx.db.getRecordsBySession(session!);
     let complete = true;
     for (const rec of allRecords) {
       const bound = rec.tx_ulid !== null || ownedUlids.includes(rec.ulid);
@@ -151,7 +151,7 @@ export const submitTx: Handler = async (params, ctx) => {
       }
     }
     if (complete) {
-      await ctx.db.upsertLeg({ dealUlid: deal!, state: "approved" });
+      await ctx.db.upsertLeg({ session: session!, state: "approved" });
       legState = "approved";
     }
   }
@@ -159,12 +159,12 @@ export const submitTx: Handler = async (params, ctx) => {
   await fanoutSignatures(ctx, recordSigs);
 
   // Banks self-advance: holds + settles happen here, not on a client command.
-  await advanceDeal(deal!, ctx);
-  const after = await ctx.db.getLegState(deal!);
+  await advanceSession(session!, ctx);
+  const after = await ctx.db.getLegState(session!);
 
   return {
     tx_hash: txHash,
-    deal,
+    session,
     record_sigs: recordSigs,
     leg_state: after?.state ?? legState,
   };
@@ -186,7 +186,7 @@ async function resolveAuthorizationSource(
 }
 
 /** v1 limit policy at ready time. Returns null (ready) or a reason (reject). */
-async function checkRecord(row: LedgerRecordRow, ctx: RpcContext): Promise<string | null> {
+async function checkRecord(row: RecordRow, ctx: RpcContext): Promise<string | null> {
   if (row.type === "credit") return null; // credits always ready
 
   const acct = await ctx.db.getAccount(row.account);

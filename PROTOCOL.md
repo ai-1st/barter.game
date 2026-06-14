@@ -54,7 +54,7 @@ A deal executes in three waves: **ready → hold → settle**. Wave 1 (*direct a
 
 ### 2.0 Three-wave execution model: ready → hold → settle
 
-**1. Ready** — every holder whose accounts are touched by the deal must authorize their part of the deal by signing their own **Tx or Order**. Authorization is independent: Alice can authorize without waiting for Bob. A bank then validates those authorizations and issues a record-level `ready` signature on its own LedgerRecords when it is prepared to proceed. Authorization can come from:
+**1. Ready** — every holder whose accounts are touched by the deal must authorize their part of the deal by signing their own **Tx or Order**. Authorization is independent: Alice can authorize without waiting for Bob. A bank then validates those authorizations and issues a record-level `ready` signature on its own Records when it is prepared to proceed. Authorization can come from:
 
 - A direct holder `lead` or `follow` signature on the holder's own **Tx**.
 - A matching `Order` doc (§5.7). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance.
@@ -242,16 +242,17 @@ Account hash = `base58(sha256(canonical(account_doc)))`.
 
 Because the Account doc has no `ulid`, its hash is deterministic from the triple `(holder, pocket, promise)`. Re-presenting the same Account is idempotent.
 
-There is no separate protocol operation to "open" an account. A user presents a signed Account doc (and the Pocket docs it references) to the issuing bank, and the bank stores it. The same is true for a user who wants to receive a Promise issued by another bank: they create Pocket and Account objects for that bank and present them.
+There is no separate protocol operation to "open" an account. A user presents an Account doc to the issuing bank, and the bank stores it. The same is true for a user who wants to receive a Promise issued by another bank: they create an Account object for that bank and present it. Account and Pocket docs are NOT signed by the holder; their authority comes from being referenced by holder-signed Txs, Orders, or (for Accounts) by mint records at the issuing bank.
 
 > **Invariant:** The issuer of a Promise is the sole source of truth for balances of that Promise. No other bank may issue or mutate accounts for a Promise it does not own.
+> **Invariant:** Account and Pocket docs have no `sig` field. Users sign Promise, Order, Tx, and Address docs; banks sign Record and Offer docs.
 
 ### 5.4 Record
 
 One half of a paired credit/debit entry in the double-entry ledger.
 
 ```ts
-LedgerRecord: BaseDoc & {
+Record: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
   account: Base58SHA256;  // hash of the Account doc (still content-addressed)
@@ -265,7 +266,7 @@ Records are **bank-minted**: the bank assigns their ULIDs and ensures uniqueness
 
 ### 5.5 Tx
 
-A **Tx represents a single holder's view of a barter deal**: "What am I giving and what am I getting in this exchange?" Every holder touched by a deal builds and signs **their own Tx**. The Tx contains only the LedgerRecord ULIDs that touch that holder's accounts. Holders sign **Tx or Order** docs; banks sign **LedgerRecord or Offer** docs. Invoices and cheques are specializations of Order or Offer with one side omitted.
+A **Tx represents a single holder's view of a barter deal**: "What am I giving and what am I getting in this exchange?" Every holder touched by a deal builds and signs **their own Tx**. The Tx contains only the Record ULIDs that touch that holder's accounts. Holders sign **Promise, Order, Tx, and Address** docs; banks sign **Record and Offer** docs. Invoices and cheques are specializations of Order or Offer with one side omitted.
 
 For example, if Alice and Bob exchange promises X (Alice's, at Xbank) and Y (Bob's, at Ybank):
 
@@ -438,7 +439,7 @@ When creating records, the proposing client MAY supply a list of lightweight **R
 
 ```ts
 RecordSubscription: {
-  record: ULID;           // ULID of the LedgerRecord to watch
+  record: ULID;           // ULID of the Record to watch
   url: string;            // URL where new signatures on the record should be published
 }
 ```
@@ -456,9 +457,9 @@ Address: BaseDoc & {
 }
 ```
 
-Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by presenting a signed Address doc with a newer ULID. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (§10.1); Address docs allow a bank to announce URL changes in a verifiable, self-signed form.
+Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by presenting a signed Address doc with a newer ULID. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (§10.1); Address docs allow an entity to announce URL changes in a verifiable, self-signed form.
 
-> **Invariant:** Address docs are signed by the bank they describe. A newer ULID overrides an older one for the same pubkey.
+> **Invariant:** Address docs are signed by the pubkey they describe (a bank or a user). A newer ULID overrides an older one for the same pubkey.
 
 ---
 
@@ -519,8 +520,8 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `mint(promise, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `promise` references this bank, that both Accounts belong to the issuer, reference the promise, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the docs, create the first debit/credit record pair under a fresh deal ULID, and **settle it immediately** — single signer, single bank, zero counterparty risk. Sign per-record `ready`, the deal `settle`, and Promise/Account attestations. |
-| `submit_account(account, pocket?)` | holder → issuer bank | Store a holder-signed Account (and Pocket if supplied). There is no separate "open account" operation; this is it. |
+| `mint(promise, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `promise` references this bank, that both Accounts belong to the issuer, reference the promise, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair under a fresh deal ULID for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Sign only the deal-level `settle` signature and a Promise `ack` attestation; no `ready` or `hold` step is needed. |
+| `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Pocket bodies stay on the holder's machine.
 | `submit_order(order, accounts[], publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash and, if published, the Offer hash and bank `ack` signature. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
 
@@ -568,7 +569,7 @@ The bank validates that all accounts exist, reference the correct Promise, and s
 The Address directory uses plain HTTP endpoints rather than the JSON-RPC envelope:
 
 - `GET /address/<pubkey>` — return the Address doc for the pubkey, or `404`.
-- `POST /address` — body is a signed Address doc; store it if its ULID is newer than any existing Address for that pubkey.
+- `POST /address` — body is a signed Address doc, signed by the pubkey it describes; store it if its ULID is newer than any existing Address for that pubkey.
 
 ### 7.7 Orchestration with the doc-oriented API
 
@@ -731,11 +732,11 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
 | Key rotation | Out of scope; redeploy with new secret if compromised | **Yes** |
 | Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
-| Account creation | Accounts are opened by presenting a signed Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
+| Account creation | Accounts are opened by presenting an unsigned Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
 | Promise fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
 | Tx cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
 | Tx ownership | **One Tx per participating holder**, containing only records that touch that holder's accounts | **Yes** |
-| Holder authorization | Holders sign Tx and Order docs; banks sign LedgerRecord and Offer docs | **Yes** |
+| Holder authorization | Holders sign Promise, Order, Tx, and Address docs; banks sign Record and Offer docs | **Yes** |
 | Balance floor | Holder-authorized transfers cannot overdraw the debit account; negative balances are created only by issuer minting | **Yes** |
 | Offers | Banks MAY derive and publish Offer docs from Orders; Offers hide holder identity and account hashes | **Yes** |
 

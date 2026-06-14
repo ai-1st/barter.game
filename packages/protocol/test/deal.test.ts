@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildDeal, topoSortBanks, type DealSpec } from "../src/deal.ts";
+import { buildDeal, type DealSpec } from "../src/deal.ts";
+import { hashRecord } from "../src/schemas.ts";
 
 // Deterministic ULID factory so a build is reproducible within a run.
 function counterUlid() {
@@ -7,15 +8,22 @@ function counterUlid() {
   return () => ("01TEST" + String(n++).padStart(20, "0")).slice(0, 26);
 }
 
-const DEAL = "01TESTDEAL000000000000XXXX".slice(0, 26);
+function recordBody(
+  type: "credit" | "debit",
+  pubkey: string,
+  ulid: string,
+  account: string,
+  pair: string,
+  amount = 1,
+) {
+  return { type, pubkey, ulid, amount, account, pair };
+}
 
 // The branching/merging multi-party deal from PROTOCOL.md §2:
-//   A → C, B → C, C → D, D → A, D → B   (leads: A's and B's banks)
+//   A → C, B → C, C → D, D → A, D → B
 function demoDeal(): DealSpec {
   return {
-    deal: DEAL,
     initiator: "hA",
-    leadBanks: ["bankA", "bankB"],
     transfers: [
       { promise: "pA", issuerBank: "bankA", amount: 1, from: { holder: "hA", account: "accA_A" }, to: { holder: "hC", account: "accC_A" } },
       { promise: "pB", issuerBank: "bankB", amount: 1, from: { holder: "hB", account: "accB_B" }, to: { holder: "hC", account: "accC_B" } },
@@ -26,55 +34,61 @@ function demoDeal(): DealSpec {
   };
 }
 
-/** Produce deterministic ULIDs for each bank's records.
- *  Order matches the transfer order within each bank. */
-function makeRecordUlids(spec: DealSpec, ulid: () => string): Record<string, string[]> {
-  const groups = new Map<string, number>();
+/** Produce deterministic record bodies for each bank.
+ *  Order matches the transfer order within each bank: debit, credit per transfer. */
+function makeRecords(spec: DealSpec, ulid: () => string, bankPub: string): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
   for (const t of spec.transfers) {
-    if (!groups.has(t.issuerBank)) groups.set(t.issuerBank, 0);
-    groups.set(t.issuerBank, groups.get(t.issuerBank)! + 1);
+    if (t.issuerBank !== bankPub) continue;
+    const debitUlid = ulid();
+    const creditUlid = ulid();
+    records.push(recordBody("debit", bankPub, debitUlid, t.from.account, creditUlid, t.amount));
+    records.push(recordBody("credit", bankPub, creditUlid, t.to.account, debitUlid, t.amount));
   }
-  const out: Record<string, string[]> = {};
-  for (const [bank, count] of groups) {
-    out[bank] = Array.from({ length: count * 2 }, () => ulid());
-  }
-  return out;
+  return records;
 }
 
 describe("buildDeal — multi-party branching/merging", () => {
-  test("holder Txs are a disjoint exact cover of all record ULIDs", () => {
+  test("holder Txs are a disjoint exact cover of all record hashes", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
 
-    const all = Object.values(bankUlids).flat().sort();
+    const allHashes = Object.values(bankRecords).flat().map((r) => hashRecord(r as never));
     const fromTxs = d.holderTxs.flatMap((h) => h.tx.records);
-    expect(fromTxs).toHaveLength(10);
-    expect([...fromTxs].sort()).toEqual(all);
-    // disjoint: no ULID appears in two holders' Txs
+    expect(fromTxs).toHaveLength(allHashes.length);
+    expect([...fromTxs].sort()).toEqual([...allHashes].sort());
     expect(new Set(fromTxs).size).toBe(fromTxs.length);
   });
 
   test("each holder's Tx binds exactly the records on their own accounts", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
     const plan = (h: string) => d.holderTxs.find((p) => p.holder === h)!;
 
+    const h = (bank: string, idx: number) => hashRecord(bankRecords[bank]![idx] as never);
+
     // hA: debit of t0 (bankA), credit of t3 (bankD)
-    expect(plan("hA").tx.records).toEqual([bankUlids["bankA"][0], bankUlids["bankD"][1]]);
+    expect(plan("hA").tx.records).toEqual([h("bankA", 0), h("bankD", 1)]);
     // hB: debit of t1 (bankB), credit of t4 (bankD)
-    expect(plan("hB").tx.records).toEqual([bankUlids["bankB"][0], bankUlids["bankD"][3]]);
+    expect(plan("hB").tx.records).toEqual([h("bankB", 0), h("bankD", 3)]);
     // hC: credit of t0, credit of t1, debit of t2
-    expect(plan("hC").tx.records).toEqual([
-      bankUlids["bankA"][1], bankUlids["bankB"][1], bankUlids["bankC"][0],
-    ]);
+    expect(plan("hC").tx.records).toEqual([h("bankA", 1), h("bankB", 1), h("bankC", 0)]);
     // hD: credit of t2, debit of t3, debit of t4
-    expect(plan("hD").tx.records).toEqual([
-      bankUlids["bankC"][1], bankUlids["bankD"][0], bankUlids["bankD"][2],
-    ]);
+    expect(plan("hD").tx.records).toEqual([h("bankC", 1), h("bankD", 0), h("bankD", 2)]);
     // Tx.pubkey is the holder
     expect(plan("hA").tx.pubkey).toBe("hA");
   });
@@ -82,8 +96,13 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("initiator's plan is lead, everyone else follows", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
     const roles = Object.fromEntries(d.holderTxs.map((h) => [h.holder, h.role]));
     expect(roles).toEqual({ hA: "lead", hB: "follow", hC: "follow", hD: "follow" });
   });
@@ -91,8 +110,13 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("per-holder banks list every bank the holder's records live at", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
     const banks = (h: string) => [...d.holderTxs.find((p) => p.holder === h)!.banks].sort();
     expect(banks("hA")).toEqual(["bankA", "bankD"]);
     expect(banks("hB")).toEqual(["bankB", "bankD"]);
@@ -100,114 +124,119 @@ describe("buildDeal — multi-party branching/merging", () => {
     expect(banks("hD")).toEqual(["bankC", "bankD"]);
   });
 
-  test("slices record ULIDs per bank (visibility: a leg holds only its own)", () => {
+  test("slices record hashes per bank (visibility: a leg holds only its own)", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
-    const byBank = Object.fromEntries(d.legs.map((l) => [l.bank, l.recordUlids.length]));
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
+    const byBank = Object.fromEntries(d.legs.map((l) => [l.bank, l.recordHashes.length]));
     expect(byBank).toEqual({ bankA: 2, bankB: 2, bankC: 2, bankD: 4 });
   });
 
-  test("roles and predecessors break the cycle via the lead set", () => {
+  test("order follows first appearance of banks in transfers", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
-    const leg = (b: string) => d.legs.find((l) => l.bank === b)!;
-    expect(leg("bankA").role).toBe("lead");
-    expect(leg("bankB").role).toBe("lead");
-    expect(leg("bankC").role).toBe("follow");
-    expect(leg("bankD").role).toBe("follow");
-    expect(leg("bankA").predecessors).toEqual([]);
-    expect(leg("bankB").predecessors).toEqual([]);
-    expect(leg("bankC").predecessors.sort()).toEqual(["bankA", "bankB"]);
-    expect(leg("bankD").predecessors).toEqual(["bankC"]);
-  });
-
-  test("settle order is topological: leads first, then C, then D", () => {
-    const spec = demoDeal();
-    const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    const d = buildDeal(spec, bankUlids, { ulid });
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const d = buildDeal(spec, bankRecords, { ulid });
     expect(d.order).toEqual(["bankA", "bankB", "bankC", "bankD"]);
   });
 
-  test("echoes the deal ULID and is reproducible with a fixed ULID source", () => {
+  test("is reproducible with a fixed ULID source", () => {
     const spec = demoDeal();
     const ulidA = counterUlid();
-    const bankUlidsA = makeRecordUlids(spec, ulidA);
-    const a = buildDeal(spec, bankUlidsA, { ulid: ulidA });
+    const bankRecordsA = {
+      bankA: makeRecords(spec, ulidA, "bankA"),
+      bankB: makeRecords(spec, ulidA, "bankB"),
+      bankC: makeRecords(spec, ulidA, "bankC"),
+      bankD: makeRecords(spec, ulidA, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const a = buildDeal(spec, bankRecordsA, { ulid: ulidA });
 
     const ulidB = counterUlid();
-    const bankUlidsB = makeRecordUlids(spec, ulidB);
-    const b = buildDeal(spec, bankUlidsB, { ulid: ulidB });
+    const bankRecordsB = {
+      bankA: makeRecords(spec, ulidB, "bankA"),
+      bankB: makeRecords(spec, ulidB, "bankB"),
+      bankC: makeRecords(spec, ulidB, "bankC"),
+      bankD: makeRecords(spec, ulidB, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    const b = buildDeal(spec, bankRecordsB, { ulid: ulidB });
 
-    expect(a.deal).toBe(DEAL);
     const hashes = (d: typeof a) => d.holderTxs.map((h) => h.txHash);
     expect(hashes(a)).toEqual(hashes(b));
   });
 
-  test("rejects missing record ULIDs for a bank", () => {
+  test("rejects missing record bodies for a bank", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    delete (bankUlids as Record<string, string[]>).bankC;
-    expect(() => buildDeal(spec, bankUlids, { ulid })).toThrow(/missing record ULIDs for bank bankC/);
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    delete (bankRecords as Record<string, Record<string, unknown>[]>).bankC;
+    expect(() => buildDeal(spec, bankRecords, { ulid })).toThrow(/missing record bodies for bank bankC/);
   });
 
-  test("rejects wrong count of record ULIDs for a bank", () => {
+  test("rejects wrong count of record bodies for a bank", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankUlids = makeRecordUlids(spec, ulid);
-    bankUlids["bankD"] = bankUlids["bankD"].slice(0, 2); // only 2 instead of 4
-    expect(() => buildDeal(spec, bankUlids, { ulid })).toThrow(/expected 4 record ULIDs/);
+    const bankRecords = {
+      bankA: makeRecords(spec, ulid, "bankA"),
+      bankB: makeRecords(spec, ulid, "bankB"),
+      bankC: makeRecords(spec, ulid, "bankC"),
+      bankD: makeRecords(spec, ulid, "bankD"),
+    } as Record<string, Record<string, unknown>[]>;
+    bankRecords["bankD"] = bankRecords["bankD"]!.slice(0, 2); // only 2 instead of 4
+    expect(() => buildDeal(spec, bankRecords, { ulid })).toThrow(/expected 4 record bodies/);
   });
 });
 
 describe("buildDeal — bilateral degenerate case", () => {
-  test("two transfers across two banks, one lead, one Tx per holder", () => {
+  test("two transfers across two banks, one Tx per holder", () => {
     const spec: DealSpec = {
-      deal: DEAL,
       initiator: "alice",
-      leadBanks: ["bankAlice"],
       transfers: [
         { promise: "logo", issuerBank: "bankAlice", amount: 1, from: { holder: "alice", account: "a1" }, to: { holder: "bob", account: "b1" } },
         { promise: "hour", issuerBank: "bankBob", amount: 1, from: { holder: "bob", account: "b2" }, to: { holder: "alice", account: "a2" } },
       ],
     };
     const ulid = counterUlid();
-    const bankUlids: Record<string, string[]> = {
-      bankAlice: [ulid(), ulid()],
-      bankBob: [ulid(), ulid()],
+    const bankRecords = {
+      bankAlice: [
+        recordBody("debit", "bankAlice", ulid(), "a1", ulid(), 1),
+        recordBody("credit", "bankAlice", ulid(), "b1", "01UNUSED", 1),
+      ],
+      bankBob: [
+        recordBody("debit", "bankBob", ulid(), "b2", ulid(), 1),
+        recordBody("credit", "bankBob", ulid(), "a2", "01UNUSED", 1),
+      ],
     };
-    const d = buildDeal(spec, bankUlids, { ulid });
+    // Fix pair refs for a clean hash (bankAlice credit pairs with its debit, etc.)
+    bankRecords.bankAlice[1]!.pair = (bankRecords.bankAlice[0] as { ulid: string }).ulid;
+    bankRecords.bankBob[1]!.pair = (bankRecords.bankBob[0] as { ulid: string }).ulid;
+    bankRecords.bankAlice[0]!.pair = (bankRecords.bankAlice[1] as { ulid: string }).ulid;
+    bankRecords.bankBob[0]!.pair = (bankRecords.bankBob[1] as { ulid: string }).ulid;
+
+    const d = buildDeal(spec, bankRecords, { ulid });
     expect(d.order).toEqual(["bankAlice", "bankBob"]);
-    expect(d.legs.find((l) => l.bank === "bankBob")!.predecessors).toEqual(["bankAlice"]);
 
     const alice = d.holderTxs.find((h) => h.holder === "alice")!;
     const bob = d.holderTxs.find((h) => h.holder === "bob")!;
-    // ATx: debit of logo (Alice gives), credit of hour (Alice receives)
-    expect(alice.tx.records).toEqual([bankUlids["bankAlice"][0], bankUlids["bankBob"][1]]);
     expect(alice.role).toBe("lead");
-    // BTx: credit of logo (Bob receives), debit of hour (Bob gives)
-    expect(bob.tx.records).toEqual([bankUlids["bankAlice"][1], bankUlids["bankBob"][0]]);
     expect(bob.role).toBe("follow");
     expect([...alice.banks].sort()).toEqual(["bankAlice", "bankBob"]);
     expect([...bob.banks].sort()).toEqual(["bankAlice", "bankBob"]);
-  });
-});
-
-describe("topoSortBanks", () => {
-  test("throws when the lead set leaves a cycle", () => {
-    // A ring with no leads: A waits for C, C waits for B, B waits for A.
-    expect(() =>
-      topoSortBanks(["a", "b", "c"], { a: ["c"], b: ["a"], c: ["b"] }),
-    ).toThrow(/cycle/);
-  });
-
-  test("orders a simple chain", () => {
-    expect(topoSortBanks(["x", "y", "z"], { x: [], y: ["x"], z: ["y"] })).toEqual(["x", "y", "z"]);
   });
 });
 
@@ -217,50 +246,18 @@ describe("buildDeal — validation", () => {
     expect(() =>
       buildDeal(
         {
-          deal: DEAL,
           initiator: "stranger",
-          leadBanks: [],
           transfers: [
             { promise: "p1", issuerBank: "bankX", amount: 1, from: { holder: "x", account: "x1" }, to: { holder: "y", account: "y1" } },
           ],
         },
-        { bankX: [ulid(), ulid()] },
+        { bankX: [recordBody("debit", "bankX", ulid(), "x1", ulid(), 1), recordBody("credit", "bankX", ulid(), "y1", "01UNUSED", 1)] },
       ),
     ).toThrow(/initiator must be a holder/);
   });
 
-  test("rejects a missing deal ULID", () => {
-    const ulid = counterUlid();
-    expect(() =>
-      buildDeal(
-        {
-          deal: "",
-          initiator: "x",
-          leadBanks: [],
-          transfers: [
-            { promise: "p1", issuerBank: "bankX", amount: 1, from: { holder: "x", account: "x1" }, to: { holder: "y", account: "y1" } },
-          ],
-        },
-        { bankX: [ulid(), ulid()] },
-      ),
-    ).toThrow(/deal ULID required/);
-  });
-
-  test("rejects an unknown lead bank", () => {
-    const ulid = counterUlid();
-    expect(() =>
-      buildDeal(
-        {
-          deal: DEAL,
-          initiator: "x",
-          leadBanks: ["ghost"],
-          transfers: [
-            { promise: "p1", issuerBank: "bankX", amount: 1, from: { holder: "x", account: "x1" }, to: { holder: "y", account: "y1" } },
-          ],
-        },
-        { bankX: [ulid(), ulid()] },
-      ),
-    ).toThrow(/not an issuer bank/);
+  test("rejects empty transfers", () => {
+    expect(() => buildDeal({ initiator: "x", transfers: [] }, {})).toThrow(/at least one transfer/);
   });
 
   test("rejects a non-positive amount", () => {
@@ -268,14 +265,12 @@ describe("buildDeal — validation", () => {
     expect(() =>
       buildDeal(
         {
-          deal: DEAL,
           initiator: "x",
-          leadBanks: [],
           transfers: [
             { promise: "p1", issuerBank: "bankX", amount: 0, from: { holder: "x", account: "x1" }, to: { holder: "y", account: "y1" } },
           ],
         },
-        { bankX: [ulid(), ulid()] },
+        { bankX: [recordBody("debit", "bankX", ulid(), "x1", ulid(), 1), recordBody("credit", "bankX", ulid(), "y1", "01UNUSED", 1)] },
       ),
     ).toThrow(/amount must be positive/);
   });

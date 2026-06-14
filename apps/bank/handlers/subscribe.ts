@@ -27,7 +27,7 @@ export const subscribe: Handler = async (params, ctx) => {
     pubkey: string;
     records?: string[];
     hashes?: string[];
-    deals?: string[];
+    sessions?: string[];
     url: string;
     to?: string;
     until?: string;
@@ -44,7 +44,7 @@ export const subscribe: Handler = async (params, ctx) => {
     body: p.subscription,
   });
 
-  const watchKeys = [...(sub.records ?? []), ...(sub.hashes ?? []), ...(sub.deals ?? [])];
+  const watchKeys = [...(sub.records ?? []), ...(sub.hashes ?? []), ...(sub.sessions ?? [])];
   const until = sub.until ??
     new Date(Date.now() + DEFAULT_TTL_DAYS * 24 * 3600 * 1000).toISOString().slice(0, 10);
   await ctx.db.insertSubscription({

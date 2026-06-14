@@ -122,7 +122,7 @@ describe("deal token", () => {
         { type: "debit", pubkey, ulid: ULID_1, amount: 1, account: ACCOUNT_A, pair: ULID_2 },
         { type: "credit", pubkey, ulid: ULID_2, amount: 1, account: ACCOUNT_B, pair: ULID_1 },
       ],
-      banks: [{ pubkey, url: "https://barter.game/functions/v1/bank-alice/rpc" }],
+      banks: [{ pubkey, url: "https://barter.game/functions/v1/bank-alice/rpc", session: ULID_1 }],
       exp: Math.floor(Date.now() / 1000) + 3600,
     };
   }

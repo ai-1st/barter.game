@@ -1,4 +1,4 @@
-// mint_promise — mint IS the first ledger record pair, settled immediately.
+// mint_promise — mint IS the first record pair, settled immediately.
 //
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/mint.deno-test.ts
 
@@ -40,7 +40,7 @@ Deno.test("mint creates the ± record pair and settles immediately", async () =>
       promise_hash: string;
       debit_account_hash: string;
       credit_account_hash: string;
-      deal: string;
+      session: string;
       records: Array<Record<string, unknown>>;
     };
 
@@ -55,7 +55,7 @@ Deno.test("mint creates the ± record pair and settles immediately", async () =>
     eq(credit.pair, debit.ulid, "credit.pair");
     assert(debit.tx === undefined && credit.tx === undefined, "records must not carry a tx back-reference");
 
-    const leg = await ctx(tk.kv, bank, alice.pub).db.getLegState(res.deal);
+    const leg = await ctx(tk.kv, bank, alice.pub).db.getLegState(res.session);
     eq(leg?.state, "settled", "mint leg state");
   } finally {
     await closeTestKv(tk);
@@ -118,6 +118,29 @@ Deno.test("promise.integer rejects fractional mint amounts", async () => {
       assert(String(err).includes("integer"), `unexpected error: ${err}`);
     }
     assert(threw, "fractional mint of an integer promise must be rejected");
+  } finally {
+    await closeTestKv(tk);
+  }
+});
+
+Deno.test("mint issues settle + promise ack, no per-record ready", async () => {
+  const tk = await openTestKv();
+  try {
+    const bank = key(), alice = key();
+    const params = makeMintParams(bank, alice, { amount: 3 });
+    const res = await mintPromise(params, ctx(tk.kv, bank, alice.pub)) as {
+      session: string;
+      settle: Record<string, unknown>;
+      bank_attestation: Record<string, unknown>;
+    };
+
+    eq(res.settle.action, "settle", "mint signs settle");
+    eq(res.settle.session, res.session, "settle targets mint session");
+    eq(res.bank_attestation.action, "ack", "mint attests promise");
+
+    const sigs = await ctx(tk.kv, bank, alice.pub).db.listSignaturesByTarget({ session: res.session });
+    const readyCount = sigs.filter((s) => s.action === "ready").length;
+    eq(readyCount, 0, "mint must not issue per-record ready signatures");
   } finally {
     await closeTestKv(tk);
   }

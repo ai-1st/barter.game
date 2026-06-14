@@ -1,7 +1,7 @@
 // `barter accept "<deal-token>"` — follow-sign your view of a deal.
 //
 // The counterparty verifies the initiator's token, re-fetches the records
-// from each bank (a token can't lie about bank-minted records — get_deal is
+// from each bank (a token can't lie about bank-minted records — get_session is
 // the source of truth), then signs THEIR OWN Tx with action "follow" and
 // submits it to every bank in the token. That signature is both the
 // authorization for their records and the receipt confirmation. The banks
@@ -42,7 +42,7 @@ export async function runAccept(argv: string[]): Promise<number> {
 
   // Don't trust the token's record bodies — verify against each bank.
   for (const bank of token.banks) {
-    const view = (await call(profile, "get_deal", { deal: token.deal }, {
+    const view = (await call(profile, "get_session", { session: bank.session }, {
       bankUrl: bank.url,
       toBankPubkey: bank.pubkey,
     })) as { records: Array<Record<string, unknown>> };

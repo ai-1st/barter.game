@@ -22,18 +22,18 @@ Alice creates:
      name: "1 hour of consulting"
    }
    ```
-2. **Pocket** docs — two distinct Pockets, one for the issuer's negative-balance row and one for the issuer's positive-balance row:
+2. **Pocket** docs — two distinct Pockets, one for the issuer's negative-balance row and one for the issuer's positive-balance row. Pocket bodies stay on Alice's machine; banks see only the pocket hashes inside Account docs.
    ```ts
    { type: "pocket", pubkey: A.pub, ulid: <new>, name: "issuance" }
    { type: "pocket", pubkey: A.pub, ulid: <new>, name: "inventory" }
    ```
-3. **Account** docs:
+3. **Account** docs. Accounts are NOT signed.
    ```ts
    { type: "account", holder: A.pub, pocket: <issuance-pocket-hash>, promise: <promise-hash> }
    { type: "account", holder: A.pub, pocket: <inventory-pocket-hash>, promise: <promise-hash> }
    ```
 
-Alice signs the Promise and both Accounts (Pockets are typically presented alongside but not always signed separately; the bank stores them as supporting docs).
+Alice signs only the Promise doc. Account and Pocket docs are not signed.
 
 ## Step 2 — Alice calls `mint`
 
@@ -44,8 +44,8 @@ Alice signs the Promise and both Accounts (Pockets are typically presented along
   "method": "mint",
   "params": {
     "promise": <promise-doc>,
-    "pockets": [<pocket-1>, <pocket-2>],
-    "accounts": [<account-1>, <account-2>]
+    "accounts": [<account-1>, <account-2>],
+    "amount": 10
   },
   "pubkey": A.pub,
   "to": Abank.pub,
@@ -53,37 +53,38 @@ Alice signs the Promise and both Accounts (Pockets are typically presented along
 }
 ```
 
+`mint` is a single-bank, single-signer operation, so the bank settles it immediately. No `ready` or `hold` step is required.
+
 ## Step 3 — Abank validates and stores
 
 Abank checks:
 
 - `promise.pubkey == A.pub`.
 - `promise.bank == Abank.pub`.
-- Both Accounts reference `promise` and the two distinct Pockets.
-- Alice's signatures on Promise and Accounts are valid.
+- Both Accounts reference `promise` and use distinct Pocket hashes.
+- Alice's signature on the Promise is valid.
 
 Abank stores:
 
 - Promise doc.
-- Two Pocket docs.
 - Two Account docs.
+- (Pocket bodies are never stored by the bank.)
 
-Abank mints an initial debit/credit record pair under a fresh deal ULID and settles it immediately:
+Abank mints a debit/credit record pair under a fresh deal ULID for the requested `amount` and applies the deltas immediately:
 
-- `<issuance-account>`: `0` (will go negative when Alice transfers consulting hours out).
-- `<inventory-account>`: `0` (will go positive when Alice receives consulting hours back, or can be pre-credited by the bank as the initial positive-balance row).
+- `<issuance-account>`: `-10` (the negative-balance issuance row).
+- `<inventory-account>`: `+10` (the positive-balance inventory row).
 
-In the typical minting semantics, the Promise comes into existence with a net-zero position across the two issuer accounts: one negative-balance row and one positive-balance row, both starting at `0`. The issuer creates value by transferring from the negative-balance row to a holder.
+The Promise now exists with a net-zero position across the two issuer accounts: `-10 + 10 = 0`. The issuer creates value by transferring from the negative-balance row to a holder.
 
 ## Step 4 — Abank issues attestation signatures
 
 Abank creates and signs:
 
-- A `Signature` over the Promise hash with `action="ack"` (or equivalent attestation).
-- A `Signature` over each Account hash with `action="ack"`.
-- Per-record `ready` and deal-level `settle` Signatures for the initial zero-balance record pair.
+- A `Signature` over the Promise hash with `action="ack"`.
+- A deal-level `Signature` with `action="settle"` for the freshly created leg.
 
-Abank returns these signatures and the initial record pair to Alice.
+Abank returns these signatures and the record pair to Alice.
 
 ## Result
 
@@ -91,7 +92,7 @@ Alice now has:
 
 - A published Promise at `<promise-hash>`.
 - Two Accounts at Abank for that Promise.
-- Abank attestations she can show to counterparties as proof that Abank recognizes the Promise and Accounts.
-- An initial settled record pair proving the Promise exists with a zero net position.
+- An Abank `ack` attestation for the Promise.
+- A settled debit/credit record pair showing the Promise's initial position.
 
 She can now receive consulting-hour payments into the inventory account or transfer consulting hours out of the issuance account.

@@ -1,11 +1,11 @@
 // create_records — initiating client → a single participating bank.
 //
-// The bank is the sole creator of ledger records. The client sends the deal
-// ULID (its grouping key), this bank's slice of the settle topology
-// (role / predecessors / banks), the record requests, and optionally any
-// supporting docs (Promise copies, Account docs — accounts are implicit).
-// The bank validates, assigns record ULIDs, creates the debit/credit pair
-// with mandatory `pair` cross-references, stores the leg topology, attaches
+// The bank is the sole creator of records. The client sends this bank's slice
+// of the settle topology (role / predecessors / banks), the record requests,
+// an opaque per-bank session ULID for grouping this bank's records, and
+// optionally any supporting docs (Promise copies, Account docs — accounts are
+// implicit). The bank validates, assigns record ULIDs, creates the debit/credit
+// pair with mandatory `pair` cross-references, stores the leg topology, attaches
 // optional `record_subscriptions` for fan-out, and returns the record bodies.
 //
 // A request is either:
@@ -13,7 +13,7 @@
 //   - { type: "offer_match", offer_hash, amount, account_hash }
 //
 // role/predecessors/banks are client-computed orchestration hints, not
-// authority: a lying client can only fragment or stall its own deal. The
+// authority: a lying client can only fragment or stall its own session. The
 // money gates are the holder Tx signatures and per-record ready/hold/settle
 // checked at submit_tx and in the advance engine.
 
@@ -37,7 +37,7 @@ type OfferMatchRequest = {
 };
 
 type CreateRecordsParams = {
-  deal: string;
+  session: string;
   role: "lead" | "follow";
   predecessors: string[];
   banks: string[];
@@ -50,8 +50,8 @@ const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export const createRecords: Handler = async (params, ctx) => {
   const p = params as CreateRecordsParams;
-  if (typeof p.deal !== "string" || !ULID_RE.test(p.deal)) {
-    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.deal must be a ULID");
+  if (typeof p.session !== "string" || !ULID_RE.test(p.session)) {
+    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.session must be a ULID");
   }
   if (p.role !== "lead" && p.role !== "follow") {
     throw new RpcError(RpcErrors.INVALID_PARAMS, "params.role must be 'lead' or 'follow'");
@@ -66,6 +66,15 @@ export const createRecords: Handler = async (params, ctx) => {
   }
   if (!Array.isArray(p.requests) || p.requests.length === 0) {
     throw new RpcError(RpcErrors.INVALID_PARAMS, "params.requests must be a non-empty array");
+  }
+
+  // Idempotency: a session's records at this bank are created exactly once.
+  // Replaying create_records with a fresh signed envelope must not mint a
+  // duplicate set (that would be a double-spend vector).
+  const existingLeg = await ctx.db.getLegState(p.session);
+  if (existingLeg) {
+    const existing = await ctx.db.getRecordsBySession(p.session);
+    return { session: p.session, records: existing.map((r) => r.body), already_created: true };
   }
 
   // Implicit accounts: store any presented Promise/Account docs first so
@@ -113,7 +122,7 @@ export const createRecords: Handler = async (params, ctx) => {
         throw new RpcError(RpcErrors.VALIDATION, "promise.integer requires an integer amount");
       }
 
-      created.push(...await mintRecordPair(ctx.bankPubkey, ctx.db, p.deal, tr.debit_account_hash, tr.credit_account_hash, tr.amount));
+      created.push(...await mintRecordPair(ctx.bankPubkey, ctx.db, p.session, tr.debit_account_hash, tr.credit_account_hash, tr.amount));
     } else {
       // offer_match
       const om = req as OfferMatchRequest;
@@ -203,12 +212,12 @@ export const createRecords: Handler = async (params, ctx) => {
         throw new RpcError(RpcErrors.VALIDATION, "offer has neither debit nor credit side");
       }
 
-      created.push(...await mintRecordPair(ctx.bankPubkey, ctx.db, p.deal, debitAccountHash, creditAccountHash, amount));
+      created.push(...await mintRecordPair(ctx.bankPubkey, ctx.db, p.session, debitAccountHash, creditAccountHash, amount));
     }
   }
 
   await ctx.db.upsertLeg({
-    dealUlid: p.deal,
+    session: p.session,
     state: "created",
     role: p.role,
     predecessors: p.predecessors,
@@ -233,13 +242,13 @@ export const createRecords: Handler = async (params, ctx) => {
     }
   }
 
-  return { deal: p.deal, records: created };
+  return { session: p.session, records: created };
 };
 
 async function mintRecordPair(
   bankPubkey: string,
-  db: { insertLedgerRecord: (input: { ulid: string; type: "credit" | "debit"; account: string; amount: number; pairUlid: string; dealUlid: string; body: Record<string, unknown> }) => Promise<void> },
-  dealUlid: string,
+  db: { insertRecord: (input: { ulid: string; type: "credit" | "debit"; account: string; amount: number; pairUlid: string; session: string; body: Record<string, unknown> }) => Promise<void> },
+  session: string,
   debitAccountHash: string,
   creditAccountHash: string,
   amount: number,
@@ -262,22 +271,22 @@ async function mintRecordPair(
     account: creditAccountHash,
     pair: debitUlid,
   };
-  await db.insertLedgerRecord({
+  await db.insertRecord({
     ulid: debitUlid,
     type: "debit",
     account: debitAccountHash,
     amount,
     pairUlid: creditUlid,
-    dealUlid,
+    session,
     body: debit,
   });
-  await db.insertLedgerRecord({
+  await db.insertRecord({
     ulid: creditUlid,
     type: "credit",
     account: creditAccountHash,
     amount,
     pairUlid: debitUlid,
-    dealUlid,
+    session,
     body: credit,
   });
   return [debit, credit];

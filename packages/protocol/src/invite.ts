@@ -19,7 +19,7 @@
 
 import { base64urlnopad } from "@scure/base";
 import { signDoc, verifyDoc, type Base58PubKey, type Base58Signature } from "./crypto.ts";
-import type { LedgerRecord, Tx, ULID } from "./schemas.ts";
+import type { RecordDoc, Tx, ULID } from "./schemas.ts";
 
 export type InviteLeg = {
   promise: string; // base58 promise hash
@@ -169,6 +169,8 @@ export function isInviteExpired(invite: { exp: number }, nowSeconds = Math.floor
 export type DealTokenBank = {
   pubkey: Base58PubKey;
   url: string;
+  /** Per-bank session ULID used for get_session / reject_session. */
+  session: ULID;
 };
 
 export type DealToken = {
@@ -179,7 +181,7 @@ export type DealToken = {
   /** The recipient holder's unsigned Tx body (tx.pubkey = the recipient). */
   tx: Tx;
   /** Bodies of the records referenced by tx.records, for offline review. */
-  records: LedgerRecord[];
+  records: RecordDoc[];
   /** Banks owning those records — where to submit the follow-signed Tx. */
   banks: DealTokenBank[];
   exp: number;

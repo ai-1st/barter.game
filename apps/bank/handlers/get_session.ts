@@ -1,27 +1,27 @@
-// get_deal — read-only view of a deal at this bank.
+// get_session — read-only view of a session at this bank.
 //
 // Returns the leg state, this bank's record bodies, and every signature
-// anchored to the deal or its records. Used by:
+// anchored to the session or its records. Used by:
 //   - a follow party verifying a deal token against the bank before signing
-//   - clients watching deal progress (poll instead of / besides push)
+//   - clients watching session progress (poll instead of / besides push)
 //   - a relaying client collecting signatures to carry to another bank
 
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
 
-type GetDealParams = { deal: string };
+type GetSessionParams = { session: string };
 
-export const getDeal: Handler = async (params, ctx) => {
-  const p = params as GetDealParams;
-  if (typeof p.deal !== "string") {
-    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.deal required");
+export const getSession: Handler = async (params, ctx) => {
+  const p = params as GetSessionParams;
+  if (typeof p.session !== "string") {
+    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.session required");
   }
 
-  const leg = await ctx.db.getLegState(p.deal);
+  const leg = await ctx.db.getLegState(p.session);
   if (!leg) {
-    throw new RpcError(RpcErrors.UNKNOWN_DOC, `deal ${p.deal} not known to this bank`);
+    throw new RpcError(RpcErrors.UNKNOWN_DOC, `session ${p.session} not known to this bank`);
   }
 
-  const recordRows = await ctx.db.getLedgerRecordsByDeal(p.deal);
+  const recordRows = await ctx.db.getRecordsBySession(p.session);
   const records = recordRows.map((r) => r.body);
 
   const signatures: Array<Record<string, unknown>> = [];
@@ -35,13 +35,13 @@ export const getDeal: Handler = async (params, ctx) => {
       }
     }
   };
-  collect(await ctx.db.listSignaturesByTarget({ deal: p.deal }));
+  collect(await ctx.db.listSignaturesByTarget({ session: p.session }));
   for (const r of recordRows) {
     collect(await ctx.db.listSignaturesByTarget({ record: r.ulid }));
   }
 
   return {
-    deal: p.deal,
+    session: p.session,
     state: leg.state,
     role: leg.role,
     predecessors: leg.predecessors,

@@ -13,12 +13,12 @@ import { createRecords } from "./handlers/create_records.ts";
 import { submitTx } from "./handlers/submit_tx.ts";
 import { subscribe } from "./handlers/subscribe.ts";
 import { notifySignatures } from "./handlers/notify_signatures.ts";
-import { rejectDeal } from "./handlers/reject_deal.ts";
-import { getDeal } from "./handlers/get_deal.ts";
+import { rejectSession } from "./handlers/reject_session.ts";
+import { getSession } from "./handlers/get_session.ts";
 import { getAccountBalance, getPromise, listAccounts } from "./handlers/get.ts";
 
 export const v1Registry: Registry = {
-  // issuance — mint IS the first ledger record pair, settled immediately
+  // issuance — mint IS the first record pair, settled immediately
   mint: mintPromise,
   // trade path (wave 1 — direct approval)
   create_records: createRecords,
@@ -27,9 +27,9 @@ export const v1Registry: Registry = {
   subscribe: subscribe,
   notify_signatures: notifySignatures,
   // cancellation
-  reject_deal: rejectDeal,
+  reject_session: rejectSession,
   // read-only
-  get_deal: getDeal,
+  get_session: getSession,
   get_promise: getPromise,
   get_account_balance: getAccountBalance,
   list_accounts: listAccounts,

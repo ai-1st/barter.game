@@ -1,19 +1,19 @@
 // mint_promise — issuer → issuing bank.
 //
-// Minting IS the first ledger record pair. The issuer presents:
+// Minting IS the first record pair. The issuer presents:
 //   - the Promise doc (signed request envelope claims authorship)
 //   - two Account docs on two DISTINCT Pocket hashes: the issue account
 //     (goes negative) and the holding account (goes positive)
 //   - the amount to mint
 //
 // The bank stores the docs, creates the debit/credit pair under a fresh
-// deal ULID, and settles immediately — a mint has a single signer and a
-// single bank, so the signed envelope is the issuer's authorization and
+// per-bank session ULID, and settles immediately — a mint has a single signer
+// and a single bank, so the signed envelope is the issuer's authorization and
 // there is zero counterparty risk. No special mint balance logic: the same
 // mechanism that moves value in trades creates it here.
 //
-// Protocol action names: per-record verdict is `ready`; Promise attestation
-// is `ack`.
+// Protocol action names: the mint session settles immediately, so the bank
+// signs `{session, action: "settle"}` and `{hash: promiseHash, action: "ack"}`.
 
 import { hashDoc, newUlid, signDoc, validateAccount, validatePromise } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
@@ -95,8 +95,8 @@ export const mintPromise: Handler = async (params, ctx) => {
     });
   }
 
-  // The mint record pair — a self-contained mini-deal.
-  const deal = newUlid();
+  // The mint record pair — a self-contained mini-session.
+  const session = newUlid();
   const debitUlid = newUlid();
   const creditUlid = newUlid();
   const debit: Record<string, unknown> = {
@@ -115,22 +115,22 @@ export const mintPromise: Handler = async (params, ctx) => {
     account: creditAccountHash,
     pair: debitUlid,
   };
-  await ctx.db.insertLedgerRecord({
+  await ctx.db.insertRecord({
     ulid: debitUlid,
     type: "debit",
     account: debitAccountHash,
     amount: p.amount,
     pairUlid: creditUlid,
-    dealUlid: deal,
+    session,
     body: debit,
   });
-  await ctx.db.insertLedgerRecord({
+  await ctx.db.insertRecord({
     ulid: creditUlid,
     type: "credit",
     account: creditAccountHash,
     amount: p.amount,
     pairUlid: debitUlid,
-    dealUlid: deal,
+    session,
     body: credit,
   });
 
@@ -146,21 +146,19 @@ export const mintPromise: Handler = async (params, ctx) => {
     return body;
   };
 
-  // Per-record ready, the mint-deal settle, and the Promise ack.
-  for (const ulid of [debitUlid, creditUlid]) {
-    await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), record: ulid, action: "ready" });
-  }
-  const settle = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), deal, action: "settle" });
+  // The mint session settles immediately (single bank, single signer), so the
+  // bank signs the settle and the Promise ack. No per-record ready/hold.
+  const settle = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), session, action: "settle" });
   const attestation = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), hash: promiseHash, action: "ack" });
 
-  await ctx.db.upsertLeg({ dealUlid: deal, state: "settled", role: "lead", predecessors: [], banks: [ctx.bankPubkey] });
+  await ctx.db.upsertLeg({ session, state: "settled", role: "lead", predecessors: [], banks: [ctx.bankPubkey] });
   await fanoutSignatures(ctx, signatures);
 
   return {
     promise_hash: promiseHash,
     debit_account_hash: debitAccountHash,
     credit_account_hash: creditAccountHash,
-    deal,
+    session,
     records: [debit, credit],
     settle,
     bank_attestation: attestation,
