@@ -3,6 +3,7 @@ import {
   hashPromise,
   validateAccount,
   validateDoc,
+  validateOffer,
   validateOrder,
   validatePocket,
   validatePromise,
@@ -63,7 +64,18 @@ describe("Pocket / Account validators", () => {
     ).toThrow();
   });
 
-  test("account needs pocket + promise hashes", () => {
+  test("account needs holder + pocket + promise hashes", () => {
+    expect(() =>
+      validateAccount({
+        type: "account",
+        holder: PUBKEY,
+        pocket: HASH,
+        promise: HASH,
+      }),
+    ).not.toThrow();
+  });
+
+  test("account rejects old BaseDoc fields", () => {
     expect(() =>
       validateAccount({
         type: "account",
@@ -72,7 +84,7 @@ describe("Pocket / Account validators", () => {
         pocket: HASH,
         promise: HASH,
       }),
-    ).not.toThrow();
+    ).toThrow(/pubkey/);
   });
 });
 
@@ -134,6 +146,18 @@ describe("Tx + Signature validators", () => {
     ).toThrow(/ULID/);
   });
 
+  test("tx accepts optional order or offer hash, but not both", () => {
+    expect(() =>
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], order: HASH }),
+    ).not.toThrow();
+    expect(() =>
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], offer: HASH }),
+    ).not.toThrow();
+    expect(() =>
+      validateTx({ type: "tx", pubkey: PUBKEY, ulid: ULID, records: [ULID], order: HASH, offer: HASH }),
+    ).toThrow(/at most one/);
+  });
+
   test("signature accepts known actions including 'timeout'", () => {
     expect(() =>
       validateSignature({
@@ -149,7 +173,7 @@ describe("Tx + Signature validators", () => {
   test("signature accepts per-record and per-deal targets", () => {
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: ULID,
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", record: ULID,
       }),
     ).not.toThrow();
     expect(() =>
@@ -162,20 +186,25 @@ describe("Tx + Signature validators", () => {
   test("signature with action requires exactly one of hash|record|deal", () => {
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve",
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready",
       }),
     ).toThrow(/exactly one/);
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", hash: HASH, record: ULID,
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", hash: HASH, record: ULID,
       }),
     ).toThrow(/exactly one/);
   });
 
-  test("signature rejects 'ack' (removed) and unknown actions", () => {
+  test("signature accepts 'ack' and rejects removed 'approve'", () => {
     expect(() =>
       validateSignature({
         type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ack", hash: HASH,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateSignature({
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: ULID,
       }),
     ).toThrow();
     expect(() =>
@@ -191,7 +220,7 @@ describe("Tx + Signature validators", () => {
   test("signature rejects a hash where record/deal ULID is expected", () => {
     expect(() =>
       validateSignature({
-        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "approve", record: HASH,
+        type: "signature", pubkey: PUBKEY, ulid: ULID, action: "ready", record: HASH,
       }),
     ).toThrow(/ULID/);
   });
@@ -288,6 +317,43 @@ describe("Order validator", () => {
 
   test("rejects invalid approvers", () => {
     expect(() => validateOrder({ ...valid, approvers: ["0bad"] })).toThrow();
+  });
+});
+
+describe("Offer validator", () => {
+  const valid = {
+    type: "offer" as const,
+    pubkey: PUBKEY,
+    ulid: ULID,
+    order: HASH,
+    rate: 1.5,
+    lead: true,
+  };
+
+  test("accepts a minimal valid offer", () => {
+    expect(() => validateOffer(valid)).not.toThrow();
+  });
+
+  test("accepts debit/credit sides", () => {
+    expect(() =>
+      validateOffer({
+        ...valid,
+        debit: { promise: HASH, min: 0.1, max: 10 },
+        credit: { promise: HASH, min: 0.1, max: 10 },
+      }),
+    ).not.toThrow();
+  });
+
+  test("rejects missing order hash", () => {
+    expect(() => validateOffer({ ...valid, order: "" })).toThrow();
+  });
+
+  test("rejects non-positive rate", () => {
+    expect(() => validateOffer({ ...valid, rate: 0 })).toThrow();
+  });
+
+  test("rejects invalid side shape", () => {
+    expect(() => validateOffer({ ...valid, debit: { promise: HASH, min: -1, max: 0 } })).toThrow();
   });
 });
 

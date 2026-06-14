@@ -60,8 +60,7 @@ export function createLocalAccount(
   const pocketHash = saveLocalDoc(pocket);
   const account: Record<string, unknown> = {
     type: "account",
-    pubkey: profile.pubkey,
-    ulid: newUlid(),
+    holder: profile.pubkey,
     pocket: pocketHash,
     promise: promiseHash,
   };

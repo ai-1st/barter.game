@@ -28,13 +28,13 @@ This is the most dangerous piece to get wrong. If your canonicalizer produces di
 A bank is an ed25519 keypair. The private key must be:
 - Loaded at startup.
 - Never exposed to clients.
-- Used to sign all RPC responses and `<bank-url>/barter-bank.json`.
+- Used to sign all RPC responses and `/<name>/barter-bank.json`.
 
 The pubkey is the bank's identity. Every RPC envelope has a `to` field that must match this pubkey; reject if it doesn't.
 
 ## 4. Build the RPC envelope
 
-All requests are `POST /rpc` with this shape:
+All requests are `POST /<name>/rpc` with this shape:
 
 ```json
 {
@@ -63,7 +63,7 @@ One rule that applies everywhere: there is no `open_account`. Accounts are **imp
 
 Then implement the trade path in order:
 
-### `mint_promise`
+### `mint`
 - Validate: the Promise references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Promise, and sit on **distinct Pocket hashes**.
 - The mint is the first ledger record pair: a debit on the issue account (goes negative) and a credit on the holding account (goes positive). Set `pair` on each record.
 - Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Promise hash.
@@ -111,7 +111,7 @@ When the advance engine acquires holds, check for another active hold on the sam
 
 ## 7. Expose discovery
 
-Implement `GET <bank-url>/barter-bank.json`:
+Implement `GET /<name>/barter-bank.json`:
 
 ```json
 {
@@ -124,10 +124,21 @@ Implement `GET <bank-url>/barter-bank.json`:
 
 Sign this response with your bank key so clients can verify it.
 
-## 8. Write a client and test end-to-end
+## 8. Add an address directory (optional but recommended)
+
+The reference server exposes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/<name>/address/<pubkey>` | Look up a stored Address doc |
+| `POST` | `/<name>/address` | Submit or update an Address doc |
+
+Address docs map a pubkey to a human-readable name and a push-receipt URL. They live outside RPC so the mapping itself is not part of a signed RPC envelope.
+
+## 9. Write a client and test end-to-end
 
 You need a client that can:
-1. Mint (`mint_promise`: Promise + two Accounts on distinct Pocket hashes).
+1. Mint (`mint`: Promise + two Accounts on distinct Pocket hashes).
 2. Produce and consume `barter://` invite strings.
 3. Initiate a trade: call `create_records` on each bank, build one Tx per holder, sign yours as `lead`, `submit_tx`, register Subscriptions, and print a `barterdeal:` token per counterparty.
 4. Accept: verify a deal token against the banks via `get_deal`, sign your Tx as `follow`, `submit_tx`.
@@ -135,7 +146,7 @@ You need a client that can:
 
 Test against the reference banks: mint → invite → trade → accept → status. If your client can trade with `bank-alice` and `bank-bob`, your implementation is interoperable.
 
-## 9. Production considerations
+## 10. Production considerations
 
 - **Backup your bank private key.** Lose it and every Promise issued by that bank becomes unverifiable.
 - **Rate-limit your RPC endpoint.** Signed RPCs are cheap to verify but expensive to handle.
@@ -150,10 +161,12 @@ Test against the reference banks: mint → invite → trade → accept → statu
 | Crypto primitives | `packages/protocol/src/crypto.ts` |
 | Doc schemas + validators | `packages/protocol/src/schemas.ts` |
 | Invite format | `packages/protocol/src/invite.ts` |
-| RPC envelope handler | `supabase/functions/_shared/bank/rpc.ts` |
-| Per-method handlers | `supabase/functions/_shared/bank/handlers/*.ts` |
-| Database queries | `supabase/functions/_shared/bank/db.ts` |
-| Bank bootstrap | `supabase/functions/_shared/bank/server.ts` |
-| Method registry | `supabase/functions/_shared/bank/registry.ts` |
+| Deno Deploy entrypoint | `apps/bank/main.ts` |
+| Env var key loader | `apps/bank/env.ts` |
+| RPC envelope handler | `apps/bank/rpc.ts` |
+| Per-method handlers | `apps/bank/handlers/*.ts` |
+| Deno KV database layer | `apps/bank/db.ts` |
+| Bank method registry | `apps/bank/registry.ts` |
+| Advance engine | `apps/bank/advance.ts` |
+| Signature fan-out | `apps/bank/subscriptions.ts` |
 | CLI client wrapper | `apps/cli/src/client.ts` |
-| Schema migrations | `supabase/migrations/*.sql` |

@@ -23,7 +23,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { newUlid, type DealSpec, type TransferSpec } from "../../../../packages/protocol/src/index.ts";
+import { hashDoc, newUlid, type DealSpec, type TransferSpec } from "../../../../packages/protocol/src/index.ts";
 import { listLocalDocs } from "../docstore.ts";
 import { loadProfile } from "../profile.ts";
 import { createRecordsAndLead, makeDealTokens, type BankMap } from "../orchestrate.ts";
@@ -79,7 +79,7 @@ export async function runDeal(argv: string[]): Promise<number> {
       const found = local.find((d) => d.hash === accountHash);
       if (!found) continue;
       if (!docsByBank[t.issuerBank]) docsByBank[t.issuerBank] = [];
-      if (!docsByBank[t.issuerBank].some((d) => d.ulid === found.body.ulid)) {
+      if (!docsByBank[t.issuerBank].some((d) => hashDoc(d) === found.hash)) {
         docsByBank[t.issuerBank].push(found.body);
       }
     }

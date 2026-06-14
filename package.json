@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "test": "bun --filter '@barter.game/protocol' test",
-    "test:deno": "deno test --allow-read --allow-env --node-modules-dir=auto",
+    "test:deno": "deno test --allow-read --allow-write --allow-env --allow-net",
     "test:all": "bun run test && bun run test:deno",
     "build": "bun --filter '*' build",
     "typecheck": "bun --filter '*' typecheck",

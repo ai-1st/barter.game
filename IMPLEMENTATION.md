@@ -2,7 +2,7 @@
 
 > **This document is NOT the protocol contract.** It describes how *this repository* implements barter.game v1. If you are building your own bank or client, read `PROTOCOL.md` first for the invariant rules you must follow, then read this file for inspiration, file maps, and lessons from our specific choices.
 >
-> You may change anything in this document for your own implementation. The protocol doesn't care if you use Postgres or SQLite, Bun or Rust, Edge Functions or a VPS. It cares that you enforce the invariants in `PROTOCOL.md` §9.
+> You may change anything in this document for your own implementation. The protocol doesn't care if you use Postgres or SQLite, Deno Deploy or a VPS. It cares that you enforce the invariants in `PROTOCOL.md` §9.
 
 ---
 
@@ -12,10 +12,11 @@ The v1 reference implementation consists of:
 
 - **`packages/protocol/`** — a TypeScript library of canonical JSON, crypto primitives, doc schemas, the deal builder, and the invite / deal-token codecs. Shared between the CLI and the server.
 - **`apps/cli/`** — the `barter` command-line client. Init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox.
-- **`supabase/functions/`** — Supabase Edge Functions that act as bank processes. One function per bank in the demo; the protocol supports arbitrary separation.
-- **`supabase/migrations/`** — Postgres schema. One database backs all demo banks; rows are scoped by `bank_pubkey`.
+- **`apps/bank/`** — the Deno Deploy bank server. One entrypoint serves one or more banks from a single Deno KV database; each bank is scoped by its pubkey.
 
-The demo runs four live banks (`bank-alice`, `bank-bob`, `bank-carol`, `bank-dave`) on a single Supabase project. Additional banks can be added by creating a new Edge Function and generating a keypair.
+The demo runs live banks on Deno Deploy. Additional banks can be added by setting another `BANK_<NAME>_PRIV_KEY` environment variable — no separate deploy is needed, because `apps/bank/main.ts` discovers and routes all configured banks at startup.
+
+The old Supabase/Postgres implementation is archived in `old/supabase/` for reference.
 
 ---
 
@@ -23,13 +24,13 @@ The demo runs four live banks (`bank-alice`, `bank-bob`, `bank-carol`, `bank-dav
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Server runtime | Deno (via Supabase Edge Functions) | Sandboxed, cold-start friendly, native TypeScript |
+| Server runtime | Deno (Deno Deploy) | Native TypeScript, edge-deployed, stateless with Deno KV |
 | Client runtime | Bun | Fast package install, native TypeScript runner |
 | Protocol library | TypeScript, runs under Bun, Deno, and browser | Cross-runtime parity is the load-bearing guarantee |
-| Database | Postgres (Supabase managed) | ACID, `NUMERIC` exact arithmetic, partial unique indexes |
+| Database | Deno KV | Single-table key-space per bank; atomic check-and-set operations |
 | Crypto | `@noble/ed25519`, `@noble/hashes`, `@scure/base` | Pure-JS, auditable, runs in all target environments |
 | Key storage (user) | `~/.barter/profile.json` on disk | v1 is CLI-first; web UI key storage is a v1.5 concern |
-| Key storage (bank) | Supabase Secrets (`BANK_<NAME>_PRIV_KEY`) | Injected as env var at Edge Function cold start |
+| Key storage (bank) | Deno Deploy env var (`BANK_<NAME>_PRIV_KEY`) | Injected at deploy time; never returned in RPC responses |
 
 > **You can change any of these.** The protocol only requires ed25519 signatures, SHA-256, and RFC 8785 canonical JSON. If your stack is Rust + SQLite + WASM, that is a perfectly valid v1 implementation as long as the wire format and invariants match.
 
@@ -43,7 +44,7 @@ This is the most reusable part of the reference implementation. It is dependency
 |---|---|
 | `src/canonical.ts` | Hand-rolled RFC 8785 canonicalizer. Guaranteed byte-identical across Bun, Node, Deno, and browser. |
 | `src/crypto.ts` | ed25519 sign/verify, SHA-256, base58 encode/decode. Thin wrappers around `@noble/*`. |
-| `src/schemas.ts` | Runtime validators for all doc types (incl. Subscription). Zod-like without the dependency — plain TypeScript predicates. |
+| `src/schemas.ts` | Runtime validators for all doc types (incl. Subscription, Address). Zod-like without the dependency — plain TypeScript predicates. |
 | `src/invite.ts` | Encode/decode `barter://` invite strings (with bundled Account bodies) and `barterdeal:` deal tokens — the initiator → follow-holder handoff. |
 | `src/deal.ts` | Deal builder: given transfer specs and bank-minted record ULIDs, assemble ONE Tx PER HOLDER (a disjoint exact cover of the records), compute hashes, lead/follow roles, and per-bank predecessors. |
 | `src/index.ts` | Re-exports. |
@@ -56,54 +57,61 @@ The cross-runtime parity test is the most important test in the repo. It canonic
 
 ## 4. Server architecture (banks)
 
-### 4.1 Supabase Edge Functions
+### 4.1 Deno Deploy entrypoint — `apps/bank/main.ts`
 
-Each bank is a Deno entrypoint in `supabase/functions/bank-<name>/index.ts`. At cold start it:
+`main.ts` is the single Deno Deploy entrypoint. At startup it:
 
-1. Loads its private key from `Deno.env.get("BANK_<NAME>_PRIV_KEY")`.
-2. Derives its pubkey and matches it against the `to` field of every incoming RPC envelope.
-3. Routes requests through the shared handler registry.
+1. Scans `Deno.env` for `BANK_<NAME>_PRIV_KEY` variables via `env.ts`.
+2. Derives each bank's pubkey from its private key.
+3. Opens a single Deno KV handle with `Deno.openKv()`.
+4. Routes incoming HTTP requests by bank name.
 
-Shared code lives in `supabase/functions/_shared/` and is synced from `packages/protocol/` via `scripts/sync-protocol.ts`:
+Routes per bank (where `<name>` is the lower-cased env var suffix, e.g. `alice`):
 
-```bash
-bun run scripts/sync-protocol.ts   # copies packages/protocol/src → _shared/protocol/
-```
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/<name>/barter-bank.json` | Bank discovery document: pubkey, canonical URL, name, protocol version |
+| `POST` | `/<name>/rpc` | JSON-RPC envelope endpoint |
+| `GET` | `/<name>/address/<pubkey>` | Look up an Address doc by pubkey |
+| `POST` | `/<name>/address` | Submit or update an Address doc |
 
-### 4.2 Multi-tenant database
+Because one process serves all configured banks, adding a bank is just setting another env var and redeploying — no new function, no new migration set.
 
-One Postgres database serves all banks in a deployment. Each bank-scoped table carries a `bank_pubkey TEXT NOT NULL` column. Every query filters on it. There is no Row-Level Security in v1 — the Edge Function is the trust boundary, and direct DB access is operator-only.
+### 4.2 Multi-tenant Deno KV
 
-This was chosen for operational simplicity (one project, one migration set, one backup). True federation would put each bank in its own Supabase project. The protocol supports either; this is a deployment choice.
+One Deno KV database serves all banks in a deployment. Every key is prefixed with the bank's pubkey (`[bankPubkey, …]`). The `BankDB` class in `db.ts` is instantiated per request with the target bank's pubkey, so every KV operation is automatically scoped. There is no shared cross-bank namespace; missing the bank prefix would be a bug.
+
+This was chosen for operational simplicity (one project, one KV, one deploy). True federation would put each bank in its own Deno Deploy project. The protocol supports either; this is a deployment choice.
 
 ### 4.3 Handler file map
 
 | File | Purpose |
 |---|---|
-| `_shared/bank/rpc.ts` | Envelope validation, signature check, replay-window claim, method dispatch |
-| `_shared/bank/registry.ts` | Method name → handler function map |
-| `_shared/bank/server.ts` | Bank bootstrap: load key, start HTTP listener, attach routing |
-| `_shared/bank/db.ts` | Postgres queries: doc insert, balance update, hold acquire/release, deal-leg state, subscriptions, received-signature lookups |
-| `_shared/bank/advance.ts` | The advance engine — `advanceDeal()` self-advances a leg through hold and settle (see §4.4) |
-| `_shared/bank/subscriptions.ts` | Signature fan-out: POST bank-signed `notify_signatures` envelopes to matching subscribers (fire-and-forget) |
-| `_shared/bank/peer.ts` | HTTP client for signed bank-to-bank calls |
-| `_shared/bank/handlers/intake.ts` | Shared doc intake — Promise/Account docs attached to any mutating call; accounts come into existence here (Pocket bodies are rejected) |
-| `_shared/bank/handlers/mint_promise.ts` | `mint_promise` — the mint as the first record pair on two distinct pockets, settled immediately |
-| `_shared/bank/handlers/create_records.ts` | `create_records` — bank mints debit/credit record pairs with ULIDs, stores its slice of the settle topology |
-| `_shared/bank/handlers/submit_tx.ts` | `submit_tx` — verify a holder's lead/follow Tx signature, issue per-record `approve`/`reject`, advance the leg |
-| `_shared/bank/handlers/subscribe.ts` | `subscribe` — store a Subscription doc + its watch keys |
-| `_shared/bank/handlers/notify_signatures.ts` | `notify_signatures` — accept pushed/relayed signatures (from anyone), verify, store, re-advance touched deals |
-| `_shared/bank/handlers/reject_deal.ts` | `reject_deal` — participant-initiated cancellation: release holds, mark `rejected`, fan out |
-| `_shared/bank/handlers/get_deal.ts` | `get_deal` — leg state + record bodies + deal signatures (token verification, polling, relay) |
-| `_shared/bank/handlers/get.ts` | `get_promise`, `get_account_balance`, `list_accounts` — read-only queries |
+| `env.ts` | Scan `BANK_<NAME>_PRIV_KEY` env vars and derive pubkeys |
+| `main.ts` | Deno.serve entrypoint, routing, KV open |
+| `rpc.ts` | Envelope validation, signature check, replay-window claim, method dispatch |
+| `registry.ts` | Method name → handler function map |
+| `db.ts` | Deno KV operations: doc insert, balance update, hold acquire/release, leg state, subscriptions, replay window, peer cache |
+| `advance.ts` | The advance engine — `advanceDeal()` self-advances a leg through hold and settle (see §4.4) |
+| `subscriptions.ts` | Signature fan-out: POST bank-signed `notify_signatures` envelopes to matching subscribers (fire-and-forget) |
+| `peer.ts` | HTTP client for signed bank-to-bank calls |
+| `handlers/intake.ts` | Shared doc intake — Promise/Account/Address docs attached to any mutating call; accounts come into existence here (Pocket bodies are rejected) |
+| `handlers/mint_promise.ts` | `mint` — the mint as the first record pair on two distinct pockets, settled immediately |
+| `handlers/create_records.ts` | `create_records` — bank mints debit/credit record pairs with ULIDs, stores its slice of the settle topology |
+| `handlers/submit_tx.ts` | `submit_tx` — verify a holder's lead/follow Tx signature, issue per-record `approve`/`reject`, advance the leg |
+| `handlers/subscribe.ts` | `subscribe` — store a Subscription doc + its watch keys |
+| `handlers/notify_signatures.ts` | `notify_signatures` — accept pushed/relayed signatures (from anyone), verify, store, re-advance touched deals |
+| `handlers/reject_deal.ts` | `reject_deal` — participant-initiated cancellation: release holds, mark `rejected`, fan out |
+| `handlers/get_deal.ts` | `get_deal` — leg state + record bodies + deal signatures (token verification, polling, relay) |
+| `handlers/get.ts` | `get_promise`, `get_account_balance`, `list_accounts`, address directory — read-only queries |
 
 Removed from the old model: `open_account` (accounts are implicit — `intake.ts`), `propose_leg` and `confirm_receipt` (both subsumed by the holder's own Tx signature in `submit_tx`), and `hold_leg` / `settle_leg` as client RPCs (that logic moved into the advance engine).
 
 ### 4.4 The advance engine — banks self-advance, event-driven
 
-There is no client `settle` command and no cron job (Supabase Edge Functions have no background workers). `advanceDeal(deal)` in `advance.ts` runs after every event that can unblock a leg — a `submit_tx` that completes approval, or a signature arriving via `notify_signatures` — and moves the leg as far as it can:
+There is no client `settle` command and no cron job. `advanceDeal(deal)` in `advance.ts` runs after every event that can unblock a leg — a `submit_tx` that completes approval, or a signature arriving via `notify_signatures` — and moves the leg as far as it can:
 
-1. **`approved` → `held`**: acquire holds on the owned debit accounts (keyed `(account, deal)`; a conflict backs off quietly and is retried on the next event), sign `{deal, action: "hold"}`, fan out.
+1. **`approved` → `held`**: acquire holds on the owned debit accounts (keyed by account hash; a conflict backs off quietly and is retried on the next event), sign `{deal, action: "hold"}`, fan out.
 2. **`held` → `settled`, lead leg**: settle once valid `hold` signatures from **every other bank in the deal** have been observed. The lead settles first, bearing the lead/follow risk.
 3. **`held` → `settled`, follow leg**: settle once verified `{deal, action: "settle"}` signatures from all predecessor banks are stored; their hashes go into this bank's settle `Signature.seen` — the verifiable proof chain.
 4. Settle applies the balance deltas for every owned record, releases the holds, signs `settle`, and fans out. Idempotent by state, never by replay.
@@ -114,14 +122,11 @@ A hold abandoned by a dead deal currently stays until `reject_deal` releases it;
 
 ### 4.5 Replay window implementation
 
-The replay window is stored in the `replay_window` table. The sweeper enforces:
+The replay window is stored under the key prefix `[bankPubkey, "replay", senderPubkey, id, toPubkey]`. `claimUlid` uses an atomic KV check-and-set; a failed claim returns `-32002`. The sweeper enforces:
 
-1. Per-sender LRU cap: keep the 100 most recent IDs.
-2. Idle TTL: drop anything older than 7 days.
+1. Idle TTL: drop anything older than 7 days.
 
-The "whichever set is larger" rule means a sender that sends 200 IDs in an hour keeps 100; a sender that sends 5 IDs over two weeks keeps all 5 (assuming they're within the 7-day window).
-
-These numbers are arbitrary and tuned for the demo. Your implementation may choose different caps.
+There is no explicit per-sender LRU cap in the Deno KV implementation — the TTL is the bounding mechanism. These numbers are arbitrary and tuned for the demo. Your implementation may choose different caps.
 
 ### 4.6 Subscription fan-out and client relay
 
@@ -172,19 +177,19 @@ Client-authored docs live in `~/.barter/docs/`, keyed by content hash (`apps/cli
 
 ## 6. Database schema (v1 reference)
 
-See `SCHEMA.md` for the full schema, table definitions, indexes, triggers, and invariants. A quick summary of the load-bearing choices:
+See `SCHEMA.md` for the full Deno KV key-space reference, value shapes, and atomic operations. A quick summary of the load-bearing choices:
 
 - `base58 TEXT` for all hashes, pubkeys, and signatures. No binary types — easier to debug, portable across languages.
-- `NUMERIC` for balances. Exact arithmetic; never floating point.
-- `TIMESTAMPTZ` for all timestamps.
-- `docs` table is append-only. Stores content-addressed docs (Promise, Account, Tx, Signature, Order, Subscription — never Pocket bodies). `ON CONFLICT DO NOTHING` makes retries safe.
-- `ledger_records` stores bank-minted records identified by ULID, not by content hash. `pair_ulid` (the peer record) and `deal_ulid` (the grouping key) are mandatory; `tx_ulid` is an internal binding column set at `submit_tx` — the doc body carries no Tx reference.
-- `accounts` is a materialized view of balance state, derivable from the doc stream but kept O(1) for queries. Rows appear lazily when an Account doc is first presented (no pending/acknowledged dance).
-- `deal_legs` holds per-bank leg state, keyed `(deal_ulid, bank_pubkey)`: role, predecessors, the full bank list (the lead needs it to await all holds), and state `created → approved → held → settled / rejected`. No bank sees the full graph.
-- `holds` is keyed by `(account_hash, deal_ulid)` with a partial unique index on `(account_hash, bank_pubkey) WHERE active` — the double-spend gate.
+- Balances stored as strings. Exact arithmetic; never floating point.
+- ISO 8601 strings for timestamps.
+- `docs` keys are append-only. Store content-addressed docs (Promise, Account, Tx, Signature, Order, Subscription, Address — never Pocket bodies). Idempotent inserts make retries safe.
+- `ledger_records` stores bank-minted records identified by ULID, not by content hash. `pair_ulid` (the peer record) and `deal_ulid` (the grouping key) are mandatory; `tx_ulid` is internal bookkeeping set at `submit_tx` — the doc body carries no Tx reference.
+- `accounts` is a materialized balance row per Account doc, created lazily on first intake.
+- `legs` holds per-bank leg state, keyed `(bankPubkey, "legs", dealUlid)`: role, predecessors, the full bank list (the lead needs it to await all holds), and state `created → approved → held → settled / rejected`. No bank sees the full graph.
+- `holds` is keyed by `(bankPubkey, "holds", accountHash)` — at most one active hold per account is enforced by atomic check-and-set on that single key.
 - `subscriptions` + `subscription_watches` back the signature fan-out: one watch row per record/hash/deal key.
-- `replay_window` is the replay-protection store.
-- `bank_peers` caches peer-bank URLs (pubkey → URL) for discovery; fan-out itself delivers to the URL named in the Subscription doc.
+- `replay` keys implement replay protection per `(sender, id, to)`.
+- `peers` caches peer-bank URLs (pubkey → URL) for discovery; fan-out itself delivers to the URL named in the Subscription doc.
 
 You may use any database that can enforce:
 1. At most one active hold per account.
@@ -199,16 +204,16 @@ SQLite with WAL mode, LevelDB with atomic batches, or an in-memory MVCC store wo
 
 | Decision | Our choice | Alternatives you might choose |
 |---|---|---|
-| Server platform | Supabase Edge Functions | VPS, Cloudflare Workers, Fly.io, Raspberry Pi in your closet |
-| Database | Supabase Postgres (multi-tenant) | SQLite, CockroachDB, DynamoDB, a custom WAL |
+| Server platform | Deno Deploy | VPS, Cloudflare Workers, Fly.io, Raspberry Pi in your closet |
+| Database | Deno KV (single-table, bank-prefixed) | SQLite, Postgres, CockroachDB, DynamoDB, a custom WAL |
 | Client | Bun CLI | Web UI, mobile app, Telegram bot, AI agent loop |
 | Key storage (user) | `~/.barter/profile.json` (plaintext) | Browser localStorage + Argon2id, hardware wallet, OS keychain |
-| Key storage (bank) | Supabase Secrets env var | HashiCorp Vault, AWS KMS, HSM, plaintext on disk (don't) |
+| Key storage (bank) | Deno Deploy env var | HashiCorp Vault, AWS KMS, HSM, plaintext on disk (don't) |
 | Signature delivery | Subscription push (fire-and-forget) + client relay (`barter nudge`) | WebSocket, SSE, message queue, gossip |
 | Deal watching | On-demand `get_deal` polling (`barter status`) | Push notification, email digest, long-polling |
-| Replay window | 100-ID LRU + 7-day TTL | Larger window, time-based only, in-memory Redis |
+| Replay window | 7-day TTL | Larger window, time-based only, in-memory Redis |
 | Migration policy | No in-place migrations after launch (wipe demo banks if schema changes) | Proper forward-compatible migrations, Blue/Green deploys |
-| Bank discovery | Hardcoded URL+pubkey in client config | Federated directory, on-chain registry, shared JSON file |
+| Bank discovery | Hardcoded URL+pubkey in client config, verified against `/<name>/barter-bank.json` | Federated directory, on-chain registry, shared JSON file |
 | Web UI | None in v1 | SPA, React, vanilla HTML, native app |
 | N-bank trades | Full N-party via `barter deal`; `barter trade` is a bilateral convenience | Same client logic, more transfers |
 
@@ -239,7 +244,8 @@ See `TODOS.md` for the v1.5+ roadmap.
 |---|---|---|
 | Protocol (Bun) | `bun run test` | Canonical JSON, crypto, schemas, invite/deal-token codecs, deal builder |
 | Deno suite | `bun run test:deno` | Everything Deno: the protocol golden vectors (cross-runtime parity) **plus** the full bank integration suite — `mint`, `direct_approval` (the bilateral walkthrough, reject paths, implicit accounts), `subscription` (fan-out, relay recovery, expiry), and `nparty` (four banks self-advance a branching deal to settled) |
-| End-to-end | `./scripts/demo.sh` | Four simulated users mint, initiate, accept, and watch a branching multi-bank deal settle across live banks |
+| End-to-end local | `./scripts/demo-local.sh` | Four simulated users mint, initiate, accept, and watch a branching multi-bank deal settle against a local Deno server |
+| End-to-end deployed | `./scripts/demo-deploy.sh` | Same demo against live Deno Deploy banks (set `BARTER_BANK_*_URL` env vars) |
 
 The Deno suite is load-bearing twice over: if Bun and Deno disagree on a canonical hash the protocol is broken, and the bank tests are the only automated check of the advance engine. Run it before every release.
 
@@ -247,33 +253,34 @@ The Deno suite is load-bearing twice over: if Bun and Deno disagree on a canonic
 
 ## 10. Running your own bank (quickstart)
 
-This is the v1 reference path. Adapt to your own infrastructure as needed.
+This is the v1 reference path on Deno Deploy. Adapt to your own infrastructure as needed.
 
 ```bash
 # 1. Clone the repo and install
 git clone https://github.com/ai-1st/barter.game.git && cd barter.game
 bun install
 
-# 2. Link a Supabase project
-supabase login
-supabase link --project-ref <your-project-ref>
-
-# 3. Apply migrations
-supabase db push
-
-# 4. Generate a bank private key and stash it as a project secret
+# 2. Generate a bank private key
 bun run scripts/genkey.ts | sed 's/^BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/key.env
-supabase secrets set --env-file /tmp/key.env
-rm /tmp/key.env
+#    (the file contains one line: BANK_ALICE_PRIV_KEY=<base58>)
 
-# 5. Deploy the function
-bun run scripts/sync-protocol.ts
-supabase functions deploy bank-alice --no-verify-jwt
+# 3. Create a Deno Deploy project and link it to this repo
+#    - Go to https://deno.com/deploy
+#    - Create a project; note its name for the next step
+#    - Connect the GitHub repository
 
-# 6. Hit it
-curl https://<your-ref>.supabase.co/functions/v1/bank-alice/
+# 4. Set repository variables and secrets in GitHub
+#    - Variable: DENO_DEPLOY_PROJECT = <your-project-name>
+#    - Secret:   BANK_ALICE_PRIV_KEY = <the base58 key from /tmp/key.env>
+#    You can serve more banks by adding BANK_BOB_PRIV_KEY, BANK_CAROL_PRIV_KEY, etc.
+
+# 5. Push to main (or trigger the workflow)
+#    .github/workflows/deploy.yml auto-deploys apps/bank/main.ts on every push to main.
+
+# 6. Verify it's live
+curl https://<your-project>.deno.dev/alice/barter-bank.json
 ```
 
 You now have a bank. Tell your friends about it. They run `barter init` against your URL and you're a tiny central bank in a federation of exactly however many people you've invited.
 
-> **Not using Supabase?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in PROTOCOL.md §9, (3) a way to expose `POST /rpc` and `GET /barter-bank.json` under the bank's canonical URL. The rest is up to you.
+> **Not using Deno Deploy?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in PROTOCOL.md §9, (3) a way to expose `POST /<name>/rpc`, `GET /<name>/barter-bank.json`, and the address directory endpoints under the bank's canonical URL. The rest is up to you.

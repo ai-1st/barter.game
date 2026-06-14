@@ -1,18 +1,26 @@
 {
   "compilerOptions": {
     "strict": true,
-    "lib": ["deno.ns", "deno.window", "ES2022", "DOM"]
+    "lib": ["deno.ns", "deno.unstable", "deno.window", "ES2022", "DOM"]
+  },
+  "unstable": ["kv"],
+  "imports": {
+    "@noble/ed25519": "npm:@noble/ed25519@^3.1.0",
+    "@noble/hashes/sha2.js": "npm:@noble/hashes@^2.2.0/sha2.js",
+    "@scure/base": "npm:@scure/base@^2.2.0",
+    "ulid": "npm:ulid"
   },
   "exclude": [
     "node_modules",
     "dist",
     "packages/*/node_modules",
-    "apps/*/node_modules"
+    "apps/*/node_modules",
+    "old"
   ],
   "test": {
     "include": [
       "packages/**/test-deno/*.deno-test.ts",
-      "supabase/functions/_shared/bank/test-deno/*.deno-test.ts"
+      "apps/bank/test-deno/*.deno-test.ts"
     ]
   }
 }

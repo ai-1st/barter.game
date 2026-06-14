@@ -519,7 +519,7 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `mint(promise, pockets[], accounts[])` | issuer → issuer bank | Validate that `promise` references this bank, that both Accounts belong to the issuer, reference the promise, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the docs, create the first debit/credit record pair under a fresh deal ULID, and **settle it immediately** — single signer, single bank, zero counterparty risk. Sign per-record `ready`, the deal `settle`, and Promise/Account attestations. |
+| `mint(promise, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `promise` references this bank, that both Accounts belong to the issuer, reference the promise, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the docs, create the first debit/credit record pair under a fresh deal ULID, and **settle it immediately** — single signer, single bank, zero counterparty risk. Sign per-record `ready`, the deal `settle`, and Promise/Account attestations. |
 | `submit_account(account, pocket?)` | holder → issuer bank | Store a holder-signed Account (and Pocket if supplied). There is no separate "open account" operation; this is it. |
 | `submit_order(order, accounts[], publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash and, if published, the Offer hash and bank `ack` signature. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
@@ -772,6 +772,6 @@ If you are building your own bank or client:
 
 1. Read this file cover to cover. Everything here is the contract.
 2. Read `MASTER-INPUT.md` — the canonical bilateral narrative, doc snippets included.
-3. See `IMPLEMENTATION.md` for how the reference team built it: Supabase, Edge Functions, Postgres, the CLI, and the specific file map.
+3. See `IMPLEMENTATION.md` for how the reference team built it: Deno Deploy, Deno KV, the CLI, and the specific file map.
 4. See `SCHEMA.md` for the v1 reference database schema — useful as a starting point, but you may use any storage that enforces the invariants in §8–§9.
 5. See `packages/protocol/src/` for the reference canonicalizer, crypto primitives, and schema validators. You may reuse this code directly (MIT) or reimplement in your language of choice.
