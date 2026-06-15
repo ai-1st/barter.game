@@ -98,7 +98,7 @@ Tx: BaseDoc & {
 }
 ```
 
-`Tx.pubkey` MUST be the owner of **all** accounts referenced by `records`. A Tx may carry at most one of `order` or `offer`; these are alternative authorization sources (see bank-rpc.md §2.1). If a `lead` Order/Offer is referenced, the holder signature on the Tx may be omitted and the bank executes on the Order/Offer alone. An "invoice" is an Order or Offer with `debit` omitted; a "cheque" is an Order or Offer with `credit` omitted.
+`Tx.pubkey` MUST be the owner of **all** accounts referenced by `records`. A Tx may carry at most one of `order` or `offer`; these are alternative authorization sources (see README.md §2.1). If a `lead` Order/Offer is referenced, the holder signature on the Tx may be omitted and the bank executes on the Order/Offer alone. An "invoice" is an Order or Offer with `debit` omitted; a "cheque" is an Order or Offer with `credit` omitted.
 
 `records` contains every record hash touching this holder in this deal. That may be a single transfer pair (debit + credit), a pass-through set (multiple debits or credits), or an arbitrary open graph of transfers across one or more banks. Cardinality is **open**.
 
@@ -151,7 +151,7 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 7. The resulting balance of the credit account does not exceed `O.credit_account_limit` (if set).
 8. If `O.lead` is `false`, the Records must be part of a Tx whose holder signature has `action="follow"`.
 
-If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the ready/hold/settle waves (bank-rpc.md §2.0). Matching may happen either because a holder signed a Tx that references the Order, or because a matchmaker called `create_records` with an `offer_match` request against a published Offer derived from the Order. Specifically:
+If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the ready/hold/settle waves (README.md §2.0). Matching may happen either because a holder signed a Tx that references the Order, or because a matchmaker called `create_records` with an `offer_match` request against a published Offer derived from the Order. Specifically:
 
 - During **ready**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit. If yes, the bank issues a `ready` signature on the matched **Records** on behalf of the Order; if no, the bank rejects.
 - During **hold**, the bank locks the debit amount as it would for a direct holder signature.
@@ -195,7 +195,7 @@ Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **inv
 
 ### 5.9 Subscription
 
-The initiating party's instruction to a bank: *push the Signature docs you create concerning these items to this URL.* This is how the initiator chooses the deal's delivery topology (bank-rpc.md §2.4).
+The initiating party's instruction to a bank: *push the Signature docs you create concerning these items to this URL.* This is how the initiator chooses the deal's delivery topology (README.md §2.4).
 
 ```ts
 Subscription: BaseDoc & {
@@ -209,7 +209,7 @@ Subscription: BaseDoc & {
 
 `pubkey` is the **creator** (who signs the request); `to` is the **delivery target** behind `url` — a peer bank or another party. At least one `hashes` list must be non-empty. When the bank creates a Signature whose `hash` matches a watch key, it POSTs a bank-signed `notify_signatures` JSON-RPC envelope (addressed `to` the target) to `url`.
 
-Fan-out is **fire-and-forget**: no retry, no delivery guarantee, and a failed push never fails the originating request. Client relay (bank-rpc.md §2.4) is the recovery path.
+Fan-out is **fire-and-forget**: no retry, no delivery guarantee, and a failed push never fails the originating request. Client relay (README.md §2.4) is the recovery path.
 
 > **Invariant:** The Subscription doc shape and the fire-and-forget semantics are protocol. Push timeout, SSRF hardening (https-only, no redirects), and per-subscriber caps are implementation details — but a bank MUST NOT let fan-out failures affect ledger state.
 
