@@ -69,10 +69,10 @@ A deal executes in three waves: **ready → hold → settle** sanctioned by the 
 
 If a bank sees both a direct Tx signature and a matching Order/Offer for the same Records, either one satisfies the ready gate. 
 
-**2. Hold** — once all records in a Tx are `ready`, lead banks proceed to holding the funds by issuing record-level `hold` Signatures and fanning them out. A bank holds own records of a Tx when:
+**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Tx have been approved. A bank holds its own records in a Tx when all of its own records in that Tx are `ready` and:
 
-- Tx is authorized as `lead`, **or** 
-- Tx is authorized as `follow` AND all credit records from other banks in this Tx already received `hold` signatures from their banks
+- the Tx is authorized as `lead`, **or**
+- the Tx is authorized as `follow` and every predecessor bank whose output this Tx depends on has already issued `hold` signatures for its own records.
 
 A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
