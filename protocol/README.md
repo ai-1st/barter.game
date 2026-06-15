@@ -81,7 +81,7 @@ A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
 The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Tx.
 
-The bank may call `reject` on individual records and invoke a cascading abortion of the whole deal.
+If a record cannot be held — because its debit is uncovered, the account is unknown, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
 
 **3. Settle** — settlement is an ordered cascade of record-level signatures, not a single atomic flip:
 
