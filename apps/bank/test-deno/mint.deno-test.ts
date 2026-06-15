@@ -40,8 +40,10 @@ Deno.test("mint creates the ± record pair and settles immediately", async () =>
       promise_hash: string;
       debit_account_hash: string;
       credit_account_hash: string;
-      session: string;
       records: Array<Record<string, unknown>>;
+      debit_hash: string;
+      credit_hash: string;
+      settle_signatures: Array<Record<string, unknown>>;
     };
 
     const debitBal = (await ctx(tk.kv, bank, alice.pub).db.getAccount(res.debit_account_hash))?.balance;
@@ -55,8 +57,8 @@ Deno.test("mint creates the ± record pair and settles immediately", async () =>
     eq(credit.pair, debit.ulid, "credit.pair");
     assert(debit.tx === undefined && credit.tx === undefined, "records must not carry a tx back-reference");
 
-    const leg = await ctx(tk.kv, bank, alice.pub).db.getLegState(res.session);
-    eq(leg?.state, "settled", "mint leg state");
+    eq(res.settle_signatures.length, 2, "mint signs settle on both records");
+    eq(res.settle_signatures[0].action, "settle", "settle action");
   } finally {
     await closeTestKv(tk);
   }
@@ -123,24 +125,25 @@ Deno.test("promise.integer rejects fractional mint amounts", async () => {
   }
 });
 
-Deno.test("mint issues settle + promise ack, no per-record ready", async () => {
+Deno.test("mint issues record-level settle signatures, no ready/hold", async () => {
   const tk = await openTestKv();
   try {
     const bank = key(), alice = key();
     const params = makeMintParams(bank, alice, { amount: 3 });
     const res = await mintPromise(params, ctx(tk.kv, bank, alice.pub)) as {
-      session: string;
-      settle: Record<string, unknown>;
-      bank_attestation: Record<string, unknown>;
+      debit_hash: string;
+      credit_hash: string;
+      settle_signatures: Array<Record<string, unknown>>;
     };
 
-    eq(res.settle.action, "settle", "mint signs settle");
-    eq(res.settle.session, res.session, "settle targets mint session");
-    eq(res.bank_attestation.action, "ack", "mint attests promise");
+    for (const hash of [res.debit_hash, res.credit_hash]) {
+      const row = await ctx(tk.kv, bank, alice.pub).db.getRecord(hash);
+      eq(row?.status, "settle", `record ${hash.slice(0, 8)} must be in settle prefix`);
+    }
 
-    const sigs = await ctx(tk.kv, bank, alice.pub).db.listSignaturesByTarget({ session: res.session });
-    const readyCount = sigs.filter((s) => s.action === "ready").length;
-    eq(readyCount, 0, "mint must not issue per-record ready signatures");
+    const actions = res.settle_signatures.map((s) => s.action);
+    eq(actions.filter((a) => a === "settle").length, 2, "two settle signatures");
+    eq(actions.filter((a) => a === "ready" || a === "hold").length, 0, "no ready/hold signatures");
   } finally {
     await closeTestKv(tk);
   }

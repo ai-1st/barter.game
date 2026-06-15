@@ -52,7 +52,7 @@ COMMANDS:
   nudge <deal-ulid>
       Relay signatures between banks by hand to un-stick a stalled deal.
 
-  subscribe --bank <url> --url <push-url> [--deal <ulid>]...
+  subscribe --bank <url> --url <push-url> --hash <h>...
       Register a standing signature fan-out at a bank.
 
   inbox [--bank <url>]

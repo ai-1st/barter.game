@@ -9,7 +9,6 @@
 
 import {
   isInviteExpired,
-  newUlid,
   parseInvite,
   verifyInvite,
   type DealSpec,
@@ -80,11 +79,8 @@ export async function runTrade(argv: string[]): Promise<number> {
   // My receiving account for the inviter's promise (implicit, authored now).
   const receiving = createLocalAccount(profile, iGet.promise, "main");
 
-  const deal = newUlid();
   const spec: DealSpec = {
-    deal,
     initiator: profile.pubkey,
-    leadBanks: [myBankPubkey],
     transfers: [
       {
         promise: iGive.promise, issuerBank: myBankPubkey, amount: iGive.amount,
@@ -117,7 +113,7 @@ export async function runTrade(argv: string[]): Promise<number> {
 
   let out =
     `trade initiated — records created, your Tx lead-signed on both banks\n` +
-    `  deal:        ${deal}\n` +
+    `  deal:        ${state.deal}\n` +
     `  lead bank:   ${myBankPubkey}\n` +
     `  state saved: ${path}\n\n` +
     `send the deal token to your counterparty; they run 'barter accept "<token>"':\n\n`;
@@ -126,8 +122,8 @@ export async function runTrade(argv: string[]): Promise<number> {
   }
   out +=
     `the banks settle on their own once everyone has signed.\n` +
-    `watch with:   barter status ${deal}\n` +
-    `if stalled:   barter nudge ${deal}\n`;
+    `watch with:   barter status ${state.deal}\n` +
+    `if stalled:   barter nudge ${state.deal}\n`;
   process.stdout.write(out);
   return 0;
 }

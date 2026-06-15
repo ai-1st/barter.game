@@ -5,6 +5,13 @@
 // Balances are stored as strings to avoid floating-point rounding. Atomic
 // operations are used for concurrency-sensitive paths: replay claims, hold
 // acquire/release, and balance settlement.
+//
+// v1 record model: records are content-addressed by hash and stored under a
+// status prefix: records:draft:<hash>, records:ready:<hash>,
+// records:hold:<hash>, records:settle:<hash>, records:reject:<hash>.
+// Draft records do not affect balances. A status change copies the body to the
+// new prefix and deletes the old prefix. Secondary indexes track records by
+// pair ULID and by account hash.
 
 import { newUlid } from "../../packages/protocol/src/crypto.ts";
 
@@ -25,23 +32,25 @@ export type AccountRow = {
   balance: string;
 };
 
+export type RecordStatus = "draft" | "ready" | "hold" | "settle" | "reject";
+
 export type RecordRow = {
-  ulid: string;
+  hash: string;
   bank_pubkey: string;
-  type: string;
+  status: RecordStatus;
+  type: "credit" | "debit";
   account: string;
   amount: string;
   pair_ulid: string;
-  session: string;
-  tx_ulid: string | null;
   body: Record<string, unknown>;
 };
 
-export type LegRow = {
-  state: string;
-  role: string | null;
-  predecessors: string[];
-  banks: string[];
+export type HoldRow = {
+  account_hash: string;
+  tx_hash: string;
+  record_hashes: string[];
+  amount: string;
+  active: boolean;
 };
 
 export type SubscriptionRow = {
@@ -137,75 +146,111 @@ export class BankDB {
     return out;
   }
 
-  // ── records: bank-minted, ULID-identified ───────────────────────────
+  // ── records: bank-minted, content-addressed by hash ───────────────────
 
-  async insertRecord(input: {
-    ulid: string;
-    type: "credit" | "debit";
-    account: string;
-    amount: number;
+  /** Store a freshly minted record pair as drafts. Returns the hashes. */
+  async insertRecordPair(input: {
     pairUlid: string;
-    session: string;
-    body: Record<string, unknown>;
-  }): Promise<void> {
+    debit: Record<string, unknown>;
+    credit: Record<string, unknown>;
+  }): Promise<{ debitHash: string; creditHash: string }> {
+    const debitHash = await this.insertRecord(input.debit, "draft", input.pairUlid);
+    const creditHash = await this.insertRecord(input.credit, "draft", input.pairUlid);
+    return { debitHash, creditHash };
+  }
+
+  /** Store a record body under a status prefix and index it by pair/account. */
+  async insertRecord(
+    body: Record<string, unknown>,
+    status: RecordStatus,
+    pairUlid?: string,
+  ): Promise<string> {
+    const { hashDoc } = await import("../../packages/protocol/src/index.ts");
+    const hash = hashDoc(body);
     const row: RecordRow = {
-      ulid: input.ulid,
+      hash,
       bank_pubkey: this.bankPubkey,
-      type: input.type,
-      account: input.account,
-      amount: String(input.amount),
-      pair_ulid: input.pairUlid,
-      session: input.session,
-      tx_ulid: null,
-      body: input.body,
+      status,
+      type: body.type as "credit" | "debit",
+      account: body.account as string,
+      amount: String(body.amount),
+      pair_ulid: pairUlid ?? (body.pair as string),
+      body,
     };
     await this.kv.atomic()
-      .set(K(this.bankPubkey, "records", input.ulid), row)
-      .set(K(this.bankPubkey, "records_by_session", input.session, input.ulid), row)
+      .set(K(this.bankPubkey, "records", status, hash), row)
+      .set(K(this.bankPubkey, "records_by_pair", row.pair_ulid, hash), { status })
+      .set(K(this.bankPubkey, "records_by_account", row.account, hash), { status })
+      .commit();
+    return hash;
+  }
+
+  /** Move a record from one status prefix to another. No-op if already at target. */
+  async moveRecord(
+    hash: string,
+    fromStatus: RecordStatus,
+    toStatus: RecordStatus,
+  ): Promise<void> {
+    const fromKey = K(this.bankPubkey, "records", fromStatus, hash);
+    const res = await this.kv.get<RecordRow>(fromKey);
+    if (!res.value) return;
+    const row = { ...res.value, status: toStatus, body: { ...res.value.body } };
+    await this.kv.atomic()
+      .check(res)
+      .delete(fromKey)
+      .set(K(this.bankPubkey, "records", toStatus, hash), row)
+      .set(K(this.bankPubkey, "records_by_pair", row.pair_ulid, hash), { status: toStatus })
+      .set(K(this.bankPubkey, "records_by_account", row.account, hash), { status: toStatus })
       .commit();
   }
 
-  /** All records of a session at this bank, sorted by ULID. */
-  async getRecordsBySession(session: string): Promise<RecordRow[]> {
-    const prefix = K(this.bankPubkey, "records_by_session", session);
-    const entries = this.kv.list<RecordRow>({ prefix });
+  /** Look up a record across all status prefixes. */
+  async getRecord(hash: string): Promise<RecordRow | null> {
+    for (const status of ["draft", "ready", "hold", "settle", "reject"] as RecordStatus[]) {
+      const res = await this.kv.get<RecordRow>(K(this.bankPubkey, "records", status, hash));
+      if (res.value) return res.value;
+    }
+    return null;
+  }
+
+  /** Get the current status of a record, if known. */
+  async getRecordStatus(hash: string): Promise<RecordStatus | null> {
+    const row = await this.getRecord(hash);
+    return row?.status ?? null;
+  }
+
+  /** All records of a pair, regardless of status. */
+  async getRecordsByPair(pairUlid: string): Promise<RecordRow[]> {
+    const prefix = K(this.bankPubkey, "records_by_pair", pairUlid);
     const out: RecordRow[] = [];
-    for await (const entry of entries) out.push(entry.value);
-    out.sort((a, b) => a.ulid.localeCompare(b.ulid));
-    return out;
-  }
-
-  async getRecord(ulid: string): Promise<RecordRow | null> {
-    const res = await this.kv.get<RecordRow>(K(this.bankPubkey, "records", ulid));
-    return res.value;
-  }
-
-  /** Look up multiple records by ULID. Returns a ulid → body map. */
-  async getRecordsByUlids(ulids: string[]): Promise<Record<string, Record<string, unknown>>> {
-    if (ulids.length === 0) return {};
-    const keys = ulids.map((u) => K(this.bankPubkey, "records", u));
-    const entries = await this.kv.getMany<RecordRow[]>(keys);
-    const out: Record<string, Record<string, unknown>> = {};
-    for (let i = 0; i < ulids.length; i++) {
-      const row = entries[i].value;
-      if (row) out[ulids[i]!] = row.body;
+    for await (const entry of this.kv.list<{ status: RecordStatus }>({ prefix })) {
+      const hash = String(entry.key.at(-1));
+      const row = await this.getRecord(hash);
+      if (row) out.push(row);
     }
     return out;
   }
 
-  /** Bind records to a Tx by setting their tx_ulid. */
-  async bindRecordsToTx(ulids: string[], txUlid: string): Promise<void> {
-    for (const ulid of ulids) {
-      const key = K(this.bankPubkey, "records", ulid);
-      const res = await this.kv.get<RecordRow>(key);
-      if (!res.value) continue;
-      const row = { ...res.value, tx_ulid: txUlid };
-      const sessionKey = K(this.bankPubkey, "records_by_session", row.session, ulid);
-      await this.kv.atomic()
-        .set(key, row)
-        .set(sessionKey, row)
-        .commit();
+  /** All records touching an account, regardless of status. */
+  async getRecordsByAccount(accountHash: string): Promise<RecordRow[]> {
+    const prefix = K(this.bankPubkey, "records_by_account", accountHash);
+    const out: RecordRow[] = [];
+    for await (const entry of this.kv.list<{ status: RecordStatus }>({ prefix })) {
+      const hash = String(entry.key.at(-1));
+      const row = await this.getRecord(hash);
+      if (row) out.push(row);
     }
+    return out;
+  }
+
+  /** Scan all records at a given status. */
+  async listRecordsByStatus(status: RecordStatus): Promise<RecordRow[]> {
+    const prefix = K(this.bankPubkey, "records", status);
+    const out: RecordRow[] = [];
+    for await (const entry of this.kv.list<RecordRow>({ prefix })) {
+      out.push(entry.value);
+    }
+    return out;
   }
 
   /**
@@ -229,96 +274,76 @@ export class BankDB {
     return row.balance;
   }
 
-  /** Acquire a hold on an Account for a session. Returns true if acquired, false on conflict. */
+  /** Acquire or extend a hold on an Account for a debit record. */
   async acquireHold(input: {
     accountHash: string;
-    session: string;
+    recordHash: string;
+    txHash: string;
     amount: number;
   }): Promise<boolean> {
     const key = K(this.bankPubkey, "holds", input.accountHash);
-    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(key);
+    const res = await this.kv.get<HoldRow>(key);
     if (res.value?.active) {
-      // Idempotent re-hold for the same session.
-      return res.value.session === input.session;
+      // Idempotent: same tx can accumulate multiple records.
+      if (res.value.tx_hash === input.txHash) {
+        if (!res.value.record_hashes.includes(input.recordHash)) {
+          const newAmount = Number(res.value.amount) + input.amount;
+          const row: HoldRow = {
+            ...res.value,
+            record_hashes: [...res.value.record_hashes, input.recordHash],
+            amount: String(newAmount),
+          };
+          await this.kv.atomic().check(res).set(key, row).commit();
+        }
+        return true;
+      }
+      return false; // held by a different tx
     }
     const ok = await this.kv.atomic()
       .check(res)
-      .set(key, { session: input.session, amount: input.amount, active: true })
+      .set(key, {
+        account_hash: input.accountHash,
+        tx_hash: input.txHash,
+        record_hashes: [input.recordHash],
+        amount: String(input.amount),
+        active: true,
+      })
       .commit();
     return ok.ok;
   }
 
   /** Amount of the active hold on an account, or 0 if none. */
   async getActiveHoldAmount(accountHash: string): Promise<number> {
-    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(
-      K(this.bankPubkey, "holds", accountHash),
-    );
-    return res.value?.active ? res.value.amount : 0;
+    const res = await this.kv.get<HoldRow>(K(this.bankPubkey, "holds", accountHash));
+    return res.value?.active ? Number(res.value.amount) : 0;
   }
 
-  /** Release a single hold (settle or reject path). */
-  async releaseHold(accountHash: string, session: string): Promise<void> {
+  /** Release the portion of a hold associated with a settled/rejected record. */
+  async releaseHold(accountHash: string, recordHash: string): Promise<void> {
     const key = K(this.bankPubkey, "holds", accountHash);
-    const res = await this.kv.get<{ session: string; amount: number; active: boolean }>(key);
-    if (!res.value || !res.value.active || res.value.session !== session) return;
+    const res = await this.kv.get<HoldRow>(key);
+    if (!res.value || !res.value.active) return;
+    const remaining = res.value.record_hashes.filter((h) => h !== recordHash);
+    if (remaining.length === 0) {
+      await this.kv.atomic().check(res).set(key, { ...res.value, active: false }).commit();
+      return;
+    }
+    // Recalculate amount from the remaining records' bodies.
+    let amount = 0;
+    for (const h of remaining) {
+      const row = await this.getRecord(h);
+      if (row && row.type === "debit") amount += Number(row.amount);
+    }
     await this.kv.atomic()
       .check(res)
-      .set(key, { ...res.value, active: false })
+      .set(key, { ...res.value, record_hashes: remaining, amount: String(amount) })
       .commit();
   }
 
-  /** Release every active hold this bank placed for a session (reject path). */
-  async releaseHoldsBySession(session: string): Promise<void> {
-    const prefix = K(this.bankPubkey, "holds");
-    const entries = this.kv.list<{ session: string; active: boolean }>({ prefix });
-    for await (const entry of entries) {
-      if (entry.value.session === session && entry.value.active) {
-        await this.kv.set(entry.key, { ...entry.value, active: false });
-      }
-    }
-  }
-
-  /** Leg state machine helpers, keyed by per-bank session ULID. */
-  async upsertLeg(input: {
-    session: string;
-    state: string;
-    role?: string;
-    predecessors?: string[];
-    banks?: string[];
-  }): Promise<void> {
-    const key = K(this.bankPubkey, "legs", input.session);
-    const res = await this.kv.get<LegRow>(key);
-    const prev = res.value;
-    const row: LegRow = {
-      state: input.state,
-      role: input.role !== undefined ? input.role : (prev?.role ?? null),
-      predecessors: input.predecessors !== undefined ? input.predecessors : (prev?.predecessors ?? []),
-      banks: input.banks !== undefined ? input.banks : (prev?.banks ?? []),
-    };
-    await this.kv.set(key, row);
-  }
-
-  async getLegState(session: string): Promise<LegRow | null> {
-    const res = await this.kv.get<LegRow>(K(this.bankPubkey, "legs", session));
-    return res.value;
-  }
-
-  /** All local leg sessions that are not in a terminal state. */
-  async listPendingSessions(): Promise<string[]> {
-    const prefix = K(this.bankPubkey, "legs");
-    const out: string[] = [];
-    for await (const entry of this.kv.list<LegRow>({ prefix })) {
-      if (entry.value.state !== "settled" && entry.value.state !== "rejected") {
-        out.push(String(entry.key.at(-1)));
-      }
-    }
-    return out;
-  }
-
-  /** Find a stored signature doc by signer + (target, action). */
+  /** Find a stored signature doc by signer + hash + action. */
   async findActionSig(
     actorPubkey: string,
-    target: { hash?: string; record?: string; session?: string },
+    hash: string,
     action: string,
   ): Promise<Record<string, unknown> | null> {
     const prefix = K(this.bankPubkey, "docs");
@@ -328,29 +353,37 @@ export class BankDB {
       if (row.type !== "signature") continue;
       const b = row.body;
       if (b.pubkey !== actorPubkey || b.action !== action) continue;
-      if (target.hash !== undefined && b.hash !== target.hash) continue;
-      if (target.record !== undefined && b.record !== target.record) continue;
-      if (target.session !== undefined && b.session !== target.session) continue;
+      if (b.hash !== hash) continue;
       return b;
     }
     return null;
   }
 
-  /** All stored signature docs anchored to one target. */
-  async listSignaturesByTarget(
-    target: { hash?: string; record?: string; session?: string },
-  ): Promise<Array<Record<string, unknown>>> {
+  /** All stored signature docs whose `hash` field equals the given hash. */
+  async listSignaturesByHash(hash: string): Promise<Array<Record<string, unknown>>> {
     const prefix = K(this.bankPubkey, "docs");
     const entries = this.kv.list<DocRow>({ prefix });
     const out: Array<Record<string, unknown>> = [];
     for await (const entry of entries) {
       const row = entry.value;
       if (row.type !== "signature") continue;
-      const b = row.body;
-      if (target.hash !== undefined && b.hash !== target.hash) continue;
-      if (target.record !== undefined && b.record !== target.record) continue;
-      if (target.session !== undefined && b.session !== target.session) continue;
-      out.push(b);
+      if (row.body.hash !== hash) continue;
+      out.push(row.body);
+    }
+    return out;
+  }
+
+  /** All stored settle signatures from other banks (any hash, action settle). */
+  async listSettleSigs(): Promise<Array<Record<string, unknown>>> {
+    const prefix = K(this.bankPubkey, "docs");
+    const entries = this.kv.list<DocRow>({ prefix });
+    const out: Array<Record<string, unknown>> = [];
+    for await (const entry of entries) {
+      const row = entry.value;
+      if (row.type !== "signature") continue;
+      if (row.body.action !== "settle") continue;
+      if (row.body.pubkey === this.bankPubkey) continue; // only peer settles
+      out.push(row.body);
     }
     return out;
   }
@@ -449,6 +482,27 @@ export class BankDB {
         await this.kv.delete(entry.key);
       }
     }
+  }
+
+  /** Generate a fresh pair ULID. Convenience wrapper. */
+  newPairUlid(): string {
+    return newUlid();
+  }
+
+  // ── create_records idempotency ───────────────────────────────────────────
+
+  async getCreateRequest(key: string): Promise<{ debit_hash: string; credit_hash: string } | null> {
+    const res = await this.kv.get<{ debit_hash: string; credit_hash: string }>(
+      K(this.bankPubkey, "create_requests", key),
+    );
+    return res.value;
+  }
+
+  async setCreateRequest(
+    key: string,
+    recordHashes: { debit_hash: string; credit_hash: string },
+  ): Promise<void> {
+    await this.kv.set(K(this.bankPubkey, "create_requests", key), recordHashes);
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildDeal, type DealSpec } from "../src/deal.ts";
-import { hashRecord } from "../src/schemas.ts";
+import { hashRecord, type RecordDoc } from "../src/schemas.ts";
 
 // Deterministic ULID factory so a build is reproducible within a run.
 function counterUlid() {
@@ -15,7 +15,7 @@ function recordBody(
   account: string,
   pair: string,
   amount = 1,
-) {
+): RecordDoc {
   return { type, pubkey, ulid, amount, account, pair };
 }
 
@@ -36,8 +36,8 @@ function demoDeal(): DealSpec {
 
 /** Produce deterministic record bodies for each bank.
  *  Order matches the transfer order within each bank: debit, credit per transfer. */
-function makeRecords(spec: DealSpec, ulid: () => string, bankPub: string): Record<string, unknown>[] {
-  const records: Record<string, unknown>[] = [];
+function makeRecords(spec: DealSpec, ulid: () => string, bankPub: string): RecordDoc[] {
+  const records: RecordDoc[] = [];
   for (const t of spec.transfers) {
     if (t.issuerBank !== bankPub) continue;
     const debitUlid = ulid();
@@ -52,12 +52,12 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("holder Txs are a disjoint exact cover of all record hashes", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
 
     const allHashes = Object.values(bankRecords).flat().map((r) => hashRecord(r as never));
@@ -70,16 +70,16 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("each holder's Tx binds exactly the records on their own accounts", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
     const plan = (h: string) => d.holderTxs.find((p) => p.holder === h)!;
 
-    const h = (bank: string, idx: number) => hashRecord(bankRecords[bank]![idx] as never);
+    const h = (bank: string, idx: number) => hashRecord(bankRecords[bank]![idx]!);
 
     // hA: debit of t0 (bankA), credit of t3 (bankD)
     expect(plan("hA").tx.records).toEqual([h("bankA", 0), h("bankD", 1)]);
@@ -96,12 +96,12 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("initiator's plan is lead, everyone else follows", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
     const roles = Object.fromEntries(d.holderTxs.map((h) => [h.holder, h.role]));
     expect(roles).toEqual({ hA: "lead", hB: "follow", hC: "follow", hD: "follow" });
@@ -110,12 +110,12 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("per-holder banks list every bank the holder's records live at", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
     const banks = (h: string) => [...d.holderTxs.find((p) => p.holder === h)!.banks].sort();
     expect(banks("hA")).toEqual(["bankA", "bankD"]);
@@ -127,12 +127,12 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("slices record hashes per bank (visibility: a leg holds only its own)", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
     const byBank = Object.fromEntries(d.legs.map((l) => [l.bank, l.recordHashes.length]));
     expect(byBank).toEqual({ bankA: 2, bankB: 2, bankC: 2, bankD: 4 });
@@ -141,12 +141,12 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("order follows first appearance of banks in transfers", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const d = buildDeal(spec, bankRecords, { ulid });
     expect(d.order).toEqual(["bankA", "bankB", "bankC", "bankD"]);
   });
@@ -154,21 +154,21 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("is reproducible with a fixed ULID source", () => {
     const spec = demoDeal();
     const ulidA = counterUlid();
-    const bankRecordsA = {
+    const bankRecordsA: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulidA, "bankA"),
       bankB: makeRecords(spec, ulidA, "bankB"),
       bankC: makeRecords(spec, ulidA, "bankC"),
       bankD: makeRecords(spec, ulidA, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const a = buildDeal(spec, bankRecordsA, { ulid: ulidA });
 
     const ulidB = counterUlid();
-    const bankRecordsB = {
+    const bankRecordsB: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulidB, "bankA"),
       bankB: makeRecords(spec, ulidB, "bankB"),
       bankC: makeRecords(spec, ulidB, "bankC"),
       bankD: makeRecords(spec, ulidB, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     const b = buildDeal(spec, bankRecordsB, { ulid: ulidB });
 
     const hashes = (d: typeof a) => d.holderTxs.map((h) => h.txHash);
@@ -178,25 +178,25 @@ describe("buildDeal — multi-party branching/merging", () => {
   test("rejects missing record bodies for a bank", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
-    delete (bankRecords as Record<string, Record<string, unknown>[]>).bankC;
+    };
+    delete bankRecords.bankC;
     expect(() => buildDeal(spec, bankRecords, { ulid })).toThrow(/missing record bodies for bank bankC/);
   });
 
   test("rejects wrong count of record bodies for a bank", () => {
     const spec = demoDeal();
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankA: makeRecords(spec, ulid, "bankA"),
       bankB: makeRecords(spec, ulid, "bankB"),
       bankC: makeRecords(spec, ulid, "bankC"),
       bankD: makeRecords(spec, ulid, "bankD"),
-    } as Record<string, Record<string, unknown>[]>;
+    };
     bankRecords["bankD"] = bankRecords["bankD"]!.slice(0, 2); // only 2 instead of 4
     expect(() => buildDeal(spec, bankRecords, { ulid })).toThrow(/expected 4 record bodies/);
   });
@@ -212,7 +212,7 @@ describe("buildDeal — bilateral degenerate case", () => {
       ],
     };
     const ulid = counterUlid();
-    const bankRecords = {
+    const bankRecords: Record<string, RecordDoc[]> = {
       bankAlice: [
         recordBody("debit", "bankAlice", ulid(), "a1", ulid(), 1),
         recordBody("credit", "bankAlice", ulid(), "b1", "01UNUSED", 1),
@@ -223,10 +223,10 @@ describe("buildDeal — bilateral degenerate case", () => {
       ],
     };
     // Fix pair refs for a clean hash (bankAlice credit pairs with its debit, etc.)
-    bankRecords.bankAlice[1]!.pair = (bankRecords.bankAlice[0] as { ulid: string }).ulid;
-    bankRecords.bankBob[1]!.pair = (bankRecords.bankBob[0] as { ulid: string }).ulid;
-    bankRecords.bankAlice[0]!.pair = (bankRecords.bankAlice[1] as { ulid: string }).ulid;
-    bankRecords.bankBob[0]!.pair = (bankRecords.bankBob[1] as { ulid: string }).ulid;
+    bankRecords.bankAlice![1]!.pair = bankRecords.bankAlice![0]!.ulid;
+    bankRecords.bankBob![1]!.pair = bankRecords.bankBob![0]!.ulid;
+    bankRecords.bankAlice![0]!.pair = bankRecords.bankAlice![1]!.ulid;
+    bankRecords.bankBob![0]!.pair = bankRecords.bankBob![1]!.ulid;
 
     const d = buildDeal(spec, bankRecords, { ulid });
     expect(d.order).toEqual(["bankAlice", "bankBob"]);

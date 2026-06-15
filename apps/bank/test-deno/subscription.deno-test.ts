@@ -2,8 +2,10 @@
 //
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/subscription.deno-test.ts
 
-import { hashDoc, newUlid, verifyDoc } from "../../../packages/protocol/src/index.ts";
+import { hashDoc, newUlid, signDoc, verifyDoc } from "../../../packages/protocol/src/index.ts";
 import { mintPromise } from "../handlers/mint_promise.ts";
+import { createRecords } from "../handlers/create_records.ts";
+import { submitTx } from "../handlers/submit_tx.ts";
 import { subscribe } from "../handlers/subscribe.ts";
 import { assert, closeTestKv, ctx, eq, installFetchRouter, key, openTestKv, type Key } from "./helpers.ts";
 
@@ -19,7 +21,7 @@ function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
 Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and failures are harmless", async () => {
   const tk = await openTestKv();
   try {
-    const bank = key(), alice = key();
+    const bank = key(), alice = key(), bob = key();
     const pushLog: Array<{ url: string; envelope: Record<string, unknown> }> = [];
     const restoreFetch = installFetchRouter(tk.kv, new Map(), pushLog);
 
@@ -28,12 +30,30 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
         type: "promise", pubkey: alice.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
       };
       const promiseHash = hashDoc(promise);
+
+      const issue = accountDoc(alice, promiseHash, "issue");
+      const holding = accountDoc(alice, promiseHash, "holding");
+      const bobAccount = accountDoc(bob, promiseHash, "main");
+      await mintPromise(
+        { promise, debit_account: issue, credit_account: holding, amount: 1 },
+        ctx(tk.kv, bank, alice.pub),
+      );
+
+      const createRes = await createRecords(
+        {
+          requests: [{ type: "transfer", promise_hash: promiseHash, amount: 1, debit_account_hash: hashDoc(holding), credit_account_hash: hashDoc(bobAccount) }],
+          docs: [bobAccount],
+        },
+        ctx(tk.kv, bank, alice.pub),
+      ) as { records: Array<Record<string, unknown>> };
+      const recordHash = hashDoc(createRes.records[0]);
+
       const aliceUrl = "https://alice-client.test/notify";
       await subscribe(
         {
           subscription: {
             type: "subscription", pubkey: alice.pub, ulid: newUlid(),
-            hashes: [promiseHash], url: aliceUrl,
+            hashes: [recordHash], url: aliceUrl,
           },
         },
         ctx(tk.kv, bank, alice.pub),
@@ -44,25 +64,25 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
         {
           subscription: {
             type: "subscription", pubkey: alice.pub, ulid: newUlid(),
-            hashes: [promiseHash], url: deadUrl, until: "2020-01-01",
+            hashes: [recordHash], url: deadUrl, until: "2020-01-01",
           },
         },
         ctx(tk.kv, bank, alice.pub),
       );
 
-      const res = await mintPromise(
-        {
-          promise,
-          debit_account: accountDoc(alice, promiseHash, "issue"),
-          credit_account: accountDoc(alice, promiseHash, "holding"),
-          amount: 1,
-        },
-        ctx(tk.kv, bank, alice.pub),
-      ) as { promise_hash: string };
-      eq(res.promise_hash, promiseHash, "mint succeeded despite failing pushes");
+      const tx: Record<string, unknown> = {
+        type: "tx", pubkey: alice.pub, ulid: newUlid(), records: [recordHash],
+      };
+      const txHash = hashDoc(tx);
+      const holderSig: Record<string, unknown> = {
+        type: "signature", pubkey: alice.pub, ulid: newUlid(), hash: txHash, action: "lead",
+      };
+      holderSig.sig = signDoc(holderSig, alice.priv);
+
+      await submitTx({ tx, holder_signature: holderSig }, ctx(tk.kv, bank, alice.pub));
 
       const toAlice = pushLog.filter((p) => p.url === aliceUrl);
-      eq(toAlice.length, 1, "one push to the live subscription");
+      eq(toAlice.length >= 1, true, "at least one push to the live subscription");
       eq(pushLog.filter((p) => p.url === deadUrl).length, 0, "expired subscription not notified");
 
       const env = toAlice[0].envelope;
@@ -72,8 +92,8 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
       assert(verifyDoc(env, env.sig as string, bank.pub), "envelope must verify against the bank key");
       const sigs = (env.params as { signatures: Array<Record<string, unknown>> }).signatures;
       assert(
-        sigs.some((s) => s.hash === promiseHash && s.action === "ack"),
-        "pushed batch contains the promise ack attestation",
+        sigs.some((s) => s.hash === recordHash && (s.action === "ready" || s.action === "settle")),
+        "pushed batch contains a signature on the watched record",
       );
     } finally {
       restoreFetch();

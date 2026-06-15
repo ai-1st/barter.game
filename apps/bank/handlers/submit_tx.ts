@@ -1,24 +1,23 @@
 // submit_tx — the heart of direct approval (wave 1).
 //
 // A Tx is ONE HOLDER's view of a deal: tx.pubkey is the holder, tx.records
-// are the ULIDs of the records on that holder's accounts. The holder signs
-// a lead/follow Signature over the Tx hash — that signature is the
-// authorization for banks to execute those records.
+// are the content-addressed hashes of the records on that holder's accounts.
+// The holder signs a lead/follow Signature over the Tx hash — that signature
+// is the authorization for banks to execute those records.
 //
 // The envelope sender may differ from the holder — anyone can relay a
 // signed Tx, which is what makes client-carried topology work. Authority
 // lives in holder_signature, not in the envelope.
 //
 // The bank checks the limits and validity of each record it owns and issues
-// a per-record `ready` or `reject` Signature. Once EVERY record this bank
-// owns under the session is bound to a holder-signed Tx and bank-ready, the
-// leg advances to `approved` and the bank self-advances (holds, then
-// settles per the lead/follow order) — see advance.ts.
+// a per-record `ready` or `reject` Signature (targeting the record hash).
+// Ready promotes a draft record to the ready prefix. Once ready, the bank's
+// advance engine pairs records by `pair` ULID and issues hold/settle.
 
-import { hashDoc, newUlid, signDoc, verifyDoc, validateSignature, validateTx } from "../../../packages/protocol/src/index.ts";
+import { hashDoc, newUlid, signDoc, verifyDoc, validateSignature, validateTx, hashRecord } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler, type RpcContext } from "../rpc.ts";
 import type { RecordRow } from "../db.ts";
-import { advanceSession } from "../advance.ts";
+import { advanceRecord } from "../advance.ts";
 import { fanoutSignatures } from "../subscriptions.ts";
 import { intakeDocs } from "./intake.ts";
 
@@ -77,46 +76,37 @@ export const submitTx: Handler = async (params, ctx) => {
   await intakeDocs(p.docs, ctx);
 
   // This bank's slice of the Tx — records it owns. Others are invisible.
-  const recordBodies = await ctx.db.getRecordsByUlids(tx.records);
-  const ownedUlids = tx.records.filter((u) => recordBodies[u] !== undefined);
-  if (ownedUlids.length === 0) {
+  const owned: { hash: string; row: RecordRow }[] = [];
+  for (const recordHash of tx.records) {
+    const row = await ctx.db.getRecord(recordHash);
+    if (!row) continue;
+    if (row.body.pubkey !== ctx.bankPubkey) continue;
+    owned.push({ hash: recordHash, row });
+  }
+  if (owned.length === 0) {
     throw new RpcError(RpcErrors.VALIDATION, "this bank owns no records in tx.records[]");
   }
 
-  // All owned records must belong to one session, and every record a holder
-  // authorizes must sit on the holder's own account.
-  let session: string | null = null;
-  const rows: RecordRow[] = [];
-  for (const u of ownedUlids) {
-    const row = await ctx.db.getRecord(u);
-    if (!row) throw new RpcError(RpcErrors.UNKNOWN_DOC, `record ${u} not found at this bank`);
-    if (session === null) session = row.session;
-    if (row.session !== session) {
-      throw new RpcError(RpcErrors.VALIDATION, "tx.records span multiple sessions at this bank");
-    }
-    if (row.tx_ulid !== null && row.tx_ulid !== tx.ulid) {
-      throw new RpcError(RpcErrors.VALIDATION, `record ${u} is already bound to another tx`);
-    }
+  // Every record a holder authorizes must sit on the holder's own account.
+  for (const { hash, row } of owned) {
     const acct = await ctx.db.getAccount(row.account);
     if (!acct) throw new RpcError(RpcErrors.UNKNOWN_DOC, `account ${row.account} not known (attach the Account doc)`);
     if (acct.holder_pubkey !== tx.pubkey) {
-      throw new RpcError(RpcErrors.VALIDATION, `record ${u} sits on an account not owned by tx.pubkey`);
+      throw new RpcError(RpcErrors.VALIDATION, `record ${hash} sits on an account not owned by tx.pubkey`);
     }
-    rows.push(row);
   }
 
-  // Persist the holder's view + authorization; bind our records to the Tx.
+  // Persist the holder's view + authorization.
   await ctx.db.insertDoc({ hash: txHash, type: "tx", pubkey: tx.pubkey, body: p.tx });
   if (p.holder_signature) {
     await ctx.db.insertDoc({ hash: hashDoc(p.holder_signature), type: "signature", pubkey: tx.pubkey, body: p.holder_signature });
   }
-  await ctx.db.bindRecordsToTx(ownedUlids, tx.ulid);
 
   // Per-record validity/limit check → per-record ready or reject.
   const recordSigs: Array<Record<string, unknown>> = [];
-  for (const row of rows) {
-    const existing = await ctx.db.findActionSig(ctx.bankPubkey, { record: row.ulid }, "ready")
-      ?? await ctx.db.findActionSig(ctx.bankPubkey, { record: row.ulid }, "reject");
+  for (const { hash, row } of owned) {
+    const existing = await ctx.db.findActionSig(ctx.bankPubkey, hash, "ready")
+      ?? await ctx.db.findActionSig(ctx.bankPubkey, hash, "reject");
     if (existing) {
       recordSigs.push(existing); // idempotent re-submit
       continue;
@@ -126,47 +116,25 @@ export const submitTx: Handler = async (params, ctx) => {
       type: "signature",
       pubkey: ctx.bankPubkey,
       ulid: newUlid(),
-      record: row.ulid,
+      hash,
       action: reason === null ? "ready" : "reject",
     };
     if (reason !== null) sig.reason = reason;
     sig.sig = signDoc(sig, ctx.bankPrivateKey);
     await ctx.db.insertDoc({ hash: hashDoc(sig), type: "signature", pubkey: ctx.bankPubkey, body: sig });
     recordSigs.push(sig);
-  }
 
-  // Leg gate: approved once EVERY record this bank owns under the session is
-  // Tx-bound and carries a bank ready.
-  const leg = await ctx.db.getLegState(session!);
-  let legState = leg?.state ?? "created";
-  if (legState === "created") {
-    const allRecords = await ctx.db.getRecordsBySession(session!);
-    let complete = true;
-    for (const rec of allRecords) {
-      const bound = rec.tx_ulid !== null || ownedUlids.includes(rec.ulid);
-      const ready = await ctx.db.findActionSig(ctx.bankPubkey, { record: rec.ulid }, "ready");
-      if (!bound || !ready) {
-        complete = false;
-        break;
-      }
-    }
-    if (complete) {
-      await ctx.db.upsertLeg({ session: session!, state: "approved" });
-      legState = "approved";
+    if (sig.action === "ready") {
+      await ctx.db.moveRecord(hash, "draft", "ready");
+      await advanceRecord(hash, txHash, ctx);
     }
   }
 
   await fanoutSignatures(ctx, recordSigs);
 
-  // Banks self-advance: holds + settles happen here, not on a client command.
-  await advanceSession(session!, ctx);
-  const after = await ctx.db.getLegState(session!);
-
   return {
     tx_hash: txHash,
-    session,
     record_sigs: recordSigs,
-    leg_state: after?.state ?? legState,
   };
 };
 

@@ -15,11 +15,7 @@ const PUSH_TIMEOUT_MS = 4000;
 
 /** The anchor keys a signature can be watched under. */
 export function watchKeysForSig(sig: Record<string, unknown>): string[] {
-  const keys: string[] = [];
-  for (const f of ["record", "hash", "session"]) {
-    if (typeof sig[f] === "string") keys.push(sig[f] as string);
-  }
-  return keys;
+  return typeof sig.hash === "string" ? [sig.hash as string] : [];
 }
 
 /** Push freshly created signatures to matching subscribers. Never throws. */

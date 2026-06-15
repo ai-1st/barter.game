@@ -72,7 +72,7 @@ See [`ETHOS.md`](./ETHOS.md) for the full set of beliefs.
 barter.game/
 ├── SETTLEMENT_WALKTHROUGH.md ← the canonical narrative of one trade — start here
 ├── ETHOS.md              ← the beliefs driving the design
-├── PROTOCOL.md           ← the INVARIANT protocol contract (read this if building your own)
+├── protocol/             ← the INVARIANT protocol contract (read these if building your own)
 ├── IMPLEMENTATION.md     ← how *this repo* implements v1 (change anything here for your stack)
 ├── SCHEMA.md             ← v1 reference database schema
 ├── TODOS.md              ← the v1.5+ roadmap
@@ -152,8 +152,8 @@ The lead banks carry the small remaining risk that a follower goes
 rogue; per the ETHOS, that risk is settled socially, not by
 protocol-level rollback.
 
-Full details in [`PROTOCOL.md`](./PROTOCOL.md); the story version is
-[`SETTLEMENT_WALKTHROUGH.md`](./SETTLEMENT_WALKTHROUGH.md).
+Full details in [`protocol/README.md`](./protocol/README.md) and the split contract files; the story version is
+[`MASTER-INPUT.md`](./MASTER-INPUT.md).
 
 ## How to run your own bank
 
@@ -221,7 +221,7 @@ for the v1.5+ work.
 1. [`SETTLEMENT_WALKTHROUGH.md`](./SETTLEMENT_WALKTHROUGH.md) — the canonical narrative: Alice, Bob, two banks, one trade (10 minutes)
 2. [`ETHOS.md`](./ETHOS.md) — what we believe, why we built it this way (10 minutes)
 3. [`./scripts/demo.sh`](./scripts/demo.sh) — see it work (5 minutes)
-4. [`PROTOCOL.md`](./PROTOCOL.md) — the **invariant protocol contract** (45 minutes if you read carefully)
+4. [`protocol/README.md`](./protocol/README.md) — the **invariant protocol contract overview**, then `protocol/base.md`, `protocol/bank-schema.md`, and `protocol/bank-rpc.md` (45 minutes if you read carefully)
 5. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
 6. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
 7. `packages/protocol/src/` — the code (an afternoon)
@@ -230,7 +230,7 @@ for the v1.5+ work.
 
 ## Building your own implementation?
 
-Read [`PROTOCOL.md`](./PROTOCOL.md) cover to cover. That is the contract. Everything else — Supabase, Edge Functions, Postgres, the CLI, even TypeScript — is a choice we made that you are free to swap out. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) explains our choices so you can learn from them or ignore them. The protocol doesn't care if your bank is written in Rust, Go, or Python, as long as the wire format and invariants match.
+Read [`protocol/README.md`](./protocol/README.md) cover to cover, then the split contract files (`protocol/base.md`, `protocol/bank-schema.md`, `protocol/bank-rpc.md`). That is the contract. Everything else — Deno Deploy, Deno KV, the CLI, even TypeScript — is a choice we made that you are free to swap out. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) explains our choices so you can learn from them or ignore them. The protocol doesn't care if your bank is written in Rust, Go, or Python, as long as the wire format and invariants match.
 
 ## License
 

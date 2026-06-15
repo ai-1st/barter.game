@@ -74,14 +74,13 @@ export async function runMint(argv: string[]): Promise<number> {
 
   const result = (await call(
     profile,
-    "mint_promise",
+    "mint",
     { promise, debit_account: issue.account, credit_account: holding.account, amount },
     { bankUrl, toBankPubkey: bankPubkey },
   )) as {
     promise_hash: string;
     debit_account_hash: string;
     credit_account_hash: string;
-    session: string;
   };
 
   process.stdout.write(

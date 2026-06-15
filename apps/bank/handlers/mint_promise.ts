@@ -6,14 +6,11 @@
 //     (goes negative) and the holding account (goes positive)
 //   - the amount to mint
 //
-// The bank stores the docs, creates the debit/credit pair under a fresh
-// per-bank session ULID, and settles immediately — a mint has a single signer
-// and a single bank, so the signed envelope is the issuer's authorization and
-// there is zero counterparty risk. No special mint balance logic: the same
-// mechanism that moves value in trades creates it here.
-//
-// Protocol action names: the mint session settles immediately, so the bank
-// signs `{session, action: "settle"}` and `{hash: promiseHash, action: "ack"}`.
+// The bank stores the docs, creates the debit/credit pair as drafts, and
+// settles it immediately — a mint has a single signer and a single bank, so
+// the signed envelope is the issuer's authorization and there is zero
+// counterparty risk. No special mint balance logic: the same mechanism that
+// moves value in trades creates it here.
 
 import { hashDoc, newUlid, signDoc, validateAccount, validatePromise } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
@@ -95,8 +92,8 @@ export const mintPromise: Handler = async (params, ctx) => {
     });
   }
 
-  // The mint record pair — a self-contained mini-session.
-  const session = newUlid();
+  // The mint record pair — created as drafts, then settled immediately.
+  const pairUlid = ctx.db.newPairUlid();
   const debitUlid = newUlid();
   const creditUlid = newUlid();
   const debit: Record<string, unknown> = {
@@ -115,52 +112,39 @@ export const mintPromise: Handler = async (params, ctx) => {
     account: creditAccountHash,
     pair: debitUlid,
   };
-  await ctx.db.insertRecord({
-    ulid: debitUlid,
-    type: "debit",
-    account: debitAccountHash,
-    amount: p.amount,
-    pairUlid: creditUlid,
-    session,
-    body: debit,
-  });
-  await ctx.db.insertRecord({
-    ulid: creditUlid,
-    type: "credit",
-    account: creditAccountHash,
-    amount: p.amount,
-    pairUlid: debitUlid,
-    session,
-    body: credit,
-  });
 
-  // Settle immediately: apply ±amount, sign the artifacts.
+  const { debitHash, creditHash } = await ctx.db.insertRecordPair({ pairUlid, debit, credit });
+
+  // Settle immediately: apply ±amount and sign settle on each record hash.
   await ctx.db.applyBalanceDelta(debitAccountHash, -p.amount);
   await ctx.db.applyBalanceDelta(creditAccountHash, +p.amount);
 
   const signatures: Array<Record<string, unknown>> = [];
-  const sign = async (body: Record<string, unknown>) => {
-    body.sig = signDoc(body, ctx.bankPrivateKey);
-    await ctx.db.insertDoc({ hash: hashDoc(body), type: "signature", pubkey: ctx.bankPubkey, body });
-    signatures.push(body);
-    return body;
-  };
+  const settleSigs: Array<Record<string, unknown>> = [];
+  for (const hash of [debitHash, creditHash]) {
+    await ctx.db.moveRecord(hash, "draft", "settle");
+    const sig: Record<string, unknown> = {
+      type: "signature",
+      pubkey: ctx.bankPubkey,
+      ulid: newUlid(),
+      hash,
+      action: "settle",
+    };
+    sig.sig = signDoc(sig, ctx.bankPrivateKey);
+    await ctx.db.insertDoc({ hash: hashDoc(sig), type: "signature", pubkey: ctx.bankPubkey, body: sig });
+    signatures.push(sig);
+    settleSigs.push(sig);
+  }
 
-  // The mint session settles immediately (single bank, single signer), so the
-  // bank signs the settle and the Promise ack. No per-record ready/hold.
-  const settle = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), session, action: "settle" });
-  const attestation = await sign({ type: "signature", pubkey: ctx.bankPubkey, ulid: newUlid(), hash: promiseHash, action: "ack" });
-
-  await ctx.db.upsertLeg({ session, state: "settled", role: "lead", predecessors: [], banks: [ctx.bankPubkey] });
   await fanoutSignatures(ctx, signatures);
 
   return {
     promise_hash: promiseHash,
     debit_account_hash: debitAccountHash,
     credit_account_hash: creditAccountHash,
-    session,
     records: [debit, credit],
-    settle,
-    bank_attestation: attestation,
+    debit_hash: debitHash,
+    credit_hash: creditHash,
+    settle_signatures: settleSigs,
   };
 };

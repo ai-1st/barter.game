@@ -1,11 +1,10 @@
 // In-memory integration test for the direct-approval N-party flow.
 //
 // Drives the real bank handlers (mint_promise → create_records → submit_tx,
-// with banks self-advancing through hold and settle via subscription
-// fan-out) across FOUR simulated banks, exercising the exact
-// branching/merging deal from PROTOCOL.md §2:
+// with banks self-advancing through hold and settle) across FOUR simulated
+// banks, exercising the branching/merging deal:
 //
-//   A → C   B → C   C → D   D → A   D → B      leads: {bank-A, bank-B}
+//   A → C   B → C   C → D   D → A   D → B
 //
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/nparty.deno-test.ts
 
@@ -77,47 +76,39 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
         [bD.pub, [accA_D.body, accB_D.body]],
       ]);
 
-      const deal = newUlid();
-      const sessionByBank: Record<string, string> = {
-        [bA.pub]: newUlid(),
-        [bB.pub]: newUlid(),
-        [bC.pub]: newUlid(),
-        [bD.pub]: newUlid(),
-      };
-      const spec = { deal, initiator: A.pub, leadBanks: [bA.pub, bB.pub], transfers };
-
+      const spec = { initiator: A.pub, transfers };
       const order = [bA.pub, bB.pub, bC.pub, bD.pub];
-      const preds: Record<string, string[]> = {
-        [bA.pub]: [], [bB.pub]: [], [bC.pub]: [bA.pub, bB.pub], [bD.pub]: [bC.pub],
-      };
-      const bankRecordUlids: Record<string, string[]> = {};
+
+      const recordsByBank: Record<string, Array<Record<string, unknown>>> = {};
       for (const bankPub of order) {
-        const btransfers = transfers
-          .filter((t) => t.issuerBank === bankPub)
-          .map((t) => ({ type: "transfer" as const, promise_hash: t.promise, amount: t.amount, debit_account_hash: t.from.account, credit_account_hash: t.to.account }));
+        const btransfers = transfers.filter((t) => t.issuerBank === bankPub);
+        const requests = btransfers.map((t) => ({
+          type: "transfer" as const,
+          promise_hash: t.promise,
+          amount: t.amount,
+          debit_account_hash: t.from.account,
+          credit_account_hash: t.to.account,
+        }));
         const res = await createRecords(
-          {
-            session: sessionByBank[bankPub],
-            role: preds[bankPub].length === 0 ? "lead" : "follow",
-            predecessors: preds[bankPub],
-            banks: order,
-            requests: btransfers,
-            docs: docsByBank.get(bankPub)!,
-          },
+          { requests, docs: docsByBank.get(bankPub)! },
           ctx(tk.kv, bankByPub.get(bankPub)!, A.pub),
         ) as { records: Array<Record<string, unknown>> };
-        bankRecordUlids[bankPub] = res.records.map((r) => r.ulid as string);
+        recordsByBank[bankPub] = res.records;
       }
 
-      const built = buildDeal(spec, bankRecordUlids);
-      for (const leg of built.legs) {
-        eq(JSON.stringify(leg.predecessors.slice().sort()), JSON.stringify(preds[leg.bank].slice().sort()), `predecessors for ${leg.bank}`);
+      const built = buildDeal(
+        spec,
+        { [bA.pub]: recordsByBank[bA.pub] as never, [bB.pub]: recordsByBank[bB.pub] as never, [bC.pub]: recordsByBank[bC.pub] as never, [bD.pub]: recordsByBank[bD.pub] as never },
+      );
+
+      const allRecordHashes = new Set<string>();
+      for (const recs of Object.values(recordsByBank)) {
+        for (const r of recs) allRecordHashes.add(hashDoc(r));
       }
 
-      // Cross-subscribe banks to each other's sessions: for each ordered pair
-      // (thisBank, peerBank), thisBank watches its own session and pushes to
-      // peerBank's URL. Collectively every bank receives every other bank's
-      // signatures.
+      // Cross-subscribe every bank to every record hash so signatures fan out
+      // across the whole graph. In production the coordinator would choose a
+      // sparser topology.
       for (const bankPub of order) {
         for (const peerPub of order) {
           if (peerPub === bankPub) continue;
@@ -125,7 +116,7 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
             type: "subscription",
             pubkey: A.pub,
             ulid: newUlid(),
-            sessions: [sessionByBank[bankPub]],
+            hashes: [...allRecordHashes],
             url: bankUrl(nameByPub.get(peerPub)!),
             to: peerPub,
           };
@@ -152,28 +143,14 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
         }
       }
 
+      // Every record at every bank should be settled.
       for (const bankPub of order) {
-        const leg = await ctx(tk.kv, bankByPub.get(bankPub)!, A.pub).db.getLegState(sessionByBank[bankPub]);
-        eq(leg?.state, "settled", `leg state at ${nameByPub.get(bankPub)}`);
-      }
-
-      const settleOf = async (bank: Key) => {
-        const sigs = await ctx(tk.kv, bank, A.pub).db.listSignaturesByTarget({ session: sessionByBank[bank.pub] });
-        for (const s of sigs) {
-          if (s.pubkey === bank.pub && s.action === "settle") return s;
+        for (const r of recordsByBank[bankPub]) {
+          const hash = hashDoc(r);
+          const row = await ctx(tk.kv, bankByPub.get(bankPub)!, A.pub).db.getRecord(hash);
+          eq(row?.status, "settle", `record ${hash.slice(0, 8)} at ${nameByPub.get(bankPub)} must be settled`);
         }
-        throw new Error(`no settle by ${nameByPub.get(bank.pub)}`);
-      };
-      const cSettle = await settleOf(bC);
-      const dSettle = await settleOf(bD);
-      const aSettle = await settleOf(bA);
-      const bSettle = await settleOf(bB);
-      const cSeen = (cSettle.seen as string[]) ?? [];
-      eq(cSeen.length, 2, "bank-C settle.seen length");
-      assert(cSeen.includes(hashDoc(aSettle)) && cSeen.includes(hashDoc(bSettle)), "bank-C must cite both leads");
-      const dSeen = (dSettle.seen as string[]) ?? [];
-      eq(dSeen.length, 1, "bank-D settle.seen length");
-      assert(dSeen.includes(hashDoc(cSettle)), "bank-D must cite bank-C");
+      }
 
       const bal = async (bank: Key, acct: string) => Number((await ctx(tk.kv, bank, A.pub).db.getAccount(acct))?.balance);
       eq(await bal(bA, coinA.issue), -1, "A's A-coin issue");

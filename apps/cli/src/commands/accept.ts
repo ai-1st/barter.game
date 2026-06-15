@@ -1,11 +1,11 @@
 // `barter accept "<deal-token>"` — follow-sign your view of a deal.
 //
 // The counterparty verifies the initiator's token, re-fetches the records
-// from each bank (a token can't lie about bank-minted records — get_session is
-// the source of truth), then signs THEIR OWN Tx with action "follow" and
-// submits it to every bank in the token. That signature is both the
-// authorization for their records and the receipt confirmation. The banks
-// then advance to settled on their own.
+// from each bank (a token can't lie about bank-minted records —
+// get_record_signatures is the source of truth), then signs THEIR OWN Tx with
+// action "follow" and submits it to every bank in the token. That signature is
+// both the authorization for their records and the receipt confirmation. The
+// banks then advance to settled on their own.
 
 import {
   hashDoc,
@@ -42,17 +42,19 @@ export async function runAccept(argv: string[]): Promise<number> {
 
   // Don't trust the token's record bodies — verify against each bank.
   for (const bank of token.banks) {
-    const view = (await call(profile, "get_session", { session: bank.session }, {
-      bankUrl: bank.url,
-      toBankPubkey: bank.pubkey,
-    })) as { records: Array<Record<string, unknown>> };
-    const byUlid = new Map(view.records.map((r) => [r.ulid as string, r]));
     for (const claimed of token.records) {
       if (claimed.pubkey !== bank.pubkey) continue; // another bank's record
-      const real = byUlid.get(claimed.ulid);
-      if (!real || real.amount !== claimed.amount || real.account !== claimed.account || real.type !== claimed.type) {
+      const view = (await call(profile, "get_record_signatures", { record_hash: hashDoc(claimed) }, {
+        bankUrl: bank.url,
+        toBankPubkey: bank.pubkey,
+      })) as { record: Record<string, unknown> };
+      const real = view.record;
+      if (
+        !real || real.amount !== claimed.amount || real.account !== claimed.account ||
+        real.type !== claimed.type
+      ) {
         process.stderr.write(
-          `barter accept: record ${claimed.ulid} does not match the bank's books — refusing\n`,
+          `barter accept: record ${hashDoc(claimed)} does not match the bank's books — refusing\n`,
         );
         return 1;
       }

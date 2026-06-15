@@ -13,8 +13,7 @@ import { createRecords } from "./handlers/create_records.ts";
 import { submitTx } from "./handlers/submit_tx.ts";
 import { subscribe } from "./handlers/subscribe.ts";
 import { notifySignatures } from "./handlers/notify_signatures.ts";
-import { rejectSession } from "./handlers/reject_session.ts";
-import { getSession } from "./handlers/get_session.ts";
+import { getRecordSignatures } from "./handlers/get_record_signatures.ts";
 import { getAccountBalance, getPromise, listAccounts } from "./handlers/get.ts";
 
 export const v1Registry: Registry = {
@@ -26,10 +25,8 @@ export const v1Registry: Registry = {
   // signature fan-out (waves 2-3 run inside the banks; these feed them)
   subscribe: subscribe,
   notify_signatures: notifySignatures,
-  // cancellation
-  reject_session: rejectSession,
   // read-only
-  get_session: getSession,
+  get_record_signatures: getRecordSignatures,
   get_promise: getPromise,
   get_account_balance: getAccountBalance,
   list_accounts: listAccounts,

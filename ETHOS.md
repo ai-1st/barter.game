@@ -74,7 +74,7 @@ requires synchronized clocks across participants.
 - **All signatures and documents are irrevocable and eternal.** Once signed, a
 doc lives forever in the content-addressed graph. There is no revocation
 mechanism, no "cancel this signature" operation, and no TTL.
-- **Standing orders are forever.** An `Order` (§5.7) remains valid for as long as
+- **Standing orders are forever.** An `Order` (see `protocol/bank-schema.md` §1.6) remains valid for as long as
 the holder maintains sufficient balance in the relevant account. The only limit
 is the account itself.
 - **Cancellation is mechanical, not administrative.** A holder who wants to stop

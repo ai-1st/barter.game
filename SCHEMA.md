@@ -1,6 +1,6 @@
 # Database schema — v1 (Reference Implementation)
 
-> **This is an implementation detail, not a protocol invariant.** The barter.game v1 protocol ([`PROTOCOL.md`](./PROTOCOL.md) §8–§9) requires certain correctness guarantees — sum-to-zero, at most one active hold per account, atomic state transitions — but it does not mandate Deno KV, Deno Deploy, or any specific schema. You may use SQLite, LevelDB, DynamoDB, or a custom store as long as you enforce the same invariants.
+> **This is an implementation detail, not a protocol invariant.** The barter.game v1 protocol ([`protocol/bank-schema.md`](./protocol/bank-schema.md) §2–§3) requires certain correctness guarantees — sum-to-zero, at most one active hold per account, atomic state transitions — but it does not mandate Deno KV, Deno Deploy, or any specific schema. You may use SQLite, LevelDB, DynamoDB, or a custom store as long as you enforce the same invariants.
 >
 > This document describes the key-space used by the v1 reference implementation. Treat it as a working example, not a contract.
 
@@ -98,7 +98,7 @@ await kv.atomic()
 
 ### `legs` — per-deal state machine
 
-One row per deal this bank participates in, holding **only its own role, predecessors, and the deal's bank list** — never the full graph (PROTOCOL.md §2.3 Visibility). Replaces the old `txs` table: state is keyed by the deal ULID, not a Tx hash, because a deal now spans one Tx per holder.
+One row per deal this bank participates in, holding **only its own role, predecessors, and the deal's bank list** — never the full graph (protocol/README.md §2.3 Visibility). Replaces the old `txs` table: state is keyed by the deal ULID, not a Tx hash, because a deal now spans one Tx per holder.
 
 | Key | Value shape |
 |---|---|
@@ -109,7 +109,7 @@ One row per deal this bank participates in, holding **only its own role, predece
 - `predecessors` — bank pubkeys whose settle must be verified first
 - `banks` — ALL bank pubkeys in the deal (leads await their holds)
 
-State transitions (PROTOCOL.md §8). Wave 1 is client-driven; from `approved` onward the **bank advances itself** (the advance engine runs after `submit_tx` and after every verified signature arriving via `notify_signatures`):
+State transitions (protocol/bank-schema.md §2). Wave 1 is client-driven; from `approved` onward the **bank advances itself** (the advance engine runs after `submit_tx` and after every verified signature arriving via `notify_signatures`):
 
 - `create_records` inserts at `created` with `role` / `predecessors` / `banks`.
 - `submit_tx` advances to `approved` once every record this bank owns under the deal is bound to a holder-signed Tx and carries a bank per-record `approve`.

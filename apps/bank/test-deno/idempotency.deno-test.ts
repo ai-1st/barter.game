@@ -29,7 +29,7 @@ function makeMintParams(bank: Key, issuer: Key, amount: number) {
   };
 }
 
-Deno.test("create_records is idempotent for the same session", async () => {
+Deno.test("create_records is idempotent for the same request", async () => {
   const tk = await openTestKv();
   try {
     const bank = key(), alice = key(), bob = key();
@@ -41,12 +41,7 @@ Deno.test("create_records is idempotent for the same session", async () => {
 
     const bobAccount = accountDoc(bob, minted.promise_hash, pocketHash(bob, "main"));
     const bobAccountHash = hashDoc(bobAccount);
-    const session = newUlid();
     const params = {
-      session,
-      role: "lead" as const,
-      predecessors: [],
-      banks: [bank.pub],
       requests: [{
         type: "transfer" as const,
         promise_hash: minted.promise_hash,
@@ -73,8 +68,8 @@ Deno.test("create_records is idempotent for the same session", async () => {
     eq(second.records.length, 2, "second call returns same record count");
 
     // No duplicate records were created.
-    const rows = await ctx(tk.kv, bank, alice.pub).db.getRecordsBySession(session);
-    eq(rows.length, 2, "only one record pair exists for the session");
+    const rows = await ctx(tk.kv, bank, alice.pub).db.getRecordsByAccount(minted.credit_account_hash);
+    eq(rows.filter((r) => r.status === "draft").length, 1, "only one draft debit record for the account");
   } finally {
     await closeTestKv(tk);
   }

@@ -269,20 +269,20 @@ describe("Subscription validator", () => {
     expect(() => validateSubscription(valid)).not.toThrow();
   });
 
-  test("accepts record hashes and until", () => {
+  test("accepts hashes and until", () => {
     expect(() =>
       validateSubscription({
         ...valid,
-        records: [HASH],
+        hashes: [HASH, HASH],
         until: "2026-12-31",
       }),
     ).not.toThrow();
   });
 
-  test("rejects when no watch keys at all", () => {
+  test("rejects when no hashes", () => {
     const { hashes: _hashes, ...noWatch } = valid;
-    expect(() => validateSubscription(noWatch)).toThrow(/at least one/);
-    expect(() => validateSubscription({ ...noWatch, records: [] })).toThrow(/at least one/);
+    expect(() => validateSubscription(noWatch)).toThrow(/hashes/);
+    expect(() => validateSubscription({ ...noWatch, hashes: [] })).toThrow(/hashes/);
   });
 
   test("rejects non-http(s) or invalid urls", () => {
@@ -290,8 +290,8 @@ describe("Subscription validator", () => {
     expect(() => validateSubscription({ ...valid, url: "ftp://x.example" })).toThrow(/http/);
   });
 
-  test("rejects ULIDs in records (must be base58 hashes)", () => {
-    expect(() => validateSubscription({ ...valid, records: [ULID] })).toThrow(/base58/);
+  test("rejects ULIDs in hashes (must be base58 hashes)", () => {
+    expect(() => validateSubscription({ ...valid, hashes: [ULID] })).toThrow(/base58/);
   });
 
   test("rejects bad until", () => {

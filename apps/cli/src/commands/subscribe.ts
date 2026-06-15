@@ -1,11 +1,10 @@
 // `barter subscribe` — register a standing signature fan-out at a bank.
 //
 // Normally `barter trade` / `barter deal` cross-subscribe the banks for you;
-// this is the manual escape hatch (e.g. point a session's signatures at your
+// this is the manual escape hatch (e.g. point a record's signatures at your
 // own webhook).
 //
-//   barter subscribe --bank <url> --url <push-url> \
-//     [--session <ulid>]... [--record <ulid>]... [--hash <h>]... \
+//   barter subscribe --bank <url> --url <push-url> --hash <h>... \
 //     [--to <pubkey>] [--until YYYY-MM-DD]
 
 import { newUlid } from "../../../../packages/protocol/src/index.ts";
@@ -13,8 +12,6 @@ import { call } from "../client.ts";
 import { loadProfile } from "../profile.ts";
 
 export async function runSubscribe(argv: string[]): Promise<number> {
-  const sessions: string[] = [];
-  const records: string[] = [];
   const hashes: string[] = [];
   let bank: string | undefined;
   let url: string | undefined;
@@ -22,17 +19,15 @@ export async function runSubscribe(argv: string[]): Promise<number> {
   let until: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
-      case "--bank": bank = argv[++i]; break;
-      case "--url": url = argv[++i]; break;
-      case "--session": sessions.push(argv[++i]); break;
-      case "--record": records.push(argv[++i]); break;
-      case "--hash": hashes.push(argv[++i]); break;
-      case "--to": to = argv[++i]; break;
-      case "--until": until = argv[++i]; break;
+      case "--bank": bank = argv[++i]!; break;
+      case "--url": url = argv[++i]!; break;
+      case "--hash": hashes.push(argv[++i]!); break;
+      case "--to": to = argv[++i]!; break;
+      case "--until": until = argv[++i]!; break;
     }
   }
-  if (!url || sessions.length + records.length + hashes.length === 0) {
-    process.stderr.write(`barter subscribe: --url and at least one --session/--record/--hash required\n`);
+  if (!url || hashes.length === 0) {
+    process.stderr.write(`barter subscribe: --url and at least one --hash required\n`);
     return 1;
   }
   const profile = loadProfile();
@@ -42,10 +37,8 @@ export async function runSubscribe(argv: string[]): Promise<number> {
     pubkey: profile.pubkey,
     ulid: newUlid(),
     url,
+    hashes,
   };
-  if (sessions.length) subscription.sessions = sessions;
-  if (records.length) subscription.records = records;
-  if (hashes.length) subscription.hashes = hashes;
   if (to) subscription.to = to;
   if (until) subscription.until = until;
 

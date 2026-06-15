@@ -3,14 +3,11 @@
 // Signatures carry their own authority (signer pubkey + ed25519 sig over
 // the doc), so the bank accepts them from anyone: a peer bank pushing per a
 // Subscription, or a client relaying after a lost push. Each valid
-// signature is stored, then every session it touches — plus every local
-// session still in play — is advanced. A peer's hold/settle targets the
-// peer's own session, so the receiving bank must also re-evaluate its own
-// pending sessions when such signatures arrive.
+// signature is stored, then every record hash it references is advanced.
 
 import { hashDoc, verifyDoc, validateSignature } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
-import { advanceSession } from "../advance.ts";
+import { advanceRecord } from "../advance.ts";
 
 type NotifySignaturesParams = { signatures: Array<Record<string, unknown>> };
 
@@ -21,7 +18,6 @@ export const notifySignatures: Handler = async (params, ctx) => {
   }
 
   const stored: string[] = [];
-  const sessionsTouched = new Set<string>();
 
   for (const s of p.signatures) {
     try {
@@ -35,18 +31,17 @@ export const notifySignatures: Handler = async (params, ctx) => {
     const hash = hashDoc(s);
     await ctx.db.insertDoc({ hash, type: "signature", pubkey: s.pubkey as string, body: s });
     stored.push(hash);
-    if (typeof s.session === "string") sessionsTouched.add(s.session as string);
+
+    // A peer settle/reject signature may unblock a record pair we own.
+    // Ready/hold peer signatures do not advance local records; the local
+    // submit_tx provides the Tx hash needed to acquire holds.
+    if (typeof s.hash === "string" && (s.action === "settle" || s.action === "reject")) {
+      const row = await ctx.db.getRecord(s.hash);
+      if (row && row.body.pubkey === ctx.bankPubkey) {
+        await advanceRecord(s.hash, "", ctx);
+      }
+    }
   }
 
-  // A new peer signature may unblock one of our sessions: peer holds/settles
-  // target the peer's session, not ours, so we also re-evaluate every local
-  // non-terminal session. advanceSession is idempotent and no-ops if nothing
-  // changed.
-  const localSessions = await ctx.db.listPendingSessions();
-
-  for (const session of new Set([...sessionsTouched, ...localSessions])) {
-    await advanceSession(session, ctx);
-  }
-
-  return { stored: stored.length, sessions_advanced: [...new Set([...sessionsTouched, ...localSessions])] };
+  return { stored: stored.length };
 };

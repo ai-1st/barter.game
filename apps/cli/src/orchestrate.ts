@@ -3,15 +3,11 @@
 // The initiating user holds the whole deal and hands each bank only its own
 // slice (PROTOCOL.md §2 Visibility). The client's job ends early: it creates
 // the records on every bank (create_records), cross-subscribes the banks to
-// each other's session signatures, and submits the holder Txs it has (its own,
+// each other's record signatures, and submits the holder Txs it has (its own
 // signed "lead"; others arrive via deal tokens and `barter accept`). From
 // there the BANKS self-advance through hold and settle — there is no client
 // hold/settle call. If a push gets lost, `relayAll` (barter nudge) carries
-// the signatures by hand; they hold their own authority.
-//
-// Each bank groups its records under a per-bank `session` ULID supplied by
-// the initiator. The user-facing `deal` ULID is for local state only; it is
-// never passed to banks or shared across them.
+// signatures by hand; they hold their own authority.
 
 import {
   buildDeal,
@@ -22,7 +18,7 @@ import {
   encodeDealToken,
   type BuiltDeal,
   type DealSpec,
-  type SignedDealToken,
+  type RecordDoc,
   type Tx,
 } from "../../../packages/protocol/src/index.ts";
 import { call } from "./client.ts";
@@ -46,30 +42,21 @@ export type DealState = {
   initiator: string;
   order: string[];
   banks: BankMap;
-  legs: Array<{ bank: string; role: "lead" | "follow"; predecessors: string[] }>;
-  /** Per-bank session ULIDs supplied to create_records and used for subscriptions. */
-  sessionsByBank: Record<string, string>;
   holderTxs: HolderTxState[];
-  /** Record bodies returned by create_records, by ULID. */
-  records: Record<string, Record<string, unknown>>;
+  /** Record bodies returned by create_records, keyed by content hash. */
+  records: Record<string, RecordDoc>;
+  /** Record hashes grouped by owning bank, in transfer order. */
+  recordsByBank: Record<string, string[]>;
 };
 
-/** The settle topology (roles, predecessors, order) depends only on the
- *  transfer graph — compute it before any bank call by building the deal
- *  with placeholder ULIDs. */
-export function computeTopology(spec: DealSpec): {
-  legs: BuiltDeal["legs"];
-  order: string[];
-} {
-  let n = 0;
-  const fake = () => ("0FAKE" + String(n++).padStart(21, "0")).slice(0, 26);
-  const fakeUlids: Record<string, string[]> = {};
+const rpcUrl = (bankUrl: string) => `${bankUrl.replace(/\/$/, "")}/rpc`;
+
+function bankOrder(spec: DealSpec): string[] {
+  const order: string[] = [];
   for (const t of spec.transfers) {
-    if (!fakeUlids[t.issuerBank]) fakeUlids[t.issuerBank] = [];
-    fakeUlids[t.issuerBank].push(fake(), fake());
+    if (!order.includes(t.issuerBank)) order.push(t.issuerBank);
   }
-  const built = buildDeal(spec, fakeUlids, { ulid: fake });
-  return { legs: built.legs, order: built.order };
+  return order;
 }
 
 function holderSig(profile: Profile, txHash: string, action: "lead" | "follow"): Record<string, unknown> {
@@ -84,13 +71,11 @@ function holderSig(profile: Profile, txHash: string, action: "lead" | "follow"):
   return sig;
 }
 
-const rpcUrl = (bankUrl: string) => `${bankUrl.replace(/\/$/, "")}/rpc`;
-
 /**
  * Wave 1, initiator side: create_records on every bank (attaching any
- * supporting docs), cross-subscribe the banks to each other, sign and
- * submit the initiator's own Tx as "lead". Returns the DealState to
- * persist; the remaining holders sign via deal tokens (`barter accept`).
+ * supporting docs), cross-subscribe the banks to each other, sign and submit
+ * the initiator's own Tx as "lead". Returns the DealState to persist; the
+ * remaining holders sign via deal tokens (`barter accept`).
  */
 export async function createRecordsAndLead(
   profile: Profile,
@@ -98,62 +83,62 @@ export async function createRecordsAndLead(
   banks: BankMap,
   docsByBank: Record<string, Array<Record<string, unknown>>> = {},
 ): Promise<DealState> {
-  const topology = computeTopology(spec);
-  for (const bank of topology.order) {
+  const order = bankOrder(spec);
+  for (const bank of order) {
     if (!banks[bank]) throw new Error(`no URL configured for participating bank ${bank}`);
   }
 
-  // Each bank gets its own opaque session ULID. It is supplied to
-  // create_records and used for subscriptions / get_session / reject_session.
-  const sessionsByBank: Record<string, string> = {};
-  for (const leg of topology.legs) {
-    sessionsByBank[leg.bank] = newUlid();
-  }
+  // Phase 0: create records at each bank. The bank assigns ULIDs and returns
+  // the record bodies in transfer order (debit, credit per transfer).
+  const recordsByBank: Record<string, string[]> = {};
+  const records: Record<string, RecordDoc> = {};
+  const bankRecords: Record<string, RecordDoc[]> = {};
 
-  // Phase 0: create records at each bank. The bank assigns ULIDs and stores
-  // this bank's slice of the topology alongside.
-  const bankRecordUlids: Record<string, string[]> = {};
-  const records: Record<string, Record<string, unknown>> = {};
-  for (const leg of topology.legs) {
-    const transfers = spec.transfers
-      .filter((t) => t.issuerBank === leg.bank)
-      .map((t) => ({ amount: t.amount, from_account: t.from.account, to_account: t.to.account }));
+  for (const bank of order) {
+    const transfers = spec.transfers.filter((t) => t.issuerBank === bank);
+    const requests = transfers.map((t) => ({
+      type: "transfer" as const,
+      promise_hash: t.promise,
+      amount: t.amount,
+      debit_account_hash: t.from.account,
+      credit_account_hash: t.to.account,
+    }));
     const res = (await call(
       profile,
       "create_records",
-      {
-        session: sessionsByBank[leg.bank],
-        role: leg.role,
-        predecessors: leg.predecessors,
-        banks: topology.order,
-        transfers,
-        docs: docsByBank[leg.bank] ?? [],
-      },
-      { bankUrl: banks[leg.bank], toBankPubkey: leg.bank },
-    )) as { records: Array<Record<string, unknown>> };
-    bankRecordUlids[leg.bank] = res.records.map((r) => r.ulid as string);
-    for (const r of res.records) records[r.ulid as string] = r;
+      { requests, docs: docsByBank[bank] ?? [] },
+      { bankUrl: banks[bank], toBankPubkey: bank },
+    )) as { records: RecordDoc[] };
+
+    const hashes: string[] = [];
+    for (const r of res.records) {
+      const h = hashDoc(r);
+      records[h] = r;
+      hashes.push(h);
+    }
+    recordsByBank[bank] = hashes;
+    bankRecords[bank] = res.records;
   }
 
-  const built = buildDeal(spec, bankRecordUlids);
+  const built = buildDeal(spec, bankRecords);
+  const allRecordHashes = Object.values(recordsByBank).flat();
 
-  // Cross-subscribe the banks to each other's session signatures, so they can
-  // self-advance (the lead waits for peer holds; followers for predecessor
-  // settles). For each ordered pair (thisBank, peerBank), thisBank watches its
-  // own session and pushes to peerBank's URL. Client relay (`barter nudge`) is
-  // the fallback topology.
-  for (const bank of topology.order) {
-    for (const peer of topology.order) {
+  // Cross-subscribe the banks to each other's record signatures, so peer
+  // settle signatures fan out and follower banks can advance. For each ordered
+  // pair (thisBank, peerBank), thisBank watches all record hashes and pushes
+  // to peerBank's URL. Client relay (`barter nudge`) is the fallback.
+  for (const bank of order) {
+    for (const peer of order) {
       if (peer === bank) continue;
       const sub: Record<string, unknown> = {
         type: "subscription",
         pubkey: profile.pubkey,
         ulid: newUlid(),
-        sessions: [sessionsByBank[bank]],
-        url: rpcUrl(banks[peer]),
+        hashes: allRecordHashes,
+        url: rpcUrl(banks[peer]!),
         to: peer,
       };
-      await call(profile, "subscribe", { subscription: sub }, { bankUrl: banks[bank], toBankPubkey: bank });
+      await call(profile, "subscribe", { subscription: sub }, { bankUrl: banks[bank]!, toBankPubkey: bank });
     }
   }
 
@@ -165,18 +150,16 @@ export async function createRecordsAndLead(
     await call(
       profile,
       "submit_tx",
-      { tx: mine.tx, holder_sig: sig, docs: docsByBank[bank] ?? [] },
-      { bankUrl: banks[bank], toBankPubkey: bank },
+      { tx: mine.tx, holder_signature: sig, docs: docsByBank[bank] ?? [] },
+      { bankUrl: banks[bank]!, toBankPubkey: bank },
     );
   }
 
   return {
-    deal: spec.deal,
+    deal: newUlid(),
     initiator: profile.pubkey,
-    order: built.order,
+    order,
     banks,
-    legs: built.legs.map((l) => ({ bank: l.bank, role: l.role, predecessors: l.predecessors })),
-    sessionsByBank,
     holderTxs: built.holderTxs.map((h) => ({
       holder: h.holder,
       tx: h.tx,
@@ -185,6 +168,7 @@ export async function createRecordsAndLead(
       banks: h.banks,
     })),
     records,
+    recordsByBank,
   };
 }
 
@@ -199,13 +183,13 @@ export function makeDealTokens(
   const out: Array<{ holder: string; token: string }> = [];
   for (const h of state.holderTxs) {
     if (h.holder === state.initiator) continue;
-    const token: SignedDealToken = signDealToken(
+    const token = signDealToken(
       {
         pubkey: profile.pubkey,
         deal: state.deal,
         tx: h.tx,
-        records: h.tx.records.map((u) => state.records[u]).filter(Boolean) as never,
-        banks: h.banks.map((b) => ({ pubkey: b, url: state.banks[b], session: state.sessionsByBank[b] })),
+        records: h.tx.records.map((hash) => state.records[hash]).filter(Boolean) as RecordDoc[],
+        banks: h.banks.map((b) => ({ pubkey: b, url: state.banks[b]! })),
         exp: Math.floor(Date.now() / 1000) + expSeconds,
       },
       profilePrivateKeyBytes(profile),
@@ -224,7 +208,7 @@ export async function submitFollow(
 ): Promise<void> {
   const sig = holderSig(profile, hashDoc(tx), "follow");
   for (const b of banks) {
-    await call(profile, "submit_tx", { tx, holder_sig: sig, docs }, { bankUrl: b.url, toBankPubkey: b.pubkey });
+    await call(profile, "submit_tx", { tx, holder_signature: sig, docs }, { bankUrl: b.url, toBankPubkey: b.pubkey });
   }
 }
 
@@ -235,37 +219,44 @@ export async function fetchLegStates(
 ): Promise<Array<{ bank: string; state: string }>> {
   const out: Array<{ bank: string; state: string }> = [];
   for (const bank of state.order) {
-    const session = state.sessionsByBank[bank];
-    if (!session) throw new Error(`no session stored for bank ${bank}`);
-    const res = (await call(profile, "get_session", { session }, {
-      bankUrl: state.banks[bank],
-      toBankPubkey: bank,
-    })) as { state: string };
-    out.push({ bank, state: res.state });
+    const hashes = state.recordsByBank[bank] ?? [];
+    let settled = 0;
+    for (const hash of hashes) {
+      const res = (await call(profile, "get_record_signatures", { record_hash: hash }, {
+        bankUrl: state.banks[bank],
+        toBankPubkey: bank,
+      })) as { signatures: Array<Record<string, unknown>> };
+      if (res.signatures.some((s) => s.action === "settle" && s.pubkey === bank)) settled++;
+    }
+    const stateName = settled === hashes.length ? "settled" : settled === 0 ? "pending" : "settling";
+    out.push({ bank, state: stateName });
   }
   return out;
 }
 
 /**
  * Client relay — the fallback topology. Carry every signature each bank has
- * for its own session to every other bank (signatures hold their own
+ * issued for its own records to every other bank (signatures hold their own
  * authority, so anyone may deliver them). Un-sticks a deal whose pushes were
  * lost.
  */
 export async function relayAll(profile: Profile, state: DealState): Promise<void> {
   const sigsByBank: Record<string, Array<Record<string, unknown>>> = {};
   for (const bank of state.order) {
-    const session = state.sessionsByBank[bank];
-    if (!session) continue;
-    const res = (await call(profile, "get_session", { session }, {
-      bankUrl: state.banks[bank],
-      toBankPubkey: bank,
-    })) as { signatures: Array<Record<string, unknown>> };
-    sigsByBank[bank] = res.signatures.filter((s) => typeof s.sig === "string");
+    const hashes = state.recordsByBank[bank] ?? [];
+    const sigs: Array<Record<string, unknown>> = [];
+    for (const hash of hashes) {
+      const res = (await call(profile, "get_record_signatures", { record_hash: hash }, {
+        bankUrl: state.banks[bank],
+        toBankPubkey: bank,
+      })) as { signatures: Array<Record<string, unknown>> };
+      sigs.push(...res.signatures.filter((s) => typeof s.sig === "string"));
+    }
+    sigsByBank[bank] = sigs;
   }
   for (const from of state.order) {
     for (const to of state.order) {
-      if (from === to || sigsByBank[from].length === 0) continue;
+      if (from === to || (sigsByBank[from]?.length ?? 0) === 0) continue;
       await call(
         profile,
         "notify_signatures",

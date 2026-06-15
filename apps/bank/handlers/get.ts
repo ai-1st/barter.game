@@ -74,7 +74,7 @@ export async function submitAddress(
   const existing = await ctx.db.getDoc(a.pubkey as string);
   if (existing && existing.type === "address") {
     const old = existing.body as Record<string, unknown>;
-    if (typeof old.ulid === "string" && old.ulid >= a.ulid) {
+    if (typeof old.ulid === "string" && typeof a.ulid === "string" && old.ulid >= a.ulid) {
       throw new Error("existing address has same or newer ulid");
     }
   }

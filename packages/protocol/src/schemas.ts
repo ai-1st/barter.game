@@ -472,32 +472,13 @@ export function validateSignature(d: unknown): asserts d is Signature {
 export function validateSubscription(d: unknown): asserts d is Subscription {
   assertBaseDoc(d, "subscription");
   const s = d as Record<string, unknown>;
-  // Records are now content-addressed hashes; the subscription watches hash targets.
-  if (s.records !== undefined) {
-    if (!Array.isArray(s.records)) {
-      throw new TypeError("subscription.records must be an array if present");
-    }
-    for (const v of s.records as unknown[]) {
-      if (typeof v !== "string" || !BASE58_RE.test(v)) {
-        throw new TypeError("subscription.records[] must be base58 hashes");
-      }
-    }
+  if (!Array.isArray(s.hashes) || s.hashes.length === 0) {
+    throw new TypeError("subscription.hashes must be a non-empty array");
   }
-  if (s.hashes !== undefined) {
-    if (!Array.isArray(s.hashes)) {
-      throw new TypeError("subscription.hashes must be an array if present");
+  for (const v of s.hashes) {
+    if (typeof v !== "string" || !BASE58_RE.test(v)) {
+      throw new TypeError("subscription.hashes[] must be base58 hashes");
     }
-    for (const v of s.hashes) {
-      if (typeof v !== "string" || !BASE58_RE.test(v)) {
-        throw new TypeError("subscription.hashes[] must be base58 hashes");
-      }
-    }
-  }
-  const watchCount =
-    ((s.records as unknown[] | undefined)?.length ?? 0) +
-    ((s.hashes as unknown[] | undefined)?.length ?? 0);
-  if (watchCount === 0) {
-    throw new TypeError("subscription must watch at least one record hash or doc hash");
   }
   if (typeof s.url !== "string") {
     throw new TypeError("subscription.url must be a string");

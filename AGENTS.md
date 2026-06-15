@@ -191,7 +191,7 @@ cd website && hugo mod get && hugo --gc --minify
 | `scenarios/*.md` | Step-by-step user/matchmaker/bank interaction traces | Implementing or debugging specific flows |
 | `README.md` | Project intro, quickstart, CLI usage | New to the repo |
 | `ETHOS.md` | Design beliefs and priors | Changing protocol semantics |
-| `PROTOCOL.md` | **The invariant contract.** Every implementation must follow this. | Building a bank, client, or alternative implementation |
+| `protocol/` directory | **The invariant contract.** Split across `README.md`, `base.md`, `bank-schema.md`, and `bank-rpc.md`. Every implementation must follow these. | Building a bank, client, or alternative implementation |
 | `IMPLEMENTATION.md` | How *this repo* implements v1 (file maps, design choices) | Modifying server or client code |
 | `SCHEMA.md` | Reference Deno KV key-space schema | Changing KV keys or atomic operations |
 | `TODOS.md` | v1.5+ roadmap and speculative extensions | Planning new features |

@@ -176,11 +176,10 @@ Current `deno.json` mappings (check `deno.json` for the live versions):
 }
 ```
 
-After changing import URLs, run both test suites before deploying:
+After changing import URLs, run the full test matrix before deploying:
 
 ```bash
-bun run test
-bun run test:deno
+bun run test:all
 ```
 
 ## Rotating keys

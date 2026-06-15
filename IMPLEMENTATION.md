@@ -1,8 +1,8 @@
 # barter.game — v1 Reference Implementation Guide
 
-> **This document is NOT the protocol contract.** It describes how *this repository* implements barter.game v1. If you are building your own bank or client, read `PROTOCOL.md` first for the invariant rules you must follow, then read this file for inspiration, file maps, and lessons from our specific choices.
+> **This document is NOT the protocol contract.** It describes how *this repository* implements barter.game v1. If you are building your own bank or client, read `protocol/README.md` and `protocol/bank-schema.md` first for the invariant rules you must follow, then read this file for inspiration, file maps, and lessons from our specific choices.
 >
-> You may change anything in this document for your own implementation. The protocol doesn't care if you use Postgres or SQLite, Deno Deploy or a VPS. It cares that you enforce the invariants in `PROTOCOL.md` §9.
+> You may change anything in this document for your own implementation. The protocol doesn't care if you use Postgres or SQLite, Deno Deploy or a VPS. It cares that you enforce the invariants in `protocol/bank-schema.md` §3.
 
 ---
 
@@ -232,7 +232,7 @@ Honest list of limitations in this implementation:
 - **No NFT-like unique Promises.** Issued Promises are fungible.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
 - **No key rotation or recovery.** Forever-key in v1.
-- **No rollback after a lead settles.** If a follow bank never settles, the lead is out — the lead/follow risk (PROTOCOL.md §2), resolved socially.
+- **No rollback after a lead settles.** If a follow bank never settles, the lead is out — the lead/follow risk (protocol/README.md §2), resolved socially.
 
 See `TODOS.md` for the v1.5+ roadmap.
 
@@ -283,4 +283,4 @@ curl https://<your-project>.deno.dev/alice/barter-bank.json
 
 You now have a bank. Tell your friends about it. They run `barter init` against your URL and you're a tiny central bank in a federation of exactly however many people you've invited.
 
-> **Not using Deno Deploy?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in PROTOCOL.md §9, (3) a way to expose `POST /<name>/rpc`, `GET /<name>/barter-bank.json`, and the address directory endpoints under the bank's canonical URL. The rest is up to you.
+> **Not using Deno Deploy?** You need: (1) an HTTP server that can hold an ed25519 key, (2) a storage layer that enforces the invariants in `protocol/bank-schema.md` §3, (3) a way to expose `POST /<name>/rpc`, `GET /<name>/barter-bank.json`, and the address directory endpoints under the bank's canonical URL. The rest is up to you.

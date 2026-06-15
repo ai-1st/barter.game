@@ -169,8 +169,6 @@ export function isInviteExpired(invite: { exp: number }, nowSeconds = Math.floor
 export type DealTokenBank = {
   pubkey: Base58PubKey;
   url: string;
-  /** Per-bank session ULID used for get_session / reject_session. */
-  session: ULID;
 };
 
 export type DealToken = {
