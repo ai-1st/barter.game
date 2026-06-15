@@ -199,16 +199,23 @@ export function makeDealTokens(
   return out;
 }
 
-/** Submit a holder's signed "follow" Tx to every bank owning its records. */
+/** Submit a holder's signed "follow" Tx to every bank owning its records.
+ *  docsByBank maps bank pubkey → supporting docs to attach at that bank only.
+ *  Account docs must be paired with the bank that issued their promise. */
 export async function submitFollow(
   profile: Profile,
   tx: Tx,
   banks: Array<{ pubkey: string; url: string }>,
-  docs: Array<Record<string, unknown>> = [],
+  docsByBank: Record<string, Array<Record<string, unknown>>> = {},
 ): Promise<void> {
   const sig = holderSig(profile, hashDoc(tx), "follow");
   for (const b of banks) {
-    await call(profile, "submit_tx", { tx, holder_signature: sig, docs }, { bankUrl: b.url, toBankPubkey: b.pubkey });
+    await call(
+      profile,
+      "submit_tx",
+      { tx, holder_signature: sig, docs: docsByBank[b.pubkey] ?? [] },
+      { bankUrl: b.url, toBankPubkey: b.pubkey },
+    );
   }
 }
 

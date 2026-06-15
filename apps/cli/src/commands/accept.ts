@@ -61,16 +61,28 @@ export async function runAccept(argv: string[]): Promise<number> {
     }
   }
 
-  // Attach my Account doc bodies for any of my accounts the records touch
-  // (idempotent if the bank already knows them).
+  // Attach my Account doc bodies for any of my accounts the records touch.
+  // Each account must be presented ONLY to the bank that issued its promise;
+  // a bank's intakeDocs rejects accounts referencing foreign promises.
   const myAccounts = new Set(
     token.records.map((r) => r.account).filter((a): a is string => typeof a === "string"),
   );
-  const docs = listLocalDocs("account")
-    .filter((d) => myAccounts.has(d.hash))
-    .map((d) => d.body);
+  const accountBank = new Map<string, string>();
+  for (const r of token.records) {
+    if (typeof r.account === "string" && typeof r.pubkey === "string") {
+      accountBank.set(r.account, r.pubkey);
+    }
+  }
+  const accountDocs = listLocalDocs("account").filter((d) => myAccounts.has(d.hash));
+  const docsByBank: Record<string, Array<Record<string, unknown>>> = {};
+  for (const d of accountDocs) {
+    const bank = accountBank.get(d.hash);
+    if (!bank) continue; // shouldn't happen: token.records told us the bank
+    if (!docsByBank[bank]) docsByBank[bank] = [];
+    docsByBank[bank]!.push(d.body);
+  }
 
-  await submitFollow(profile, token.tx, token.banks, docs);
+  await submitFollow(profile, token.tx, token.banks, docsByBank);
 
   process.stdout.write(
     `accepted — your Tx is follow-signed at ${token.banks.length} bank(s)\n` +
