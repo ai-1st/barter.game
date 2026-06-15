@@ -74,7 +74,12 @@ If a bank sees both a direct Tx signature and a matching Order/Offer for the sam
 - any holder Tx touching its records is `lead`, **or**
 - every holder Tx touching its records is `follow` AND every predecessor bank whose output those holders depend on has already issued `hold` signatures on its own records.
 
-The amount being held MUST be either already available in the account or be expected to arrive through a credit record that already has received a "hold" signature. Bank's job is to make sure no overspending occurs. If multiple debits are competing for the same account, preference SHOULD be given to debits that have this account credit in the same Tx.
+A bank may issue a `hold` only if the debit is covered. Coverage means either:
+
+- the account has enough available balance after existing holds, **or**
+- the account will receive a credit in this deal that has already been held by this bank.
+
+The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Tx.
 
 The bank may call `reject` on individual records and invoke a cascading abortion of the whole deal.
 
@@ -105,7 +110,7 @@ The lead set is whichever holders must move before anyone downstream can be made
 
   C is made whole only once **both** A and B give, so the lead set is `{A's bank, B's bank}`. After they settle, C's bank settles `C → D`, then D's bank settles `D → A` and `D → B`, closing both cycles.
 
-If any downstream bank refuses to apply (comvoucher, malice, downtime), every record that already settled stays settled: their vouchers moved, the rest of the chain didn't. The protocol accepts this risk because the trust model says the lead party knows the operators personally. Leads choose to carry it; followers wait for upstream proof before moving.
+If any downstream bank refuses to apply (compromise, malice, downtime), every record that already settled stays settled: their vouchers moved, the rest of the chain didn't. The protocol accepts this risk because the trust model says the lead party knows the operators personally. Leads choose to carry it; followers wait for upstream proof before moving.
 
 > **Invariant:** There is no protocol-level rollback mechanism and no protocol-level timeout. An implementation MAY add a sweeper that releases stuck holds for hygiene, but that is an implementation convenience, not a correctness mechanism.
 
@@ -174,7 +179,7 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
 | Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
-| Key rotation | Out of scope; redeploy with new secret if comvoucherd | **Yes** |
+| Key rotation | Out of scope; redeploy with new secret if compromised | **Yes** |
 | Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
 | Account creation | Accounts are opened by presenting an unsigned Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
 | Voucher fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
