@@ -12,26 +12,29 @@ This is v1. It works end-to-end today.
 
 ## See it work
 
-Four demo banks are live right now:
+Four demo banks are live right now on Deno Deploy:
 
 ```
-bank-alice  https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-alice
-bank-bob    https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-bob
-bank-carol  https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-carol
-bank-dave   https://tcoadwhcqwdnlobxrxod.supabase.co/functions/v1/bank-dave
+bank-alice  https://barter-game-banks.ai-1st.deno.net/alice
+bank-bob    https://barter-game-banks.ai-1st.deno.net/bob
+bank-carol  https://barter-game-banks.ai-1st.deno.net/carol
+bank-dave   https://barter-game-banks.ai-1st.deno.net/dave
 ```
 
-Hit any with `curl` and you'll get a signed `hello` proving its
-identity. Run `./scripts/demo.sh` and you'll watch four simulated users
-on four different banks mint personal currencies, initiate a multi-party
-deal, accept their deal tokens — and then watch the banks settle it
-on their own, in topological order.
+Hit the root with `curl` and you'll see the four live banks; hit
+`/:name/barter-bank.json` for a bank's discovery document.
+
+Run the demo against them:
 
 ```bash
 git clone https://github.com/ai-1st/barter.game.git
 cd barter.game
 bun install
-./scripts/demo.sh
+export BARTER_BANK_ALICE_URL=https://barter-game-banks.ai-1st.deno.net/alice
+export BARTER_BANK_BOB_URL=https://barter-game-banks.ai-1st.deno.net/bob
+export BARTER_BANK_CAROL_URL=https://barter-game-banks.ai-1st.deno.net/carol
+export BARTER_BANK_DAVE_URL=https://barter-game-banks.ai-1st.deno.net/dave
+./scripts/demo-deploy.sh
 ```
 
 The script narrates each step. By the end every Promise that moved
@@ -77,19 +80,15 @@ barter.game/
 ├── SCHEMA.md             ← v1 reference database schema
 ├── TODOS.md              ← the v1.5+ roadmap
 ├── packages/protocol/    ← the @barter.game/protocol library (canonical, crypto, schemas, invites, deal tokens)
-├── apps/cli/             ← the `barter` CLI: init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
+├── apps/
+│   ├── cli/              ← the `barter` CLI: init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
+│   └── bank/             ← the Deno Deploy bank server (entrypoint, handlers, advance engine, subscriptions, db)
 ├── supabase/
-│   ├── migrations/       ← SQL schema (see SCHEMA.md)
-│   └── functions/
-│       ├── _shared/      ← shared bank code (rpc, handlers, advance engine, subscriptions, db)
-│       ├── bank-alice/   ← one Edge Function per bank
-│       ├── bank-bob/
-│       ├── bank-carol/
-│       └── bank-dave/
+│   └── migrations/       ← SQL schema kept for reference; the live server uses Deno KV
 ├── scripts/
-│   ├── demo.sh           ← the full v1 demo
-│   ├── genkey.ts         ← generate an ed25519 keypair for a new bank
-│   └── sync-protocol.ts  ← copy protocol code into Edge Function _shared/
+│   ├── demo-deploy.sh    ← full v1 demo against live Deno Deploy banks
+│   ├── demo-local.sh     ← same demo against a locally started bank server
+│   └── genkey.ts         ← generate an ed25519 keypair for a new bank
 ├── docs/legacy/          ← the original notes that informed v1
 └── website/              ← Hugo/Hextra static site (see below)
 ```
@@ -98,7 +97,7 @@ barter.game/
 
 ```bash
 # One-time setup
-barter init --bank https://...your-bank.../functions/v1/bank-alice
+barter init --bank https://barter-game-banks.ai-1st.deno.net/alice
 
 # Issue a personal currency — the mint IS the first ledger record pair
 # (your issue account goes to -5, your holding account to +5)
@@ -140,7 +139,7 @@ implicit — they come into existence when an Account doc is first
 presented, and Pocket bodies never leave the holder (banks only ever
 see the hash). Ledger records are bank-minted in mandatory debit/credit
 pairs; the mint itself is just the first such pair. Each holder signs
-their OWN `Tx` — the record ULIDs on their own accounts — with action
+their OWN `Tx` — the record hashes on their own accounts — with action
 `lead` (the initiator) or `follow` (everyone else); banks answer with
 per-record `approve`/`reject` signatures. From there the banks
 self-advance: each one holds its debit accounts, the lead bank settles
@@ -157,34 +156,35 @@ Full details in [`protocol/README.md`](./protocol/README.md) and the split contr
 
 ## How to run your own bank
 
+The reference bank is a single Deno Deploy service. One process can serve
+any number of named banks; each bank's private key comes from its own
+`BANK_<NAME>_PRIV_KEY` environment variable.
+
 ```bash
 # 1. Clone the repo and install
 git clone https://github.com/ai-1st/barter.game.git && cd barter.game
 bun install
 
-# 2. Link a Supabase project
-supabase login
-supabase link --project-ref <your-project-ref>
-
-# 3. Apply migrations
-supabase db push
-
-# 4. Generate a bank private key and stash it as a project secret
+# 2. Generate a bank private key
 bun run scripts/genkey.ts | sed 's/^BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/key.env
-supabase secrets set --env-file /tmp/key.env
-rm /tmp/key.env
+#    Repeat for each bank you want to serve (BANK_BOB_PRIV_KEY, ...).
 
-# 5. Deploy the function
-bun run scripts/sync-protocol.ts
-supabase functions deploy bank-alice --no-verify-jwt
+# 3. Create a Deno Deploy project at https://deno.com/deploy
+#    - Link this repo
+#    - Set environment variables from /tmp/key.env
+#    - Entrypoint: apps/bank/main.ts
+#    The included .github/workflows/deploy.yml auto-deploys on every push to main.
 
-# 6. Hit it
-curl https://<your-ref>.supabase.co/functions/v1/bank-alice/
+# 4. Hit it
+curl https://<your-project>.deno.dev/
 ```
 
 You now have a bank. Tell your friends about it. They run `barter init`
 against your URL and you're a tiny central bank in a federation of
 exactly however many people you've invited.
+
+See [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) §4 for the full deployment
+and operational details.
 
 ## Tests
 
@@ -192,12 +192,12 @@ exactly however many people you've invited.
 bun run test:all
 ```
 
-127 tests: 103 under Bun, 24 under Deno. The Deno suite re-runs the
-same canonical-JSON golden vectors under a different runtime, then
-exercises the full bank: minting, the bilateral direct-approval
-walkthrough, subscription fan-out, and a four-bank N-party deal in
-which the banks self-advance to settled. Cross-runtime parity is the
-load-bearing invariant — every signature in the protocol depends on it.
+The suite runs the protocol library under Bun, then re-runs the same
+canonical-JSON golden vectors plus full bank integration scenarios under
+Deno: minting, the bilateral direct-approval walkthrough, subscription
+fan-out, and a four-bank N-party deal in which the banks self-advance to
+settled. Cross-runtime parity is the load-bearing invariant — every
+signature in the protocol depends on it.
 
 ## What v1 doesn't do
 
@@ -220,12 +220,12 @@ for the v1.5+ work.
 
 1. [`SETTLEMENT_WALKTHROUGH.md`](./SETTLEMENT_WALKTHROUGH.md) — the canonical narrative: Alice, Bob, two banks, one trade (10 minutes)
 2. [`ETHOS.md`](./ETHOS.md) — what we believe, why we built it this way (10 minutes)
-3. [`./scripts/demo.sh`](./scripts/demo.sh) — see it work (5 minutes)
+3. [`./scripts/demo-deploy.sh`](./scripts/demo-deploy.sh) — see it work against live banks (5 minutes)
 4. [`protocol/README.md`](./protocol/README.md) — the **invariant protocol contract overview**, then `protocol/base.md`, `protocol/bank-schema.md`, and `protocol/bank-rpc.md` (45 minutes if you read carefully)
 5. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
 6. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
 7. `packages/protocol/src/` — the code (an afternoon)
-8. `supabase/functions/_shared/bank/` — the server-side handlers and advance engine
+8. `apps/bank/` — the server-side handlers and advance engine
 9. [`TODOS.md`](./TODOS.md) — what's next
 
 ## Building your own implementation?
