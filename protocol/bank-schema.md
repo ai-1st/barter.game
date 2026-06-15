@@ -2,7 +2,7 @@
 
 This file defines the banking entities and the ledger invariants that operate on them:
 
-- `Promise`, `Pocket`, `Account`
+- `Voucher`, `Pocket`, `Account`
 - `Record`, `Tx`
 - `Order`, `Offer`
 - `Subscription`, `RecordSubscription`
@@ -19,7 +19,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "promise" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -27,13 +27,13 @@ type BaseDoc = {
 
 `Account` is **not** a `BaseDoc`: its identity is purely content-addressed from its semantic fields, so it has no `ulid` and its owner field is named `holder` rather than `pubkey`.
 
-### 1.1 Promise
+### 1.1 Voucher
 
-A unit of value the `pubkey` owner promises to deliver.
+A unit of value the `pubkey` owner vouchers to deliver.
 
 ```ts
-Promise: BaseDoc & {
-  type: "promise";
+Voucher: BaseDoc & {
+  type: "voucher";
   bank: Base58PubKey;     // pubkey of the issuing bank
   name: string;           // "1 logo", "1 hour consulting"
   image_svn?: string;     // inlined square image
@@ -44,9 +44,9 @@ Promise: BaseDoc & {
 }
 ```
 
-**`bank` is part of the Promise hash.** Two promises with the same name issued at different banks are different promises.
+**`bank` is part of the Voucher hash.** Two vouchers with the same name issued at different banks are different vouchers.
 
-> **Invariant:** The Promise schema fields and their types are fixed in v1.
+> **Invariant:** The Voucher schema fields and their types are fixed in v1.
 
 ### 1.2 Pocket
 
@@ -63,25 +63,25 @@ Pocket: BaseDoc & {
 
 ### 1.3 Account
 
-The issuer bank's record of a holder's stake in a given Promise.
+The issuer bank's record of a holder's stake in a given Voucher.
 
 ```ts
 Account: {
   type: "account";
   holder: Base58PubKey;   // pubkey of the account owner
   pocket: Base58SHA256;   // hash of holder's Pocket doc
-  promise: Base58SHA256;  // hash of the Promise this account holds
+  voucher: Base58SHA256;  // hash of the Voucher this account holds
 }
 ```
 
 Account hash = `base58(sha256(canonical(account_doc)))`.
 
-Because the Account doc has no `ulid`, its hash is deterministic from the triple `(holder, pocket, promise)`. Re-presenting the same Account is idempotent.
+Because the Account doc has no `ulid`, its hash is deterministic from the triple `(holder, pocket, voucher)`. Re-presenting the same Account is idempotent.
 
-There is no separate protocol operation to "open" an account. A user presents an Account doc to the issuing bank, and the bank stores it. The same is true for a user who wants to receive a Promise issued by another bank: they create an Account object for that bank and present it. Account and Pocket docs are NOT signed by the holder; their authority comes from being referenced by holder-signed Txs, Orders, or (for Accounts) by mint records at the issuing bank.
+There is no separate protocol operation to "open" an account. A user presents an Account doc to the issuing bank, and the bank stores it. The same is true for a user who wants to receive a Voucher issued by another bank: they create an Account object for that bank and present it. Account and Pocket docs are NOT signed by the holder; their authority comes from being referenced by holder-signed Txs, Orders, or (for Accounts) by mint records at the issuing bank.
 
-> **Invariant:** The issuer of a Promise is the sole source of truth for balances of that Promise. No other bank may issue or mutate accounts for a Promise it does not own.
-> **Invariant:** Account and Pocket docs have no `sig` field. Users sign Promise, Order, Tx, and Address docs; banks sign Record and Offer docs.
+> **Invariant:** The issuer of a Voucher is the sole source of truth for balances of that Voucher. No other bank may issue or mutate accounts for a Voucher it does not own.
+> **Invariant:** Account and Pocket docs have no `sig` field. Users sign Voucher, Order, Tx, and Address docs; banks sign Record and Offer docs.
 
 ### 1.4 Record
 
@@ -96,15 +96,15 @@ Record: BaseDoc & {
 }
 ```
 
-A **transfer** is one debit + one credit of the same Promise for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Promise's issuer bank. `pair` links the two halves by ULID. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). The chain may be a line, a ring, or a general graph, spanning one bank or many.
+A **transfer** is one debit + one credit of the same Voucher for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Voucher's issuer bank. `pair` links the two halves by ULID. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). The chain may be a line, a ring, or a general graph, spanning one bank or many.
 
 Records are **bank-minted**: the bank assigns their ULIDs and ensures uniqueness. As BaseDocs, they have content hashes. The Tx → record binding lives in `Tx.records[]` (a list of record hashes), and the bank's per-record state tracks state per record. Banks sign `Signature` docs (see `base.md`) referencing Records by hash; holders do not sign Records directly.
 
 ### 1.5 Tx
 
-A **Tx represents a single holder's view of a barter deal**: "What am I giving and what am I getting in this exchange?" Every holder touched by a deal builds and signs **their own Tx**. The Tx contains only the record hashes that touch that holder's accounts. Holders sign **Promise, Order, Tx, and Address** docs; banks sign **Record and Offer** docs. Invoices and cheques are specializations of Order or Offer with one side omitted.
+A **Tx represents a single holder's view of a barter deal**: "What am I giving and what am I getting in this exchange?" Every holder touched by a deal builds and signs **their own Tx**. The Tx contains only the record hashes that touch that holder's accounts. Holders sign **Voucher, Order, Tx, and Address** docs; banks sign **Record and Offer** docs. Invoices and cheques are specializations of Order or Offer with one side omitted.
 
-For example, if Alice and Bob exchange promises X (Alice's, at Xbank) and Y (Bob's, at Ybank):
+For example, if Alice and Bob exchange vouchers X (Alice's, at Xbank) and Y (Bob's, at Ybank):
 
 - **ATx** binds the **debit of X** and the **credit of Y** in Alice's accounts — her view of the deal.
 - **BTx** binds the **credit of X** and the **debit of Y** in Bob's accounts — his view.
@@ -135,13 +135,13 @@ Order: BaseDoc & {
   rate: number;             // debit_amount / credit_amount; must be positive
   debit?: {
     account: Base58SHA256;  // account to debit
-    promise: Base58SHA256;  // promise being given
+    voucher: Base58SHA256;  // voucher being given
     min: number;            // minimum amount to debit per match; prevents fragmentation
     max: number;            // maximum amount to debit per match
   };
   credit?: {
     account: Base58SHA256;  // account to credit
-    promise: Base58SHA256;  // promise being received
+    voucher: Base58SHA256;  // voucher being received
     min: number;            // minimum amount to credit per match; prevents fragmentation
     max: number;            // maximum amount to credit per match
   };
@@ -190,12 +190,12 @@ Offer: BaseDoc & {
   order: Base58SHA256;      // hash of the original order
   rate: number;             // debit_amount / credit_amount
   debit?: {
-    promise: Base58SHA256;  // promise being given
+    voucher: Base58SHA256;  // voucher being given
     min: number;            // minimum amount to debit per match
     max: number;            // maximum amount to debit per match
   };
   credit?: {
-    promise: Base58SHA256;  // promise being received
+    voucher: Base58SHA256;  // voucher being received
     min: number;            // minimum amount to credit per match
     max: number;            // maximum amount to credit per match
   };
@@ -203,7 +203,7 @@ Offer: BaseDoc & {
 }
 ```
 
-Banks MAY publish Offers through their public API. Matchmakers and other clients may subscribe to offer streams for particular promises and assemble deals by calling `create_records` with `offer_match` requests. The bank resolves the Offer to the underlying Order, creates records using the Order holder's hidden account and the matchmaker's provided counterparty account, and returns the record bodies. The matchmaker then stitches record hashes from multiple banks into Txs that reference the original Order or Offer hash.
+Banks MAY publish Offers through their public API. Matchmakers and other clients may subscribe to offer streams for particular vouchers and assemble deals by calling `create_records` with `offer_match` requests. The bank resolves the Offer to the underlying Order, creates records using the Order holder's hidden account and the matchmaker's provided counterparty account, and returns the record bodies. The matchmaker then stitches record hashes from multiple banks into Txs that reference the original Order or Offer hash.
 
 A Tx MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the records. If the referenced Order/Offer has `lead=true`, the bank executes without requiring a holder signature on the Tx.
 
@@ -296,8 +296,8 @@ The approve-time balance check is computed net of active holds, so a deal cannot
 
 ### 3.2 Mutual-credit balance semantics
 
-- **Issuers go negative only through minting.** When an issuer mints a Promise, the bank creates the issuer's negative-balance row as part of `mint`. This is the only protocol path that creates a negative balance. The network owes the negative-balance side nothing; the holder owes the network nothing. Each side is accountable for their own ledger position.
-- **No negative balance on holder-authorized transfers.** A transfer Tx authorized by a holder signature or by a holder Order/Offer MUST NOT drive the debit account negative. The bank rejects any Record that would overdraw the account. The `Promise.limit` field is honored if set; otherwise issuance is unbounded.
-- **Sum invariant**: across all accounts for a given Promise, balances always sum to zero (or the agreed limit). The bank enforces this on every `settle`.
+- **Issuers go negative only through minting.** When an issuer mints a Voucher, the bank creates the issuer's negative-balance row as part of `mint`. This is the only protocol path that creates a negative balance. The network owes the negative-balance side nothing; the holder owes the network nothing. Each side is accountable for their own ledger position.
+- **No negative balance on holder-authorized transfers.** A transfer Tx authorized by a holder signature or by a holder Order/Offer MUST NOT drive the debit account negative. The bank rejects any Record that would overdraw the account. The `Voucher.limit` field is honored if set; otherwise issuance is unbounded.
+- **Sum invariant**: across all accounts for a given Voucher, balances always sum to zero (or the agreed limit). The bank enforces this on every `settle`.
 
 > **Invariant:** The sum invariant is the load-bearing correctness guarantee of the ledger. Every implementation MUST preserve it on every settle.

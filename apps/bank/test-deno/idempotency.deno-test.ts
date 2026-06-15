@@ -5,26 +5,26 @@
 
 import { hashDoc, newUlid } from "../../../packages/protocol/src/index.ts";
 import { createRecords } from "../handlers/create_records.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { assert, closeTestKv, ctx, eq, key, openTestKv, type Key } from "./helpers.ts";
 
 function pocketHash(holder: Key, name: string): string {
   return hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name });
 }
 
-function accountDoc(holder: Key, promiseHash: string, pocket: string) {
-  return { type: "account", holder: holder.pub, pocket, promise: promiseHash };
+function accountDoc(holder: Key, voucherHash: string, pocket: string) {
+  return { type: "account", holder: holder.pub, pocket, voucher: voucherHash };
 }
 
 function makeMintParams(bank: Key, issuer: Key, amount: number) {
-  const promise: Record<string, unknown> = {
-    type: "promise", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
+  const voucher: Record<string, unknown> = {
+    type: "voucher", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
   };
-  const promiseHash = hashDoc(promise);
+  const voucherHash = hashDoc(voucher);
   return {
-    promise,
-    debit_account: accountDoc(issuer, promiseHash, pocketHash(issuer, "issue")),
-    credit_account: accountDoc(issuer, promiseHash, pocketHash(issuer, "holding")),
+    voucher,
+    debit_account: accountDoc(issuer, voucherHash, pocketHash(issuer, "issue")),
+    credit_account: accountDoc(issuer, voucherHash, pocketHash(issuer, "holding")),
     amount,
   };
 }
@@ -33,18 +33,18 @@ Deno.test("create_records is idempotent for the same request", async () => {
   const tk = await openTestKv();
   try {
     const bank = key(), alice = key(), bob = key();
-    const minted = await mintPromise(makeMintParams(bank, alice, 1), ctx(tk.kv, bank, alice.pub)) as {
-      promise_hash: string;
+    const minted = await mintVoucher(makeMintParams(bank, alice, 1), ctx(tk.kv, bank, alice.pub)) as {
+      voucher_hash: string;
       debit_account_hash: string;
       credit_account_hash: string;
     };
 
-    const bobAccount = accountDoc(bob, minted.promise_hash, pocketHash(bob, "main"));
+    const bobAccount = accountDoc(bob, minted.voucher_hash, pocketHash(bob, "main"));
     const bobAccountHash = hashDoc(bobAccount);
     const params = {
       requests: [{
         type: "transfer" as const,
-        promise_hash: minted.promise_hash,
+        voucher_hash: minted.voucher_hash,
         amount: 1,
         debit_account_hash: minted.credit_account_hash,
         credit_account_hash: bobAccountHash,

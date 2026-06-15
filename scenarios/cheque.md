@@ -1,6 +1,6 @@
 # Scenario: Cheque
 
-Alice writes a cheque authorizing anyone to debit her Apromise account. Bob presents the cheque to Abank and receives `5` Apromise.
+Alice writes a cheque authorizing anyone to debit her Avoucher account. Bob presents the cheque to Abank and receives `5` Avoucher.
 
 A cheque is an **Order with `credit` omitted** — it authorizes an unconditional debit from the holder.
 
@@ -8,9 +8,9 @@ A cheque is an **Order with `credit` omitted** — it authorizes an unconditiona
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
-- Abank: bank keypair `Abank.pub`, issues Apromise.
-- Alice has an Apromise Account at Abank.
-- Bob has an Apromise Account at Abank.
+- Abank: bank keypair `Abank.pub`, issues Avoucher.
+- Alice has an Avoucher Account at Abank.
+- Bob has an Avoucher Account at Abank.
 
 ## Step 1 — Alice creates and publishes the cheque
 
@@ -23,8 +23,8 @@ Alice builds an Order with `credit` omitted:
   ulid: <new>,
   rate: 1,
   debit: {
-    account: <alice-apromise-account>,
-    promise: <apromise-hash>,
+    account: <alice-avoucher-account>,
+    voucher: <avoucher-hash>,
     min: 1,
     max: 100
   },
@@ -39,7 +39,7 @@ Alice signs the Order and calls `submit_order` on Abank with `publish_offer: tru
 { "method": "submit_order",
   "params": {
     "order": <cheque-order>,
-    "accounts": [<alice-apromise-account>],
+    "accounts": [<alice-avoucher-account>],
     "publish_offer": true
   },
   "pubkey": A.pub, "to": Abank.pub }
@@ -49,7 +49,7 @@ Abank stores the Order, derives and signs an Offer, and returns the Offer hash.
 
 ## Step 2 — Bob discovers and cashes the cheque
 
-Bob obtains the cheque Offer hash. He wants to cash `5` Apromise into his account.
+Bob obtains the cheque Offer hash. He wants to cash `5` Avoucher into his account.
 
 Bob calls `create_records` on Abank:
 
@@ -60,7 +60,7 @@ Bob calls `create_records` on Abank:
       { "type": "offer_match",
         "offer_hash": <cheque-offer-hash>,
         "amount": 5,
-        "account_hash": <bob-apromise-account> }
+        "account_hash": <bob-avoucher-account> }
     ]
   },
   "pubkey": B.pub, "to": Abank.pub }
@@ -105,7 +105,7 @@ Abank issues per-record `ready` Signatures. Because Abank is the only bank in th
 
 ## Result
 
-- Alice's Apromise balance decreases by `5`.
-- Bob's Apromise balance increases by `5`.
+- Alice's Avoucher balance decreases by `5`.
+- Bob's Avoucher balance increases by `5`.
 - Bob cashed the cheque without Alice's live involvement; the signed cheque Offer was the authorization.
 - Abank has issued verifiable `settle` Signatures.

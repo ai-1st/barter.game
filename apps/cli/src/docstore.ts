@@ -44,11 +44,11 @@ export function listLocalDocs(type?: string): Array<{ hash: string; body: Record
   return out;
 }
 
-/** Author a fresh Pocket + Account pair for a promise. The Pocket stays
+/** Author a fresh Pocket + Account pair for a voucher. The Pocket stays
  *  local forever; the Account body is stored for later presentation. */
 export function createLocalAccount(
   profile: Profile,
-  promiseHash: string,
+  voucherHash: string,
   pocketName: string,
 ): { account: Record<string, unknown>; accountHash: string; pocketHash: string } {
   const pocket: Record<string, unknown> = {
@@ -62,7 +62,7 @@ export function createLocalAccount(
     type: "account",
     holder: profile.pubkey,
     pocket: pocketHash,
-    promise: promiseHash,
+    voucher: voucherHash,
   };
   const accountHash = saveLocalDoc(account);
   return { account, accountHash, pocketHash };

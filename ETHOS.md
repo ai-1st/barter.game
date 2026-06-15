@@ -9,13 +9,13 @@ spec; they are the priors that shape every decision when the spec runs out.
 
 The fantasy is older than money: you, sovereign, issuing your own currency
 backed by something you can deliver. Not a token wrapping a stablecoin. Not a
-loyalty point. A signed promise — "1 logo, by Alice, due on demand." Yours.
+loyalty point. A signed voucher — "1 logo, by Alice, due on demand." Yours.
 You decide how many exist. You decide who gets them. You decide what they
 cost.
 
 The system exists to make this fantasy practical, not theoretical. Anyone
 with a cloud account or own server can deploy a bank. Anyone with a
-keyboard can mint a promise.
+keyboard can mint a voucher.
 
 ## 2. Trust is local; the protocol formalizes it
 
@@ -38,7 +38,7 @@ ambiguity about who owes whom.
 When Alice mints "1 logo," she does not pre-fund anything. Her account at
 her bank simply records `-1` — she owes the network one logo. When she
 delivers, the holder's balance and her balance both move toward zero. The
-sum across all accounts for any promise is always zero (or the agreed-on
+sum across all accounts for any voucher is always zero (or the agreed-on
 limit). This is the LETS pattern, four decades old, with one cryptographic
 upgrade: every step is signed.
 
@@ -59,7 +59,7 @@ settled but bank B never did" — is a *bank*-level failure, not a *user*-
 level failure. Users already signed the deal. The remaining risk is one 
 bank being uncooperative. In our trust
 model (operators are known to their users), that risk is settled socially:
-the lead party yells at the issuer of the promise not being delivered,
+the lead party yells at the issuer of the voucher not being delivered,
 issuer yells at their bank operator, whom they presumably
 know in person.
 
@@ -78,7 +78,7 @@ mechanism, no "cancel this signature" operation, and no TTL.
 the holder maintains sufficient balance in the relevant account. The only limit
 is the account itself.
 - **Cancellation is mechanical, not administrative.** A holder who wants to stop
-offering a promise empties the corresponding account. A bank that refuses a
+offering a voucher empties the corresponding account. A bank that refuses a
 record issues a `reject` signature on the record(s); releasing a hold without
 settling is a `reject` over the deal. Both become part of the public audit
 trail.
@@ -105,10 +105,10 @@ have built the wrong thing.
 
 ## 7. Content-addressed docs — almost all the way down
 
-Promise, Pocket, Account, Order, and Signature docs are hashed by their
+Voucher, Pocket, Account, Order, and Signature docs are hashed by their
 canonical JSON form. References between these docs use those hashes.
 Nothing has an ID assigned by a server. Two banks that store the same
-Promise doc store it under the same hash. Audit means walking the hash
+Voucher doc store it under the same hash. Audit means walking the hash
 graph; verification means re-hashing. Banks store the docs presented to
 them; the only artifacts a bank creates are ledger records and
 signatures.
@@ -124,7 +124,7 @@ different Tx hashes.
 This trade-off makes the bank the sole authority for its ledger entries
 and eliminates a class of client-side hash-mismatch bugs. The cross-
 runtime canonical JSON parity test remains load-bearing for everything
-that IS content-addressed (Promises, Accounts, Signatures, Orders).
+that IS content-addressed (Vouchers, Accounts, Signatures, Orders).
 
 ## 8. The CLI is the protocol's truest surface
 
@@ -146,7 +146,7 @@ sovereignty in "be your own bank" includes the right to leave.
 
 ## 10. Open by default — moderation is key-blocking, not gatekeeping
 
-A bank accepts anything tied to promises that reference it: any minting,
+A bank accepts anything tied to vouchers that reference it: any minting,
 any docs, any signed call, from anyone. There is no registration step, no
 allowlist, no approval queue. Every call is signed, so abuse has a name —
 and the bank's recourse is to block the abuser's issuer key, not to put a

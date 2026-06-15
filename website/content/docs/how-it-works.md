@@ -6,14 +6,14 @@ A barter.game trade is a cascade of signed documents across independent banks. H
 
 ## The setup
 
-**Alice** runs `bank-alice`. She mints "1 logo" — a promise to design one logo.
-**Bob** runs `bank-bob`. He mints "1 hour" — a promise to do one hour of consulting.
+**Alice** runs `bank-alice`. She mints "1 logo" — a voucher to design one logo.
+**Bob** runs `bank-bob`. He mints "1 hour" — a voucher to do one hour of consulting.
 
 Alice and Bob already know each other. They agree to trade 1 logo for 1 hour.
 
 ## Step 1: Mint
 
-A mint is just the first ledger record pair. Alice presents her signed Promise plus two Account docs — on two **distinct Pocket hashes** — to bank-alice. The bank creates a debit on her issue account (it goes negative) and a credit on her holding account (it goes positive). There is no special mint logic: the same mechanism that moves value in trades creates it at mint. One signer, one bank, so the bank settles it immediately.
+A mint is just the first ledger record pair. Alice presents her signed Voucher plus two Account docs — on two **distinct Pocket hashes** — to bank-alice. The bank creates a debit on her issue account (it goes negative) and a credit on her holding account (it goes positive). There is no special mint logic: the same mechanism that moves value in trades creates it at mint. One signer, one bank, so the bank settles it immediately.
 
 Bob does the same on bank-bob.
 
@@ -59,7 +59,7 @@ The deal is done.
 
 ## Final balances
 
-| Account | Promise | Bank | Balance |
+| Account | Voucher | Bank | Balance |
 | --- | --- | --- | --- |
 | Alice (issue)   | "1 logo" | bank-alice | **-1** (created at mint) |
 | Alice (holding) | "1 logo" | bank-alice | **0** (minted +1, gave 1) |
@@ -68,10 +68,10 @@ The deal is done.
 | Bob (holding)   | "1 hour" | bank-bob   | **0** (minted +1, gave 1) |
 | Alice           | "1 hour" | bank-bob   | **+1** (she received) |
 
-Sum per Promise = 0. The cryptographic version of "we're even."
+Sum per Voucher = 0. The cryptographic version of "we're even."
 
 ## The risk
 
 What if bank-bob refuses to settle after bank-alice already did? Alice's logo moved; Bob's hour didn't. This is the **lead/follow risk**, and it is **accepted by design**. The protocol has no rollback. In our trust model, Alice knows Bob (or his bank operator) personally. She yells at him. The protocol records the deal; it does not arbitrate it.
 
-For multi-party rings and complex graphs, the same machinery scales: the initiator's client creates the records, every holder signs their own Tx, and the banks settle themselves in topological order — leads first, then followers, each citing upstream proof in `Signature.seen`. The initiating client is the only party that knows the full graph; the banks each see only their own promise's records.
+For multi-party rings and complex graphs, the same machinery scales: the initiator's client creates the records, every holder signs their own Tx, and the banks settle themselves in topological order — leads first, then followers, each citing upstream proof in `Signature.seen`. The initiating client is the only party that knows the full graph; the banks each see only their own voucher's records.

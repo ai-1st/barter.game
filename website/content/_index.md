@@ -12,7 +12,7 @@ layout: hextra-home
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
     title="For Event Managers"
-    subtitle="Add a promise marketplace so attendees network better. Turn business-card exchanges into real value trades."
+    subtitle="Add a voucher marketplace so attendees network better. Turn business-card exchanges into real value trades."
     link="for-event-managers"
     icon="calendar"
   >}}
@@ -53,7 +53,7 @@ layout: hextra-home
 
 ## How it works in one paragraph
 
-Every user and every bank is an **ed25519 keypair**. Promise, Pocket, Account, Tx, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the initiator creates the record pairs (`create_records`), then each holder signs their own Tx (`submit_tx`) — `lead` for the initiator, `follow` for everyone else. From there the banks self-advance: per-record approvals, holds, then settlement — lead bank first, followers after observing upstream proof, with signatures pushed between banks via subscription fan-out. No bank ever sees the full transaction. The math binds everyone together.
+Every user and every bank is an **ed25519 keypair**. Voucher, Pocket, Account, Tx, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the initiator creates the record pairs (`create_records`), then each holder signs their own Tx (`submit_tx`) — `lead` for the initiator, `follow` for everyone else. From there the banks self-advance: per-record approvals, holds, then settlement — lead bank first, followers after observing upstream proof, with signatures pushed between banks via subscription fan-out. No bank ever sees the full transaction. The math binds everyone together.
 
 [Read the full docs →](docs)
 
@@ -70,6 +70,6 @@ bun install
 ./scripts/demo.sh
 ```
 
-The script narrates each step. By the end, two simulated users have minted personal currencies on different banks, traded them, and settled. Sum per Promise = 0. The cryptographic version of "we're even."
+The script narrates each step. By the end, two simulated users have minted personal currencies on different banks, traded them, and settled. Sum per Voucher = 0. The cryptographic version of "we're even."
 
 </div>

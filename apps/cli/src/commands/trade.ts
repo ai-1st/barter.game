@@ -2,7 +2,7 @@
 //
 // The initiator (say Alice) verifies the inviter's signed offer, resolves
 // her own two accounts (funded give account at her bank; fresh receiving
-// account for the inviter's promise), creates the record pairs on both
+// account for the inviter's voucher), creates the record pairs on both
 // banks, cross-subscribes the banks, signs her own Tx as "lead", and prints
 // the DEAL TOKEN the inviter must `barter accept` to follow-sign. From
 // there the banks settle on their own.
@@ -58,37 +58,37 @@ export async function runTrade(argv: string[]): Promise<number> {
   const iGive = invite.get;
   const iGet = invite.give;
 
-  // My funded account for the promise I give (it lives at MY bank).
+  // My funded account for the voucher I give (it lives at MY bank).
   let myGiveAccount = args.giveAccount;
   if (!myGiveAccount) {
     const res = (await call(profile, "list_accounts", {}, { bankUrl: myBankUrl })) as {
-      accounts: Array<{ account_hash: string; promise_hash: string; balance: string }>;
+      accounts: Array<{ account_hash: string; voucher_hash: string; balance: string }>;
     };
     const funded = res.accounts.find(
-      (a) => a.promise_hash === iGive.promise && Number(a.balance) >= iGive.amount,
+      (a) => a.voucher_hash === iGive.voucher && Number(a.balance) >= iGive.amount,
     );
     if (!funded) {
       process.stderr.write(
-        `barter trade: no account with ≥${iGive.amount} of ${iGive.promise} at ${myBankUrl} — pass --give-account\n`,
+        `barter trade: no account with ≥${iGive.amount} of ${iGive.voucher} at ${myBankUrl} — pass --give-account\n`,
       );
       return 1;
     }
     myGiveAccount = funded.account_hash;
   }
 
-  // My receiving account for the inviter's promise (implicit, authored now).
-  const receiving = createLocalAccount(profile, iGet.promise, "main");
+  // My receiving account for the inviter's voucher (implicit, authored now).
+  const receiving = createLocalAccount(profile, iGet.voucher, "main");
 
   const spec: DealSpec = {
     initiator: profile.pubkey,
     transfers: [
       {
-        promise: iGive.promise, issuerBank: myBankPubkey, amount: iGive.amount,
+        voucher: iGive.voucher, issuerBank: myBankPubkey, amount: iGive.amount,
         from: { holder: profile.pubkey, account: myGiveAccount },
         to: { holder: invite.pubkey, account: iGive.account },
       },
       {
-        promise: iGet.promise, issuerBank: peerBankPubkey, amount: iGet.amount,
+        voucher: iGet.voucher, issuerBank: peerBankPubkey, amount: iGet.amount,
         from: { holder: invite.pubkey, account: iGet.account },
         to: { holder: profile.pubkey, account: receiving.accountHash },
       },
@@ -100,10 +100,10 @@ export async function runTrade(argv: string[]): Promise<number> {
   // to the banks that need them (accounts are implicit).
   const inviterDocs = invite.accounts ?? [];
   const docsByBank: Record<string, Array<Record<string, unknown>>> = {
-    [myBankPubkey]: inviterDocs.filter((d) => d.promise === iGive.promise),
+    [myBankPubkey]: inviterDocs.filter((d) => d.voucher === iGive.voucher),
     [peerBankPubkey]: [
       receiving.account,
-      ...inviterDocs.filter((d) => d.promise === iGet.promise),
+      ...inviterDocs.filter((d) => d.voucher === iGet.voucher),
     ],
   };
 

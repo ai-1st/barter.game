@@ -4,7 +4,7 @@ title: For Contributors
 
 ## Shape the protocol
 
-barter.game is early. The protocol is small enough to keep in your head. If you find a bug, a mismatch between the spec and the code, or a place where the ETHOS got compromised — open an issue, and bring receipts.
+barter.game is early. The protocol is small enough to keep in your head. If you find a bug, a mismatch between the spec and the code, or a place where the ETHOS got comvoucherd — open an issue, and bring receipts.
 
 ## Principles first
 

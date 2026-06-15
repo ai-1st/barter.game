@@ -1,6 +1,6 @@
-// `barter mint <name> --amount N` — issue a Promise on the user's home bank.
+// `barter mint <name> --amount N` — issue a Voucher on the user's home bank.
 //
-// Mint IS the first ledger record pair: the client authors the Promise plus
+// Mint IS the first ledger record pair: the client authors the Voucher plus
 // TWO Pocket/Account pairs locally (the issue account, which goes negative,
 // and the holding account, which goes positive), and the bank settles the
 // pair immediately. Pocket bodies never leave this machine — the bank only
@@ -55,42 +55,42 @@ export async function runMint(argv: string[]): Promise<number> {
   const bankUrl = args.bank ?? profile.defaultBankUrl;
   const bankPubkey = await fetchBankPubkey(bankUrl);
 
-  const promise: Record<string, unknown> = {
-    type: "promise",
+  const voucher: Record<string, unknown> = {
+    type: "voucher",
     pubkey: profile.pubkey,
     ulid: newUlid(),
     bank: bankPubkey,
     name: args.name,
   };
-  if (args.integer !== undefined) promise.integer = args.integer;
-  if (args.due) promise.due = args.due;
-  if (args.limit !== undefined) promise.limit = args.limit;
-  promise.sig = signDoc(promise, profilePrivateKeyBytes(profile));
+  if (args.integer !== undefined) voucher.integer = args.integer;
+  if (args.due) voucher.due = args.due;
+  if (args.limit !== undefined) voucher.limit = args.limit;
+  voucher.sig = signDoc(voucher, profilePrivateKeyBytes(profile));
 
   // Two distinct pockets → two accounts: issue (negative) + holding (positive).
-  const promiseHash = hashDoc(promise);
-  const issue = createLocalAccount(profile, promiseHash, "issue");
-  const holding = createLocalAccount(profile, promiseHash, "holding");
+  const voucherHash = hashDoc(voucher);
+  const issue = createLocalAccount(profile, voucherHash, "issue");
+  const holding = createLocalAccount(profile, voucherHash, "holding");
 
   const result = (await call(
     profile,
     "mint",
-    { promise, debit_account: issue.account, credit_account: holding.account, amount },
+    { voucher, debit_account: issue.account, credit_account: holding.account, amount },
     { bankUrl, toBankPubkey: bankPubkey },
   )) as {
-    promise_hash: string;
+    voucher_hash: string;
     debit_account_hash: string;
     credit_account_hash: string;
   };
 
   process.stdout.write(
     `minted ${amount} × "${args.name}"\n` +
-      `  promise hash:     ${result.promise_hash}\n` +
+      `  voucher hash:     ${result.voucher_hash}\n` +
       `  issue account:    ${result.debit_account_hash}  (balance −${amount})\n` +
       `  holding account:  ${result.credit_account_hash}  (balance +${amount})\n` +
       `  bank:             ${bankPubkey}\n` +
       `\n` +
-      `share the promise hash with others; they trade against your holding account.\n` +
+      `share the voucher hash with others; they trade against your holding account.\n` +
       `offer a swap with 'barter invite'.\n`,
   );
   return 0;

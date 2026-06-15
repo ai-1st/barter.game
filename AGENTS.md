@@ -6,8 +6,10 @@
 
 barter.game is a **federated mutual-credit ledger**. Every user and every bank is an ed25519 keypair. Users mint personal currencies ("1 logo", "1 hour of consulting"), trade them across banks, and settle via a signed, content-addressed protocol. There is no central authority; trust is local and socially enforced.
 
+
 This repo contains:
 
+- The **protocol spec** (`protocol/README.md`) - defines the core data structures and APIs
 - The **protocol library** (`packages/protocol/`) — canonical JSON, crypto, doc schemas, invite formatting.
 - The **CLI client** (`apps/cli/`) — the `barter` command that drives the protocol end-to-end.
 - The **bank server** (`apps/bank/`) — Deno Deploy project serving one or more federated bank processes.
@@ -175,12 +177,12 @@ cd website && hugo mod get && hugo --gc --minify
 
 - **Private keys**: User keys are stored plaintext in `~/.barter/profile.json`. This is intentional for v1 but unacceptable for production. Do not add real value to these keys.
 - **Bank keys**: Loaded from `Deno.env.get("BANK_<NAME>_PRIV_KEY")`. Never log them, never return them in RPC responses.
-- **Signing model**: Users sign Promise, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs are NOT signed; their authority comes from being referenced by signed Txs/Orders/mint records.
-- **Replay protection / idempotency**: Every RPC envelope carries a ULID `id` bound to `(sender_pubkey, recipient_pubkey)`. The recipient stores seen triples in KV and rejects exact duplicates with `-32002`. In addition, state-changing handlers are idempotent where it matters: `create_records` checks the existing leg state before minting a duplicate record pair, and `mint` is bounded by `Promise.limit` and the envelope replay window. A fresh signed envelope cannot be used to double-apply a mint or re-create records for the same deal leg.
+- **Signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs are NOT signed; their authority comes from being referenced by signed Txs/Orders/mint records.
+- **Replay protection / idempotency**: Every RPC envelope carries a ULID `id` bound to `(sender_pubkey, recipient_pubkey)`. The recipient stores seen triples in KV and rejects exact duplicates with `-32002`. In addition, state-changing handlers are idempotent where it matters: `create_records` checks the existing leg state before minting a duplicate record pair, and `mint` is bounded by `Voucher.limit` and the envelope replay window. A fresh signed envelope cannot be used to double-apply a mint or re-create records for the same deal leg.
 - **Signature verification**: Every inbound request is verified against its `pubkey` before any handler runs. The `to` field must match the recipient bank's pubkey.
 - **Pocket privacy**: Banks must NEVER accept or store Pocket bodies — `account.pocket` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Pocket docs; do not add a server-side code path that receives one.
 - **Double-spend gate**: An atomic KV check-and-set on the active-hold key enforces at most one active hold per account. Concurrent hold attempts surface as `-32003` or, inside the advance engine, a quiet back-off retried on the next event.
-- **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Promise sum to zero (or the agreed limit).
+- **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Voucher sum to zero (or the agreed limit).
 - **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `<bank-url>/barter-bank.json` is fetched and compared against the pin; divergence fails closed.
 
 ## Key documentation (read before making changes)
@@ -232,12 +234,12 @@ cd website && hugo mod get && hugo --gc --minify
 
 ## Development conventions
 
-- **Doc signing model**: Users sign Promise, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs have no `sig`. Do not add signatures to Account or Pocket.
-- **Content-addressed docs**: Every doc (Promise, Account, Tx, Signature, etc.) is canonicalized, SHA-256-hashed, and stored/addressed by its base58 hash. References between docs use hashes, not surrogate IDs.
+- **Doc signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs have no `sig`. Do not add signatures to Account or Pocket.
+- **Content-addressed docs**: Every doc (Voucher, Account, Tx, Signature, etc.) is canonicalized, SHA-256-hashed, and stored/addressed by its base58 hash. References between docs use hashes, not surrogate IDs.
 - **Bank scoping**: Every KV key is prefixed with the bank pubkey so one Deno KV database can serve multiple banks. Every query must include the prefix. Missing it is a bug.
 - **Base58 everywhere**: Hashes, pubkeys, and signatures are stored as base58 strings. No binary types.
 - **Exact balances**: Balances are stored as strings and computed with integer or decimal arithmetic; never use floating-point for ledger math.
 - **Banks self-advance**: Clients only create records (`create_records`) and submit holder-signed Txs (`submit_tx`). From there each bank advances its own leg `created → approved → held → settled` event-driven — `advanceDeal()` re-evaluates on every `submit_tx` / `notify_signatures`, with no cron or background worker. Signatures travel between banks via subscription fan-out, with client relay (`barter nudge`) as the floor. `reject_deal` terminates from any pre-settled state.
-- **Visibility boundary**: No bank ever sees another bank's records. A bank sees only the records of the promises it issues, the holder Txs that touch them, and the deal-level signatures of its peers.
+- **Visibility boundary**: No bank ever sees another bank's records. A bank sees only the records of the vouchers it issues, the holder Txs that touch them, and the deal-level signatures of its peers.
 - **Migration policy (v1)**: No in-place migrations after launch. If schema changes, wipe demo banks. v1.5 will introduce forward-compatible migrations.
 - **Comments**: Load-bearing invariants are commented with `//` or `/* */` blocks. JSDoc is used for exported public APIs.

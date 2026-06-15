@@ -93,12 +93,12 @@ async function signUp(login: string, password: string): Promise<any> {
     console.log("Encrypted private key:", encryptedPrivateKey);
     const passwordHash = await hash(login + password);
     console.log("Generated password hash:", passwordHash);
-    const contactDocPromise = await buildContactDoc(
+    const contactDocVoucher = await buildContactDoc(
         "TODO ledger pubkey",
         keys.privateKey,
         keys.publicKey
     );
-    console.log("Contact doc promise:", contactDocPromise);
+    console.log("Contact doc voucher:", contactDocVoucher);
 
     const doc = {
         type: "profile",
@@ -112,9 +112,9 @@ async function signUp(login: string, password: string): Promise<any> {
     console.log("Created profile document:", doc);
     const signedDoc = await signDoc(doc, {}, keys.privateKey, keys.publicKey);
     console.log("Signed document:", signedDoc);
-    const signupPromise = post(`/homebase/signup`, signedDoc);
-    console.log("Signup promise:", signupPromise);
-    await Promise.all([signupPromise, contactDocPromise]);
+    const signupVoucher = post(`/homebase/signup`, signedDoc);
+    console.log("Signup voucher:", signupVoucher);
+    await Promise.all([signupVoucher, contactDocVoucher]);
     console.log("Signup process completed successfully");
     return true;
 }

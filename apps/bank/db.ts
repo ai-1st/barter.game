@@ -26,7 +26,7 @@ export type DocRow = {
 export type AccountRow = {
   account_hash: string;
   bank_pubkey: string;
-  promise_hash: string;
+  voucher_hash: string;
   pocket_hash: string;
   holder_pubkey: string;
   balance: string;
@@ -100,7 +100,7 @@ export class BankDB {
   /** Insert an Account row if absent. Balance always starts at 0. */
   async upsertAccount(input: {
     accountHash: string;
-    promiseHash: string;
+    voucherHash: string;
     pocketHash: string;
     holderPubkey: string;
   }): Promise<void> {
@@ -110,7 +110,7 @@ export class BankDB {
     await this.kv.set(key, {
       account_hash: input.accountHash,
       bank_pubkey: this.bankPubkey,
-      promise_hash: input.promiseHash,
+      voucher_hash: input.voucherHash,
       pocket_hash: input.pocketHash,
       holder_pubkey: input.holderPubkey,
       balance: "0",

@@ -5,9 +5,9 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 ## v1.5 — likely-next-up
 
 ### Cross-bank inbox aggregation
-- **What:** A single inbox UI/CLI view that shows all of a user's balances and in-flight deals across every bank that issued a Promise they hold.
-- **Why:** v1 inbox is scoped to one bank at a time; a user with Promises across 3 banks has to open 3 inbox tabs.
-- **Context:** The issuing bank is the sole authority for its Promise's balances, so the client must hit every issuer bank (`list_accounts` / `get_deal`) and merge. The push half already shipped: Subscription docs let the client point each bank's signature fan-out at its own endpoint (`barter subscribe --url ...`), so aggregation becomes a merge problem, not a polling problem. Hardcoded bank list (v1) makes this feasible; a directory (below) makes it scalable.
+- **What:** A single inbox UI/CLI view that shows all of a user's balances and in-flight deals across every bank that issued a Voucher they hold.
+- **Why:** v1 inbox is scoped to one bank at a time; a user with Vouchers across 3 banks has to open 3 inbox tabs.
+- **Context:** The issuing bank is the sole authority for its Voucher's balances, so the client must hit every issuer bank (`list_accounts` / `get_deal`) and merge. The push half already shipped: Subscription docs let the client point each bank's signature fan-out at its own endpoint (`barter subscribe --url ...`), so aggregation becomes a merge problem, not a polling problem. Hardcoded bank list (v1) makes this feasible; a directory (below) makes it scalable.
 - **Depends on:** v1 protocol must be stable; a client-side endpoint to receive `notify_signatures` pushes; design the merge order (last-write-wins by ULID?).
 
 ### Hold sweeper & orphaned-record hygiene
@@ -23,10 +23,10 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 - **Depends on:** Decide whether directory is decentralized or a barter.game-operated good-citizen service.
 
 ### Key rotation
-- **What:** Allow a bank or user to roll their ed25519 key without orphaning existing Promises/Accounts.
+- **What:** Allow a bank or user to roll their ed25519 key without orphaning existing Vouchers/Accounts.
 - **Why:** v1's "lose key → lose account" is acceptable for a demo but unworkable for anything resembling production.
 - **Context:** Implementation requires either (a) signed key-rotation docs that link old pubkey → new pubkey, or (b) a separate authority root that signs key rotations. Each has tradeoffs around bootstrapping the rotation trust.
-- **Depends on:** Decide rotation model first. Document the migration path for existing v1 Promises.
+- **Depends on:** Decide rotation model first. Document the migration path for existing v1 Vouchers.
 
 ### Account recovery
 - **What:** Some way for a user to recover their account if they lose their browser localStorage / private key.
@@ -73,10 +73,10 @@ Deferred items from the v1 design doc. Each entry: **what / why / context / depe
 
 ## v2+ — bigger swings
 
-### NFT-like unique Promises
-- **What:** Each `1 logo` Promise instance is a distinct, non-fungible token (vs v1 where any "1 logo" issued by Alice is interchangeable).
+### NFT-like unique Vouchers
+- **What:** Each `1 logo` Voucher instance is a distinct, non-fungible token (vs v1 where any "1 logo" issued by Alice is interchangeable).
 - **Why:** Some use cases need provenance (signed art, specific event tickets).
-- **Context:** Schema change: Records reference Promise instances by ULID, not just Promise type. Bigger rewrite of balance accounting.
+- **Context:** Schema change: Records reference Voucher instances by ULID, not just Voucher type. Bigger rewrite of balance accounting.
 - **Depends on:** Use case demand.
 
 ### Reputation / dispute resolution
@@ -110,15 +110,15 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Inbox UI track (CLI version is trivial; web version benefits more).
 
 ### Emitter due-diligence agent (W: 4)
-- **What:** Before accepting Promises from an emitter you don't know, fetch their mint history, bank integrity score, outstanding supply vs `limit`, and redemption track record. Returns a one-paragraph credit memo.
+- **What:** Before accepting Vouchers from an emitter you don't know, fetch their mint history, bank integrity score, outstanding supply vs `limit`, and redemption track record. Returns a one-paragraph credit memo.
 - **Why:** The trust model is "trust the emitter, not the holder." That trust still has to be assessed somehow; v1 punts to out-of-band. An agent reads the signed history for you.
 - **Context:** Pure aggregator over public signed evidence. Surface in the wallet at accept-time.
-- **Depends on:** Federated bank directory; counterparty banks exposing a public read endpoint for Promise history.
+- **Depends on:** Federated bank directory; counterparty banks exposing a public read endpoint for Voucher history.
 
-### Promise pricing oracle (W: 4)
+### Voucher pricing oracle (W: 4)
 - **What:** LLM-suggested exchange rate: "what's a fair amount of `alice-logos` per `bob-hour`?"
 - **Why:** Even people who know each other still have to haggle. An oracle gives an anchor; humans pick the binding amount.
-- **Context:** Reads emitter histories + Promise descriptions. Pure suggestion, not enforcement.
+- **Context:** Reads emitter histories + Voucher descriptions. Pure suggestion, not enforcement.
 - **Depends on:** Nothing — could ship as a standalone web service.
 
 ### Lead/follow strategist (W: 5)
@@ -129,25 +129,25 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 
 ### Counterparty-blind matchmaker (W: 5)
 - **What:** Registry that matches "who currently holds any `alice-logo` and is willing to part with one" without exposing holder identity until match.
-- **Why:** Trust model says holders are interchangeable — so matching on inventory (Promise type) rather than identity is legitimate and v1-compatible. Effectively a marketplace that doesn't violate v1's anti-marketplace stance because it matches Promises, not people.
+- **Why:** Trust model says holders are interchangeable — so matching on inventory (Voucher type) rather than identity is legitimate and v1-compatible. Effectively a marketplace that doesn't violate v1's anti-marketplace stance because it matches Vouchers, not people.
 - **Context:** Opt-in for holders. Could be built into the federated directory or run separately.
 - **Depends on:** Federated bank directory; opt-in holder registry.
 
 ### Trust-graph transitive propagator (W: 5)
-- **What:** Reasons "you trust Alice; Alice holds many of Carol's Promises and has never rejected one; therefore Carol is probably trustworthy as an emitter." Builds emitter-trust transitively from public signed evidence.
+- **What:** Reasons "you trust Alice; Alice holds many of Carol's Vouchers and has never rejected one; therefore Carol is probably trustworthy as an emitter." Builds emitter-trust transitively from public signed evidence.
 - **Why:** Direct trust lists are small. Transitive trust extends reach without violating "trust your counterparty" — the signed-evidence graph IS the authority.
 - **Context:** Read-only aggregator. Could feed the due-diligence agent.
 - **Depends on:** Federated bank directory; cross-bank account/Tx history readable.
 
 ### Liquidity provider bot (W: 5)
-- **What:** Autonomous holder of a diversified Promise basket that quotes two-way prices and lubricates trade flow.
+- **What:** Autonomous holder of a diversified Voucher basket that quotes two-way prices and lubricates trade flow.
 - **Why:** The LETS critical-mass / liquidity-failure mode is real (ETHOS acknowledges this). LPs are the standard finance solution — and the trust model accommodates them because LPs are holders, and holders aren't trust-bearing.
-- **Context:** Runs as a regular user with its own keypair. Capital from depositors or from its own LP-credit Promise.
+- **Context:** Runs as a regular user with its own keypair. Capital from depositors or from its own LP-credit Voucher.
 - **Depends on:** Stable v1; pricing oracle for quote generation.
 
-### Promise narrator (W: 6)
+### Voucher narrator (W: 6)
 - **What:** For each settled Tx, an LLM writes a one-paragraph human-readable story ("On Tuesday at the Berlin hackathon, Alice settled 1 logo to Bob in exchange for 30 minutes of debugging").
-- **Why:** Signed evidence is dry. Narratives make the ledger legible — for demo storytelling and for circulating Promises that need to carry their context.
+- **Why:** Signed evidence is dry. Narratives make the ledger legible — for demo storytelling and for circulating Vouchers that need to carry their context.
 - **Context:** Cheap LLM plumbing. Invoke at settle-time or generate on-demand by the wallet.
 - **Depends on:** Nothing.
 
@@ -158,19 +158,19 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Federated bank directory; public read access to settle/reject signatures.
 
 ### Bank-integrity auditor (W: 6)
-- **What:** Watches a bank's signed evidence stream and externally validates the sum invariant ("balances across all accounts for a given Promise sum to zero").
-- **Why:** The protocol's sum invariant is enforced by the issuing bank itself. An emitter+bank that collude could mint Promises off-ledger. Only an external auditor reading the public signed history catches this.
+- **What:** Watches a bank's signed evidence stream and externally validates the sum invariant ("balances across all accounts for a given Voucher sum to zero").
+- **Why:** The protocol's sum invariant is enforced by the issuing bank itself. An emitter+bank that collude could mint Vouchers off-ledger. Only an external auditor reading the public signed history catches this.
 - **Context:** This is the missing patch on the trust model — banks could cheat, and the protocol's defense is "other banks notice." The auditor automates the noticing.
 - **Depends on:** Public read access to all signed docs, or a gossip protocol where banks publish issuance history.
 
-### Promise-as-bond pricer (W: 6)
-- **What:** Treats Promises with a `due` field as zero-coupon bonds. Computes yield-to-maturity, time-discount, default risk.
-- **Why:** `Promise.due` exists in the spec but v1 does nothing with it. Once it does, Promises acquire a yield curve.
+### Voucher-as-bond pricer (W: 6)
+- **What:** Treats Vouchers with a `due` field as zero-coupon bonds. Computes yield-to-maturity, time-discount, default risk.
+- **Why:** `Voucher.due` exists in the spec but v1 does nothing with it. Once it does, Vouchers acquire a yield curve.
 - **Context:** Wall Street primitive applied to friend-currency. Mostly UI/analytics.
 - **Depends on:** Emitter due-diligence agent (for default risk input).
 
 ### Default-aware portfolio manager (W: 6)
-- **What:** Watches a user's basket of emitter-issued Promises, flags emitters showing solvency stress, advises liquidation.
+- **What:** Watches a user's basket of emitter-issued Vouchers, flags emitters showing solvency stress, advises liquidation.
 - **Why:** Holders aren't passive — their portfolio has health. Credit-portfolio management for friend-currency.
 - **Context:** Combines the due-diligence agent with active monitoring and standing rules.
 - **Depends on:** Due-diligence agent; voluntary-reputation miner.
@@ -178,7 +178,7 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 ### AI as bank operator (W: 7)
 - **What:** A bank with no human operator. Agent rotates keys, applies migrations, watches the holds table, runs the abandonment sweeper, publishes a daily summary.
 - **Why:** Extends "tiny central bank" to "tiny autonomous central bank."
-- **Context:** Inherits all human-operator collusion risk, plus alignment risk on top. The README's "lose the bank key, lose all its Promises" warning becomes existentially weirder. Interesting demo; do not run with real value.
+- **Context:** Inherits all human-operator collusion risk, plus alignment risk on top. The README's "lose the bank key, lose all its Vouchers" warning becomes existentially weirder. Interesting demo; do not run with real value.
 - **Depends on:** Stable v1; bank-integrity auditor to externally check the AI operator.
 
 ### Personality-clone pre-approver (W: 7)
@@ -188,38 +188,38 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Conversational wallet; robust eval of clone fidelity.
 
 ### Receipt-witness agent (W: 7)
-- **What:** Inspects the delivered artifact and attests "yes, this is the deliverable Alice promised."
+- **What:** Inspects the delivered artifact and attests "yes, this is the deliverable Alice voucherd."
 - **Why:** Adds machine corroboration to the holder's follow signature (their Tx signature IS the receipt confirmation), which v1 leaves purely human ("code cannot verify a logo is a logo").
-- **Context:** Directly challenges an ETHOS premise. Probably right for narrow Promise types (file deliverables, signed text) and wrong for fuzzy ones ("dinner"). Decide carefully — this is one of the load-bearing v1 assumptions.
-- **Depends on:** Decision to soften the "human attestation mandatory" premise; per-Promise-type witness adapters.
+- **Context:** Directly challenges an ETHOS premise. Probably right for narrow Voucher types (file deliverables, signed text) and wrong for fuzzy ones ("dinner"). Decide carefully — this is one of the load-bearing v1 assumptions.
+- **Depends on:** Decision to soften the "human attestation mandatory" premise; per-Voucher-type witness adapters.
 
 ### Forgery sentinel for fungibility ambiguity (W: 7)
-- **What:** Watches every emitter's mint history for Promises with near-identical names ("1 logo" vs "1 logo " (trailing space), Unicode homoglyphs, "1 logo (rev2)").
-- **Why:** v1 fungibility is implicit in `Promise.name` equality. Equality is brittle; an emitter could attack by minting near-identical names.
+- **What:** Watches every emitter's mint history for Vouchers with near-identical names ("1 logo" vs "1 logo " (trailing space), Unicode homoglyphs, "1 logo (rev2)").
+- **Why:** v1 fungibility is implicit in `Voucher.name` equality. Equality is brittle; an emitter could attack by minting near-identical names.
 - **Context:** Cheap to implement (Unicode NFKC normalization + similarity scoring). Warns the wallet at accept-time.
 - **Depends on:** Nothing protocol-level; bolts onto the wallet.
 
 ### AI as emitter (W: 7)
-- **What:** Agents are first-class issuers. An agent mints `1 GPT-5 response`, `1 code review`, `1 generated image` Promises against its own bank.
+- **What:** Agents are first-class issuers. An agent mints `1 GPT-5 response`, `1 code review`, `1 generated image` Vouchers against its own bank.
 - **Why:** Trust question is identical to the human case: do you trust the agent's bank? Composability becomes interesting: human-emitters and agent-emitters denominated in the same protocol.
 - **Context:** Cleaner framing than "AI as holder." Redemption happens via the agent's API.
-- **Depends on:** Stable v1; clear redemption mechanism for digital-deliverable Promises.
+- **Depends on:** Stable v1; clear redemption mechanism for digital-deliverable Vouchers.
 
 ### Sin-eater insurance pool (W: 8)
-- **What:** An AI-operated bank that takes on the lead role for a fee, absorbing abandonment loss into its own pool. The pool's solvency is itself a Promise others hold and trade.
+- **What:** An AI-operated bank that takes on the lead role for a fee, absorbing abandonment loss into its own pool. The pool's solvency is itself a Voucher others hold and trade.
 - **Why:** Lead/follow risk in v1 is "you eat the loss." Insurance is the standard hedge. The risk model gets a tradeable derivative.
-- **Context:** Three layers: underwriting model, capital-pool Promise, routing mechanism for using the pool as lead. The README mentions the lead bank "carries the small remaining risk"; sin-eater takes that risk professionally.
+- **Context:** Three layers: underwriting model, capital-pool Voucher, routing mechanism for using the pool as lead. The README mentions the lead bank "carries the small remaining risk"; sin-eater takes that risk professionally.
 - **Depends on:** v1.5 protocol stability; abandonment-risk pricing; voluntary-reputation miner for risk input.
 
 ### Holder-anonymity router (W: 8)
-- **What:** Routes a Promise through N intermediate holders/banks to obscure the previous-holder chain, without weakening trust (since holders aren't trust-bearing).
+- **What:** Routes a Voucher through N intermediate holders/banks to obscure the previous-holder chain, without weakening trust (since holders aren't trust-bearing).
 - **Why:** The trust model implies holder-chain privacy is free — recipients don't care who held it before, only who emitted it.
 - **Context:** This is barter.game accidentally inventing a mixer. Emitter identity stays visible forever (good); holder chain becomes optionally obscurable (potentially good, potentially regulatory-attractive). Add deliberately.
 - **Depends on:** Stable v1; deliberate decision about whether to expose this property.
 
 ### AI-to-AI economy as parallel federation (W: 9)
 - **What:** N agent-banks, each issuing currency for its own niche service. Agents trade among themselves; humans plug in as just another peer.
-- **Why:** barter.game protocol as the substrate for an LLM economy where compute, capability, and attention are denominated in Promises. No token, no marketcap, no gas — just signed deliverables.
+- **Why:** barter.game protocol as the substrate for an LLM economy where compute, capability, and attention are denominated in Vouchers. No token, no marketcap, no gas — just signed deliverables.
 - **Context:** Differentiator vs other agent-payment systems is the federation property and the human-included peer graph.
 - **Depends on:** Several v1.5 items (federated directory, key rotation); AI-as-emitter pattern proven first.
 
@@ -230,13 +230,13 @@ Brainstorm output, not committed direction. These are agentic layers that could 
 - **Depends on:** Stable v1; FROST or equivalent threshold scheme; governance model for the committee.
 
 ### Dream-currency (W: 10)
-- **What:** Promises denominated in dream-content: "1 dream-favor (lucid, involving canals)."
-- **Why:** `Promise.name` is `string`. The spec doesn't say it has to be useful. Mutual-credit ledger as surrealist art project.
+- **What:** Vouchers denominated in dream-content: "1 dream-favor (lucid, involving canals)."
+- **Why:** `Voucher.name` is `string`. The spec doesn't say it has to be useful. Mutual-credit ledger as surrealist art project.
 - **Context:** Probably the most barter.game-shaped joke available. Listed for completeness.
 - **Depends on:** Sense of humor.
 
-### Posthumous-promise bank (W: 10)
-- **What:** A bank that only mints Promises payable after the issuer's death ("1 letter to my child, delivered when they turn 18").
+### Posthumous-voucher bank (W: 10)
+- **What:** A bank that only mints Vouchers payable after the issuer's death ("1 letter to my child, delivered when they turn 18").
 - **Why:** Takes "your own seal of office" seriously enough to extend it past mortality. Abandonment sweeper interval becomes "lifespan."
 - **Context:** Requires legal/estate integration well beyond v1's scope. Listed for design-space completeness; not a serious roadmap item.
 - **Depends on:** Estate-execution integration; AI executor (agent that settles when conditions are met).

@@ -1,4 +1,4 @@
-// `barter account <promise-hash>` — author a receiving Account locally.
+// `barter account <voucher-hash>` — author a receiving Account locally.
 //
 // Purely offline: accounts are implicit, so "opening" one is just writing a
 // Pocket + Account doc into the local doc store. The Account body reaches
@@ -9,22 +9,22 @@ import { createLocalAccount } from "../docstore.ts";
 import { loadProfile } from "../profile.ts";
 
 export function runAccount(argv: string[]): number {
-  const promiseHash = argv.find((a) => !a.startsWith("--"));
+  const voucherHash = argv.find((a) => !a.startsWith("--"));
   let name = "main";
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--name") name = argv[++i] ?? "main";
   }
-  if (!promiseHash) {
-    process.stderr.write(`barter account: <promise-hash> required\n`);
+  if (!voucherHash) {
+    process.stderr.write(`barter account: <voucher-hash> required\n`);
     return 1;
   }
   const profile = loadProfile();
-  const { accountHash, pocketHash } = createLocalAccount(profile, promiseHash, name);
+  const { accountHash, pocketHash } = createLocalAccount(profile, voucherHash, name);
   process.stdout.write(
     `account created locally (no bank call — accounts are implicit)\n` +
       `  account hash: ${accountHash}\n` +
       `  pocket hash:  ${pocketHash}  (pocket body stays on this machine)\n` +
-      `  promise:      ${promiseHash}\n`,
+      `  voucher:      ${voucherHash}\n`,
   );
   return 0;
 }

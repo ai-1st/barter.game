@@ -3,8 +3,8 @@
 
 // Deal builder — the client-side, pure-logic core of N-party settlement.
 //
-// A *deal* is a set of transfers. Each transfer moves one Promise from a debit
-// holder to a credit holder, and lives entirely at the Promise's issuer bank
+// A *deal* is a set of transfers. Each transfer moves one Voucher from a debit
+// holder to a credit holder, and lives entirely at the Voucher's issuer bank
 // (debit + credit are both that bank's records). The initiating client is the
 // only party that sees the whole deal; it hands each bank ONLY its own slice
 // (see PROTOCOL.md §2 Visibility, §7.1).
@@ -23,11 +23,11 @@
 import { hashDoc, newUlid } from "./crypto.ts";
 import type { Base58PubKey, Base58SHA256, Tx, ULID } from "./schemas.ts";
 
-/** One leg of value movement: `from` gives `amount` of `promise` to `to`. */
+/** One leg of value movement: `from` gives `amount` of `voucher` to `to`. */
 export type TransferSpec = {
-  /** Hash of the Promise doc being moved. */
-  promise: Base58SHA256;
-  /** Pubkey of the bank that issued `promise` — owns both records. */
+  /** Hash of the Voucher doc being moved. */
+  voucher: Base58SHA256;
+  /** Pubkey of the bank that issued `voucher` — owns both records. */
   issuerBank: Base58PubKey;
   amount: number;
   /** The giver: account is debited. */
@@ -145,7 +145,7 @@ function validateTransfer(t: TransferSpec, i: number): void {
   const must = (cond: boolean, msg: string) => {
     if (!cond) throw new Error(`transfer[${i}]: ${msg}`);
   };
-  must(typeof t.promise === "string" && t.promise.length > 0, "promise hash required");
+  must(typeof t.voucher === "string" && t.voucher.length > 0, "voucher hash required");
   must(typeof t.issuerBank === "string" && t.issuerBank.length > 0, "issuerBank required");
   must(typeof t.amount === "number" && Number.isFinite(t.amount) && t.amount > 0, "amount must be positive");
   must(!!t.from && typeof t.from.holder === "string" && typeof t.from.account === "string", "from.{holder,account} required");

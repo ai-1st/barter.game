@@ -1,7 +1,7 @@
-// mint_promise — issuer → issuing bank.
+// mint_voucher — issuer → issuing bank.
 //
 // Minting IS the first record pair. The issuer presents:
-//   - the Promise doc (signed request envelope claims authorship)
+//   - the Voucher doc (signed request envelope claims authorship)
 //   - two Account docs on two DISTINCT Pocket hashes: the issue account
 //     (goes negative) and the holding account (goes positive)
 //   - the amount to mint
@@ -12,20 +12,20 @@
 // counterparty risk. No special mint balance logic: the same mechanism that
 // moves value in trades creates it here.
 
-import { hashDoc, newUlid, signDoc, validateAccount, validatePromise } from "../../../packages/protocol/src/index.ts";
+import { hashDoc, newUlid, signDoc, validateAccount, validateVoucher } from "../../../packages/protocol/src/index.ts";
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
 import { fanoutSignatures } from "../subscriptions.ts";
 
-type MintPromiseParams = {
-  promise: Record<string, unknown>;
+type MintVoucherParams = {
+  voucher: Record<string, unknown>;
   debit_account: Record<string, unknown>; // issue account — goes negative
   credit_account: Record<string, unknown>; // holding account — goes positive
   amount: number;
 };
 
-export const mintPromise: Handler = async (params, ctx) => {
-  const p = params as MintPromiseParams;
-  for (const f of ["promise", "debit_account", "credit_account"] as const) {
+export const mintVoucher: Handler = async (params, ctx) => {
+  const p = params as MintVoucherParams;
+  for (const f of ["voucher", "debit_account", "credit_account"] as const) {
     if (!p[f]) throw new RpcError(RpcErrors.INVALID_PARAMS, `params.${f} required`);
   }
   if (typeof p.amount !== "number" || !Number.isFinite(p.amount) || p.amount <= 0) {
@@ -33,60 +33,60 @@ export const mintPromise: Handler = async (params, ctx) => {
   }
 
   try {
-    validatePromise(p.promise);
+    validateVoucher(p.voucher);
     validateAccount(p.debit_account);
     validateAccount(p.credit_account);
   } catch (err) {
     throw new RpcError(RpcErrors.VALIDATION, err instanceof Error ? err.message : "doc validation failed");
   }
 
-  const promise = p.promise;
-  if (promise.bank !== ctx.bankPubkey) {
-    throw new RpcError(RpcErrors.VALIDATION, `promise.bank must equal this bank's pubkey (${ctx.bankPubkey})`);
+  const voucher = p.voucher;
+  if (voucher.bank !== ctx.bankPubkey) {
+    throw new RpcError(RpcErrors.VALIDATION, `voucher.bank must equal this bank's pubkey (${ctx.bankPubkey})`);
   }
-  if (promise.pubkey !== ctx.senderPubkey) {
-    throw new RpcError(RpcErrors.VALIDATION, "promise.pubkey must equal the request sender (issuer issues their own promises)");
+  if (voucher.pubkey !== ctx.senderPubkey) {
+    throw new RpcError(RpcErrors.VALIDATION, "voucher.pubkey must equal the request sender (issuer issues their own vouchers)");
   }
-  const promiseHash = hashDoc(promise);
+  const voucherHash = hashDoc(voucher);
 
   for (const [label, acct] of [["debit_account", p.debit_account], ["credit_account", p.credit_account]] as const) {
     if (acct.holder !== ctx.senderPubkey) {
       throw new RpcError(RpcErrors.VALIDATION, `${label}.holder must equal the request sender`);
     }
-    if (acct.promise !== promiseHash) {
-      throw new RpcError(RpcErrors.VALIDATION, `${label}.promise must reference the minted promise`);
+    if (acct.voucher !== voucherHash) {
+      throw new RpcError(RpcErrors.VALIDATION, `${label}.voucher must reference the minted voucher`);
     }
   }
   if (p.debit_account.pocket === p.credit_account.pocket) {
     throw new RpcError(RpcErrors.VALIDATION, "the two accounts must use two distinct Pocket hashes");
   }
 
-  if (promise.integer === true && !Number.isInteger(p.amount)) {
-    throw new RpcError(RpcErrors.VALIDATION, "promise.integer requires an integer amount");
+  if (voucher.integer === true && !Number.isInteger(p.amount)) {
+    throw new RpcError(RpcErrors.VALIDATION, "voucher.integer requires an integer amount");
   }
 
   const debitAccountHash = hashDoc(p.debit_account);
   const creditAccountHash = hashDoc(p.credit_account);
 
   // Limit: total issuance lives on the issue account as a negative balance.
-  if (typeof promise.limit === "number") {
+  if (typeof voucher.limit === "number") {
     const existing = await ctx.db.getAccount(debitAccountHash);
     const alreadyMinted = existing ? -Number(existing.balance) : 0;
-    if (alreadyMinted + p.amount > promise.limit) {
+    if (alreadyMinted + p.amount > voucher.limit) {
       throw new RpcError(
         RpcErrors.VALIDATION,
-        `mint of ${p.amount} would exceed promise.limit ${promise.limit} (already minted ${alreadyMinted})`,
+        `mint of ${p.amount} would exceed voucher.limit ${voucher.limit} (already minted ${alreadyMinted})`,
       );
     }
   }
 
   // Persist docs + implicit accounts. Hash-keyed upserts are idempotent.
-  await ctx.db.insertDoc({ hash: promiseHash, type: "promise", pubkey: ctx.senderPubkey, body: promise });
+  await ctx.db.insertDoc({ hash: voucherHash, type: "voucher", pubkey: ctx.senderPubkey, body: voucher });
   for (const [hash, acct] of [[debitAccountHash, p.debit_account], [creditAccountHash, p.credit_account]] as const) {
     await ctx.db.insertDoc({ hash, type: "account", pubkey: ctx.senderPubkey, body: acct });
     await ctx.db.upsertAccount({
       accountHash: hash,
-      promiseHash,
+      voucherHash,
       pocketHash: acct.pocket as string,
       holderPubkey: ctx.senderPubkey,
     });
@@ -139,7 +139,7 @@ export const mintPromise: Handler = async (params, ctx) => {
   await fanoutSignatures(ctx, signatures);
 
   return {
-    promise_hash: promiseHash,
+    voucher_hash: voucherHash,
     debit_account_hash: debitAccountHash,
     credit_account_hash: creditAccountHash,
     records: [debit, credit],

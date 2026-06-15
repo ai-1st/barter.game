@@ -98,15 +98,15 @@
     "canonical": "{\"list\":[3,{\"a\":1,\"b\":2},1]}"
   },
   {
-    "name": "barter promise doc shape",
+    "name": "barter voucher doc shape",
     "input": {
-      "type": "promise",
+      "type": "voucher",
       "pubkey": "CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza",
       "ulid": "01J84XCEPZ8B7K3NJ60ZBQX4K3",
       "bank": "8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N",
       "name": "1 logo",
       "integer": true
     },
-    "canonical": "{\"bank\":\"8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N\",\"integer\":true,\"name\":\"1 logo\",\"pubkey\":\"CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza\",\"type\":\"promise\",\"ulid\":\"01J84XCEPZ8B7K3NJ60ZBQX4K3\"}"
+    "canonical": "{\"bank\":\"8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N\",\"integer\":true,\"name\":\"1 logo\",\"pubkey\":\"CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza\",\"type\":\"voucher\",\"ulid\":\"01J84XCEPZ8B7K3NJ60ZBQX4K3\"}"
   }
 ]

@@ -3,7 +3,7 @@
 // The bank is the sole creator of ledger records. The client sends the deal
 // ULID (its grouping key), this bank's slice of the settle topology
 // (role / predecessors / banks), the transfer specs, and optionally any
-// supporting docs (Promise copies, Account docs — accounts are implicit).
+// supporting docs (Voucher copies, Account docs — accounts are implicit).
 // The bank validates, assigns record ULIDs, creates the debit/credit pair
 // with mandatory `pair` cross-references, stores the leg topology, and
 // returns the record bodies.
@@ -52,7 +52,7 @@ export const createRecords: Handler = async (params, ctx) => {
     throw new RpcError(RpcErrors.INVALID_PARAMS, "params.transfers must be a non-empty array");
   }
 
-  // Implicit accounts: store any presented Promise/Account docs first so
+  // Implicit accounts: store any presented Voucher/Account docs first so
   // brand-new accounts can be referenced by the transfers below.
   await intakeDocs(p.docs, ctx);
 
@@ -77,12 +77,12 @@ export const createRecords: Handler = async (params, ctx) => {
     if (!toAcct) {
       throw new RpcError(RpcErrors.UNKNOWN_DOC, `to_account ${tr.to_account} not known to this bank (attach the Account doc)`);
     }
-    if (fromAcct.promise_hash !== toAcct.promise_hash) {
-      throw new RpcError(RpcErrors.VALIDATION, "a transfer moves one promise: both accounts must hold the same promise");
+    if (fromAcct.voucher_hash !== toAcct.voucher_hash) {
+      throw new RpcError(RpcErrors.VALIDATION, "a transfer moves one voucher: both accounts must hold the same voucher");
     }
-    const promiseRow = await ctx.db.getDoc(fromAcct.promise_hash);
-    if (promiseRow && (promiseRow.body as { integer?: boolean }).integer === true && !Number.isInteger(tr.amount)) {
-      throw new RpcError(RpcErrors.VALIDATION, "promise.integer requires an integer amount");
+    const voucherRow = await ctx.db.getDoc(fromAcct.voucher_hash);
+    if (voucherRow && (voucherRow.body as { integer?: boolean }).integer === true && !Number.isInteger(tr.amount)) {
+      throw new RpcError(RpcErrors.VALIDATION, "voucher.integer requires an integer amount");
     }
 
     const debitUlid = newUlid();

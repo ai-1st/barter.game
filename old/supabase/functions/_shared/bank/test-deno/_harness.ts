@@ -30,7 +30,7 @@ type LedgerRec = {
 
 export class Store {
   docs = new Map<string, { hash: string; type: string; pubkey: string; body: Record<string, unknown> }>();
-  accounts = new Map<string, { promise: string; pocket: string; holder: string; balance: number }>();
+  accounts = new Map<string, { voucher: string; pocket: string; holder: string; balance: number }>();
   legs = new Map<string, { state: string; role: string | null; predecessors: string[]; banks: string[] }>();
   holds = new Map<string, Hold>(); // key: bank|account
   ledgerRecords = new Map<string, LedgerRec>();
@@ -64,7 +64,7 @@ export class InMemoryBankDB {
     return Promise.resolve({
       account_hash: accountHash,
       bank_pubkey: this.bankPubkey,
-      promise_hash: a.promise,
+      voucher_hash: a.voucher,
       pocket_hash: a.pocket,
       holder_pubkey: a.holder,
       balance: String(a.balance),
@@ -78,7 +78,7 @@ export class InMemoryBankDB {
       out.push({
         account_hash: mapKey.slice(this.bankPubkey.length + 1),
         bank_pubkey: this.bankPubkey,
-        promise_hash: a.promise,
+        voucher_hash: a.voucher,
         pocket_hash: a.pocket,
         holder_pubkey: a.holder,
         balance: String(a.balance),
@@ -86,11 +86,11 @@ export class InMemoryBankDB {
     }
     return Promise.resolve(out);
   }
-  upsertAccount(input: { accountHash: string; promiseHash: string; pocketHash: string; holderPubkey: string }) {
+  upsertAccount(input: { accountHash: string; voucherHash: string; pocketHash: string; holderPubkey: string }) {
     const key = k(this.bankPubkey, input.accountHash);
     if (!this.store.accounts.has(key)) {
       this.store.accounts.set(key, {
-        promise: input.promiseHash,
+        voucher: input.voucherHash,
         pocket: input.pocketHash,
         holder: input.holderPubkey,
         balance: 0,

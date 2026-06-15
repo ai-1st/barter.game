@@ -11,7 +11,7 @@
 
 import { hashDoc, newUlid, signDoc } from "../../protocol/crypto.ts";
 import { buildDeal, type TransferSpec } from "../../protocol/deal.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { createRecords } from "../handlers/create_records.ts";
 import { submitTx } from "../handlers/submit_tx.ts";
 import { notifySignatures } from "../handlers/notify_signatures.ts";
@@ -19,28 +19,28 @@ import { getDeal } from "../handlers/get_deal.ts";
 import { rejectDeal } from "../handlers/reject_deal.ts";
 import { assert, ctx, eq, k, key, Store, type Key } from "./_harness.ts";
 
-function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
   const body: Record<string, unknown> = {
     type: "account",
     pubkey: holder.pub,
     ulid: newUlid(),
     pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
-    promise: promiseHash,
+    voucher: voucherHash,
   };
   return { body, hash: hashDoc(body) };
 }
 
 async function mint(store: Store, bank: Key, issuer: Key, name: string, amount: number) {
-  const promise: Record<string, unknown> = {
-    type: "promise", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
+  const voucher: Record<string, unknown> = {
+    type: "voucher", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
   };
-  const issue = accountDoc(issuer, hashDoc(promise), "issue");
-  const holding = accountDoc(issuer, hashDoc(promise), "holding");
-  const res = await mintPromise(
-    { promise, debit_account: issue.body, credit_account: holding.body, amount },
+  const issue = accountDoc(issuer, hashDoc(voucher), "issue");
+  const holding = accountDoc(issuer, hashDoc(voucher), "holding");
+  const res = await mintVoucher(
+    { voucher, debit_account: issue.body, credit_account: holding.body, amount },
     ctx(store, bank, issuer.pub),
-  ) as { promise_hash: string; debit_account_hash: string; credit_account_hash: string };
-  return { promiseHash: res.promise_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
+  ) as { voucher_hash: string; debit_account_hash: string; credit_account_hash: string };
+  return { voucherHash: res.voucher_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
 }
 
 function holderSig(holder: Key, txHash: string, action: "lead" | "follow") {
@@ -64,18 +64,18 @@ Deno.test("bilateral walkthrough: direct approval + client relay settles both le
   const alice = key(), bob = key();
   const bA = key(), bB = key(); // Abank, Bbank
 
-  // Minting: two accounts per promise, one negative one positive.
+  // Minting: two accounts per voucher, one negative one positive.
   const logo = await mint(store, bA, alice, "1 logo", 1);
   const hour = await mint(store, bB, bob, "1 hour", 1);
 
   // Implicit counterparty accounts, presented with create_records.
-  const bobLogo = accountDoc(bob, logo.promiseHash, "main");     // Bob receives logo at Abank
-  const aliceHour = accountDoc(alice, hour.promiseHash, "main"); // Alice receives hour at Bbank
+  const bobLogo = accountDoc(bob, logo.voucherHash, "main");     // Bob receives logo at Abank
+  const aliceHour = accountDoc(alice, hour.voucherHash, "main"); // Alice receives hour at Bbank
 
   const deal = newUlid();
   const transfers: TransferSpec[] = [
-    { promise: logo.promiseHash, issuerBank: bA.pub, amount: 1, from: { holder: alice.pub, account: logo.holding }, to: { holder: bob.pub, account: bobLogo.hash } },
-    { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
+    { voucher: logo.voucherHash, issuerBank: bA.pub, amount: 1, from: { holder: alice.pub, account: logo.holding }, to: { holder: bob.pub, account: bobLogo.hash } },
+    { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
   ];
 
   // Alice contacts each bank to create the record pairs.
@@ -153,7 +153,7 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
 
   // Bob mints 1 hour; Alice ends up holding 1 via a settled mini-deal.
   const hour = await mint(store, bB, bob, "1 hour", 1);
-  const aliceHour = accountDoc(alice, hour.promiseHash, "main");
+  const aliceHour = accountDoc(alice, hour.voucherHash, "main");
 
   // Simple single-bank transfer Bob → Alice of 1 hour, both sign, settles.
   const deal1 = newUlid();
@@ -163,7 +163,7 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
   ) as { records: Array<Record<string, unknown>> };
   const built1 = buildDeal(
     { deal: deal1, initiator: bob.pub, leadBanks: [bB.pub], transfers: [
-      { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
+      { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
     ] },
     { [bB.pub]: r1.records.map((r) => r.ulid as string) },
   );
@@ -182,7 +182,7 @@ Deno.test("insufficient non-issuer balance draws a per-record reject; reject_dea
   ) as { records: Array<Record<string, unknown>> };
   const built2 = buildDeal(
     { deal: deal2, initiator: alice.pub, leadBanks: [bB.pub], transfers: [
-      { promise: hour.promiseHash, issuerBank: bB.pub, amount: 2, from: { holder: alice.pub, account: aliceHour.hash }, to: { holder: bob.pub, account: hour.holding } },
+      { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 2, from: { holder: alice.pub, account: aliceHour.hash }, to: { holder: bob.pub, account: hour.holding } },
     ] },
     { [bB.pub]: r2.records.map((r) => r.ulid as string) },
   );

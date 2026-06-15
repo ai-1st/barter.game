@@ -27,7 +27,7 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `mint(promise, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `promise` references this bank, that both Accounts belong to the issuer, reference the promise, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
+| `mint(voucher, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `voucher` references this bank, that both Accounts belong to the issuer, reference the voucher, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
 | `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Pocket bodies stay on the holder's machine. |
 | `submit_order(order, accounts[], publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash and, if published, the Offer hash and bank signature. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
@@ -40,10 +40,10 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 
 A `request` is either:
 
-- `{ type: "transfer", promise_hash, amount, debit_account_hash, credit_account_hash }` — explicit transfer between two known accounts.
+- `{ type: "transfer", voucher_hash, amount, debit_account_hash, credit_account_hash }` — explicit transfer between two known accounts.
 - `{ type: "offer_match", offer_hash, amount, account_hash }` — match against a published Offer. The bank resolves the underlying Order, validates that `account_hash` is a valid counterparty account for the requested amount and side, and creates the paired records using the Order holder's account (hidden from the matchmaker) and the provided counterparty account.
 
-The bank validates that all accounts exist, reference the correct Promise, and satisfy the Offer terms (rate, min/max, limits) before minting records.
+The bank validates that all accounts exist, reference the correct Voucher, and satisfy the Offer terms (rate, min/max, limits) before minting records.
 
 ### 2.3 Authorization
 
@@ -63,12 +63,12 @@ The bank validates that all accounts exist, reference the correct Promise, and s
 | Method | Caller | Side effect |
 |---|---|---|
 | `get_record_signatures(record_hash)` | any → bank | Return the record body and every signature anchored to this record hash. Used by follow parties verifying a deal, by watchers, and by relaying clients. |
-| `get_promise(promise_hash)` | any → bank | Return the Promise doc body. |
+| `get_voucher(voucher_hash)` | any → bank | Return the Voucher doc body. |
 | `get_account_balance(account_hash)` | holder → issuer bank | Return current and pending balance. |
-| `list_accounts()` | holder → bank | Return all accounts owned by the sender at this bank, with Promise bodies. |
-| `list_offers(promise_hash, intention)` | any → bank | Return Offers for the given Promise and intention (`sell` or `buy`). |
+| `list_accounts()` | holder → bank | Return all accounts owned by the sender at this bank, with Voucher bodies. |
+| `list_offers(voucher_hash, intention)` | any → bank | Return Offers for the given Voucher and intention (`sell` or `buy`). |
 | `get_invoice(hash)` / `get_cheque(hash)` | any → bank | Return the Order or Offer at `hash` if it has the invoice (`debit` omitted) or cheque (`credit` omitted) specialization. |
-| `list_promises(filter)` | any → bank | Return Promises the bank chooses to expose (e.g., public, discoverable, or all known). Exact filters are bank policy; the method shape is protocol. |
+| `list_vouchers(filter)` | any → bank | Return Vouchers the bank chooses to expose (e.g., public, discoverable, or all known). Exact filters are bank policy; the method shape is protocol. |
 
 ### 2.6 Address directory (REST)
 

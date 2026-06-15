@@ -2,11 +2,11 @@
 title: For Event Managers
 ---
 
-## Turn your event into a marketplace of promises
+## Turn your event into a marketplace of vouchers
 
 The best networking happens when people trade real value, not just business cards. barter.game lets your attendees mint personal currencies — "1 intro to my investor", "1 portfolio review", "1 lunch conversation" — and trade them on the spot.
 
-## Why add a promise marketplace?
+## Why add a voucher marketplace?
 
 - **Attendees leave with concrete value**, not just LinkedIn connections.
 - **Icebreaker built in.** "What can you offer? What do you need?" becomes the opening line.
@@ -17,7 +17,7 @@ The best networking happens when people trade real value, not just business card
 
 1. **You deploy a bank** (or we do it for you). It takes 10 minutes. See the [self-hoster guide](../for-self-hosters).
 2. **Attendees `barter init`** against your bank URL. They now have a wallet.
-3. **They mint promises** — whatever they can deliver. "1 design review." "1 investor intro." "1 yoga class."
+3. **They mint vouchers** — whatever they can deliver. "1 design review." "1 investor intro." "1 yoga class."
 4. **They trade.** The protocol handles the cryptography. Attendees just scan a QR code or paste an invite string, then accept the deal token that comes back.
 5. **Banks settle on their own.** Once both sides have signed, balances update. The issuer now owes the holder a deliverable.
 
@@ -27,7 +27,7 @@ The best networking happens when people trade real value, not just business card
 # At the event
 barter init --bank https://your-event.barter.game/functions/v1/event-bank
 barter mint "1 portfolio review" --amount 5
-barter invite --give <promise>:1 --get <their-promise>:1   # hand them the barter:// string
+barter invite --give <voucher>:1 --get <their-voucher>:1   # hand them the barter:// string
 # …they run: barter trade --invite "<barter://...>" and send back a deal token…
 barter accept "<barterdeal:...>"                            # banks settle on their own
 barter inbox                                                # watch the balances land
@@ -37,7 +37,7 @@ Or, wrap this in a simple web UI (v1.5) and attendees never touch the terminal.
 
 ## The day after
 
-Attendees leave holding signed promises. They can redeem them later — a coffee meetup next week, a design review over Zoom. The promise outlives the event. Your event becomes the *origin* of ongoing professional relationships, not just a one-day blur.
+Attendees leave holding signed vouchers. They can redeem them later — a coffee meetup next week, a design review over Zoom. The voucher outlives the event. Your event becomes the *origin* of ongoing professional relationships, not just a one-day blur.
 
 ## Get started
 

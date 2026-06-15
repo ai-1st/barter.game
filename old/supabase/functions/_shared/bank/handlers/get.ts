@@ -2,19 +2,19 @@
 
 import { RpcError, RpcErrors, type Handler } from "../rpc.ts";
 
-export const getPromise: Handler = async (params, ctx) => {
-  const hash = (params as { promise_hash?: string }).promise_hash;
+export const getVoucher: Handler = async (params, ctx) => {
+  const hash = (params as { voucher_hash?: string }).voucher_hash;
   if (typeof hash !== "string") {
-    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.promise_hash required");
+    throw new RpcError(RpcErrors.INVALID_PARAMS, "params.voucher_hash required");
   }
   const row = await ctx.db.getDoc(hash);
   if (!row) {
-    throw new RpcError(RpcErrors.UNKNOWN_DOC, `promise ${hash} not found`);
+    throw new RpcError(RpcErrors.UNKNOWN_DOC, `voucher ${hash} not found`);
   }
-  if (row.type !== "promise") {
-    throw new RpcError(RpcErrors.VALIDATION, `doc ${hash} is type ${row.type}, not promise`);
+  if (row.type !== "voucher") {
+    throw new RpcError(RpcErrors.VALIDATION, `doc ${hash} is type ${row.type}, not voucher`);
   }
-  return { promise: row.body };
+  return { voucher: row.body };
 };
 
 export const getAccountBalance: Handler = async (params, ctx) => {
@@ -28,17 +28,17 @@ export const getAccountBalance: Handler = async (params, ctx) => {
   }
   return {
     account_hash: accountRow.account_hash,
-    promise_hash: accountRow.promise_hash,
+    voucher_hash: accountRow.voucher_hash,
     pocket_hash: accountRow.pocket_hash,
     holder_pubkey: accountRow.holder_pubkey,
     balance: accountRow.balance,
   };
 };
 
-/** list_accounts — accounts owned by sender at this bank, with Promise bodies. */
+/** list_accounts — accounts owned by sender at this bank, with Voucher bodies. */
 export const listAccounts: Handler = async (_params, ctx) => {
   const accounts = await ctx.db.listAccountsByHolder(ctx.senderPubkey);
-  const promiseHashes = [...new Set(accounts.map((a) => a.promise_hash))];
-  const promises = await ctx.db.getDocsByHashes(promiseHashes);
-  return { accounts, promises };
+  const voucherHashes = [...new Set(accounts.map((a) => a.voucher_hash))];
+  const vouchers = await ctx.db.getDocsByHashes(voucherHashes);
+  return { accounts, vouchers };
 };

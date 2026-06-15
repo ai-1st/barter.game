@@ -1,32 +1,32 @@
-// mint_promise — mint IS the first ledger record pair, settled immediately.
+// mint_voucher — mint IS the first ledger record pair, settled immediately.
 //
 // Run: deno test --allow-read supabase/functions/_shared/bank/test-deno/mint.deno-test.ts
 
 import { hashDoc, newUlid } from "../../protocol/crypto.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { assert, ctx, eq, k, key, Store, type Key } from "./_harness.ts";
 
 function pocketHash(holder: Key, name: string): string {
   return hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name });
 }
 
-function accountDoc(holder: Key, promiseHash: string, pocket: string) {
-  return { type: "account", pubkey: holder.pub, ulid: newUlid(), pocket, promise: promiseHash };
+function accountDoc(holder: Key, voucherHash: string, pocket: string) {
+  return { type: "account", pubkey: holder.pub, ulid: newUlid(), pocket, voucher: voucherHash };
 }
 
 function makeMintParams(bank: Key, issuer: Key, opts: { limit?: number; integer?: boolean; amount: number; samePocket?: boolean }) {
-  const promise: Record<string, unknown> = {
-    type: "promise", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
+  const voucher: Record<string, unknown> = {
+    type: "voucher", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
   };
-  if (opts.limit !== undefined) promise.limit = opts.limit;
-  if (opts.integer !== undefined) promise.integer = opts.integer;
-  const promiseHash = hashDoc(promise);
+  if (opts.limit !== undefined) voucher.limit = opts.limit;
+  if (opts.integer !== undefined) voucher.integer = opts.integer;
+  const voucherHash = hashDoc(voucher);
   const p1 = pocketHash(issuer, "issue");
   const p2 = opts.samePocket ? p1 : pocketHash(issuer, "holding");
   return {
-    promise,
-    debit_account: accountDoc(issuer, promiseHash, p1),
-    credit_account: accountDoc(issuer, promiseHash, p2),
+    voucher,
+    debit_account: accountDoc(issuer, voucherHash, p1),
+    credit_account: accountDoc(issuer, voucherHash, p2),
     amount: opts.amount,
   };
 }
@@ -35,8 +35,8 @@ Deno.test("mint creates the ± record pair and settles immediately", async () =>
   const store = new Store();
   const bank = key(), alice = key();
   const params = makeMintParams(bank, alice, { amount: 5 });
-  const res = await mintPromise(params, ctx(store, bank, alice.pub)) as {
-    promise_hash: string;
+  const res = await mintVoucher(params, ctx(store, bank, alice.pub)) as {
+    voucher_hash: string;
     debit_account_hash: string;
     credit_account_hash: string;
     deal: string;
@@ -63,7 +63,7 @@ Deno.test("mint requires two distinct pocket hashes", async () => {
   const params = makeMintParams(bank, alice, { amount: 1, samePocket: true });
   let threw = false;
   try {
-    await mintPromise(params, ctx(store, bank, alice.pub));
+    await mintVoucher(params, ctx(store, bank, alice.pub));
   } catch (err) {
     threw = true;
     assert(String(err).includes("distinct"), `unexpected error: ${err}`);
@@ -71,16 +71,16 @@ Deno.test("mint requires two distinct pocket hashes", async () => {
   assert(threw, "same-pocket mint must be rejected");
 });
 
-Deno.test("promise.limit caps cumulative minting across mints", async () => {
+Deno.test("voucher.limit caps cumulative minting across mints", async () => {
   const store = new Store();
   const bank = key(), alice = key();
   const params = makeMintParams(bank, alice, { amount: 6, limit: 10 });
-  await mintPromise(params, ctx(store, bank, alice.pub));
+  await mintVoucher(params, ctx(store, bank, alice.pub));
 
-  // Second mint of the SAME promise into the same accounts: 6 + 6 > 10.
+  // Second mint of the SAME voucher into the same accounts: 6 + 6 > 10.
   let threw = false;
   try {
-    await mintPromise(params, ctx(store, bank, alice.pub));
+    await mintVoucher(params, ctx(store, bank, alice.pub));
   } catch (err) {
     threw = true;
     assert(String(err).includes("limit"), `unexpected error: ${err}`);
@@ -88,34 +88,34 @@ Deno.test("promise.limit caps cumulative minting across mints", async () => {
   assert(threw, "over-limit mint must be rejected");
 
   // A top-up within the limit is fine: 6 + 4 = 10.
-  await mintPromise({ ...params, amount: 4 }, ctx(store, bank, alice.pub));
+  await mintVoucher({ ...params, amount: 4 }, ctx(store, bank, alice.pub));
   const issueHash = hashDoc(params.debit_account);
   eq(Number(store.accounts.get(k(bank.pub, issueHash))!.balance), -10, "issue after top-up");
 });
 
-Deno.test("promise.integer rejects fractional mint amounts", async () => {
+Deno.test("voucher.integer rejects fractional mint amounts", async () => {
   const store = new Store();
   const bank = key(), alice = key();
   const params = makeMintParams(bank, alice, { amount: 1.5, integer: true });
   let threw = false;
   try {
-    await mintPromise(params, ctx(store, bank, alice.pub));
+    await mintVoucher(params, ctx(store, bank, alice.pub));
   } catch (err) {
     threw = true;
     assert(String(err).includes("integer"), `unexpected error: ${err}`);
   }
-  assert(threw, "fractional mint of an integer promise must be rejected");
+  assert(threw, "fractional mint of an integer voucher must be rejected");
 });
 
-Deno.test("mint rejects a promise issued for another bank", async () => {
+Deno.test("mint rejects a voucher issued for another bank", async () => {
   const store = new Store();
   const bank = key(), otherBank = key(), alice = key();
   const params = makeMintParams(otherBank, alice, { amount: 1 });
   let threw = false;
   try {
-    await mintPromise(params, ctx(store, bank, alice.pub));
+    await mintVoucher(params, ctx(store, bank, alice.pub));
   } catch {
     threw = true;
   }
-  assert(threw, "promise.bank mismatch must be rejected");
+  assert(threw, "voucher.bank mismatch must be rejected");
 });

@@ -6,15 +6,15 @@ title: For Players
 
 barter.game is not just a protocol — it's a game of trust, timing, and strategy. The best players understand the social dynamics as well as the cryptography.
 
-## The currencies you hold are promises
+## The currencies you hold are vouchers
 
 Every "coin" in your wallet is a signed IOU from someone you know. "1 logo from Alice." "1 hour from Bob." The value is not in the token; it's in the relationship behind it.
 
 This changes how you think about your portfolio:
 
-- **Diversify your emitters.** Holding 50 promises from one person is concentration risk. If they ghost, you're holding paper.
-- **Pay attention to `due` dates.** A promise with a maturity date is a time-bounded commitment. Trade accordingly.
-- **Watch the limit.** If Alice set `limit: 100` on her "1 logo" promise, she can only issue 100 total. Scarcity matters.
+- **Diversify your emitters.** Holding 50 vouchers from one person is concentration risk. If they ghost, you're holding paper.
+- **Pay attention to `due` dates.** A voucher with a maturity date is a time-bounded commitment. Trade accordingly.
+- **Watch the limit.** If Alice set `limit: 100` on her "1 logo" voucher, she can only issue 100 total. Scarcity matters.
 
 ## Lead vs. follow: the risk decision
 
@@ -57,18 +57,18 @@ Alice wants Bob's "1 hour" but Bob doesn't want Alice's "1 logo." Carol wants Al
 
 ### Portfolio rebalancing
 
-If you're holding too many promises from one emitter, offer them to others at favorable rates. "I'll give you 2 of Alice's logos for 1 of your hours." The protocol doesn't price-match; you do. It's barter, not a market.
+If you're holding too many vouchers from one emitter, offer them to others at favorable rates. "I'll give you 2 of Alice's logos for 1 of your hours." The protocol doesn't price-match; you do. It's barter, not a market.
 
 ### The event play
 
-Go to an event with an empty wallet. Mint a promise on arrival — "1 intro to my network." Trade it for other promises throughout the day. Leave with a diversified portfolio of commitments from people you just met. Follow up next week to redeem.
+Go to an event with an empty wallet. Mint a voucher on arrival — "1 intro to my network." Trade it for other vouchers throughout the day. Leave with a diversified portfolio of commitments from people you just met. Follow up next week to redeem.
 
 ## The meta-game
 
 The ultimate barter.game player is not the one with the highest balance. It's the one with:
 
 - **The most trusted issuer relationships.** People know you'll deliver.
-- **The most diverse portfolio.** Many small promises from many emitters.
+- **The most diverse portfolio.** Many small vouchers from many emitters.
 - **The best timing.** Knowing when to lead and when to follow.
 - **The cleanest redemption record.** You settle your debts promptly.
 

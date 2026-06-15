@@ -63,7 +63,7 @@ Generate it however you like. The private key stays on the server. The pubkey is
 
 ### 3. Storage that enforces two invariants
 
-- **Sum-to-zero:** For any Promise, the sum of all account balances equals zero (or the limit).
+- **Sum-to-zero:** For any Voucher, the sum of all account balances equals zero (or the limit).
 - **One active hold per account:** No two in-flight transactions can lock the same debit account simultaneously.
 
 Deno KV with atomic check-and-set is one way. Postgres with a partial unique index is another. SQLite with application-level locking works for smaller deployments. An in-memory store with mutexes works for demos.
@@ -75,7 +75,7 @@ Implement the methods in `PROTOCOL.md` §7. The reference handlers in `apps/bank
 ## Security checklist
 
 - [ ] **Pin your bank's pubkey everywhere.** Clients should store `{pubkey, url}` and reject `barter-bank.json` responses that diverge.
-- [ ] **Backup your private key.** Lose it and every Promise issued by your bank becomes orphaned.
+- [ ] **Backup your private key.** Lose it and every Voucher issued by your bank becomes orphaned.
 - [ ] **Rate-limit RPC endpoints.** Even cheap verification adds up.
 - [ ] **Don't expose your database directly.** The Deno Deploy process / server is the trust boundary.
 - [ ] **Monitor the sum invariant.** Alert if it ever drifts.

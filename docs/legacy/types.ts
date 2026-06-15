@@ -1,7 +1,7 @@
 /**
  * Principles:
  * - Decentralized system
- * - There are many Banks that maintain ledgers for Promises
+ * - There are many Banks that maintain ledgers for Vouchers
  * - Banks transact using a 3 phase protocol (approve, hold, settle)
  * - The parties only see entities and records that are relevant to them rather than the whole ledger
  * - Transactions might stall or get abandoned - the lead party bears the risk and reposibility to recover
@@ -16,9 +16,9 @@
  
 
  * AI Arena:
- * - bots generate promises and post on X using a hashtag #promise
- * - find other bots on X and subscribe to their promises
- * - create orders to exchange promises, determine a rate
+ * - bots generate vouchers and post on X using a hashtag #voucher
+ * - find other bots on X and subscribe to their vouchers
+ * - create orders to exchange vouchers, determine a rate
  * 
  * AI prompts:
  * - design a convenience library with functions. give me only the function signatures and descriptions of what they do.
@@ -55,7 +55,7 @@ export type Seconds = number; // example: 600
  * Document ulid property contains an encoded timestamp, eliminating the need for a separate creation date property.
  */
 export type BaseDoc = {
-    type: "profile" | "balance" | "trade" | "order" | "address" | "promise" | "pocket" | "account" | "debit" | "credit" | "signature" | "request";
+    type: "profile" | "balance" | "trade" | "order" | "address" | "voucher" | "pocket" | "account" | "debit" | "credit" | "signature" | "request";
     pubkey: Base58PubKey;
     ulid: ULID;
 }
@@ -90,19 +90,19 @@ export type Signature = BaseDoc & {
 }
 
 /*
-* Promises describe a class of goods or services offered by the Pubkey Owner. Each promise is bound to a particular Bank
-* that is responsible for record keeping. As other documents, promises are immutable. To change a Bank, new Promise
+* Vouchers describe a class of goods or services offered by the Pubkey Owner. Each voucher is bound to a particular Bank
+* that is responsible for record keeping. As other documents, vouchers are immutable. To change a Bank, new Voucher
 * needs to be created.
 * 
-* - pubkey: issuer of the promise
+* - pubkey: issuer of the voucher
 * - bank: pubkey of the entity that maintains account balances and processes transactions, 
-* - name: diplay name of the promise
+* - name: diplay name of the voucher
 * - due: optional maturity date 
-* - limit: the maximum number of promises that can be issued, not limit if not specified
-* - integer: if holders can have only integer amounts of promise; float by default
+* - limit: the maximum number of vouchers that can be issued, not limit if not specified
+* - integer: if holders can have only integer amounts of voucher; float by default
 */
-export type Promise = BaseDoc & {
-    type: "promise";
+export type Voucher = BaseDoc & {
+    type: "voucher";
     bank: Base58PubKey;
     name: string;
     due?: DateString;
@@ -123,7 +123,7 @@ export type Pocket = BaseDoc & {
 }
 
 /**
- * Accounts are maintained by the Bank. Technically the Bank doesn't need pocket and promise details to be able to 
+ * Accounts are maintained by the Bank. Technically the Bank doesn't need pocket and voucher details to be able to 
  * process transactions. Knowing just the hashes of these objects is enough. Disclosure requirements are defined 
  * on a case-by-case basis by each Bank's policy.
  * 
@@ -135,7 +135,7 @@ export type Pocket = BaseDoc & {
 export type Account = BaseDoc & {
     type: "account";
     pocket: Base58SHA256;
-    promise: Base58SHA256;
+    voucher: Base58SHA256;
 }
 
 /**
@@ -164,14 +164,14 @@ export type Record = BaseDoc & {
 
 /** 
  * Tx (transaction) represents a single holder view of a barter deal: What I'm giving and what I'm getting in this exchange?
- * The whole barter deal may contain unlimited number of promises, holders, and banks. Each individual 
+ * The whole barter deal may contain unlimited number of vouchers, holders, and banks. Each individual 
  * participant technically doesn't need to know the whole picture, but may require full disclosure in order to
  * agree to participate.
  * 
  * Tx can be authorized by the owner signature ("lead" or "follow" - see above for the explanation of the difference)
  * an order or an invoice. Txs are linked together using "pair" references from records. 
  * 
- * E.g. if A and B exchange promises X and Y, A will see a tx with debit X, credit Y records, 
+ * E.g. if A and B exchange vouchers X and Y, A will see a tx with debit X, credit Y records, 
  * while B will see a tx with debit Y, credit X records. Furthermore, A and B may not even know who are their counterparties
  * in this exchange. The X Bank will know that some amount of X exchanges hands between A and B, but won't know anything about 
  * the Y side of exchange (assuming Y is handled by another bank). Same for Y Bank.

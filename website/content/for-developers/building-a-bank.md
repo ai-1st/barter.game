@@ -57,20 +57,20 @@ Before dispatching to a method handler:
 
 ## 5. Implement the method handlers
 
-Start with read-only methods (`get_promise`, `get_account_balance`, `list_accounts`, `get_deal`) — they're simple and let you test your envelope.
+Start with read-only methods (`get_voucher`, `get_account_balance`, `list_accounts`, `get_deal`) — they're simple and let you test your envelope.
 
-One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Promise and Account docs, and the bank stores them on first sight (a Promise must reference this bank; an Account's promise must be issued here). **Never accept a Pocket body** — `account.pocket` is an opaque hash; Pocket bodies stay with the holder.
+One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Voucher and Account docs, and the bank stores them on first sight (a Voucher must reference this bank; an Account's voucher must be issued here). **Never accept a Pocket body** — `account.pocket` is an opaque hash; Pocket bodies stay with the holder.
 
 Then implement the trade path in order:
 
 ### `mint`
-- Validate: the Promise references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Promise, and sit on **distinct Pocket hashes**.
+- Validate: the Voucher references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Voucher, and sit on **distinct Pocket hashes**.
 - The mint is the first ledger record pair: a debit on the issue account (goes negative) and a credit on the holding account (goes positive). Set `pair` on each record.
-- Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Promise hash.
+- Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Voucher hash.
 
 ### `create_records`
 - Run doc intake first, so new accounts can be referenced in the same call.
-- Per transfer: both accounts on the same Promise, Promise issued here, integer/positive checks.
+- Per transfer: both accounts on the same Voucher, Voucher issued here, integer/positive checks.
 - The bank mints debit/credit record pairs with its own ULIDs; `pair` links the two halves.
 - Store the leg topology under the deal: `role` (lead/follow), `predecessors`, the full bank list. State: `created`.
 - Store in `ledger_records` and return the bodies to the client.
@@ -104,7 +104,7 @@ Banks self-advance — there is no client hold or settle call. After every `subm
 ## 6. Enforce the invariants
 
 ### Sum-to-zero
-On every settle, after applying deltas, the sum of `balance` across all accounts for the settled Promise must equal zero. If it doesn't, your implementation has a bug.
+On every settle, after applying deltas, the sum of `balance` across all accounts for the settled Voucher must equal zero. If it doesn't, your implementation has a bug.
 
 ### One active hold per account
 When the advance engine acquires holds, check for another active hold on the same account. On conflict, leave the leg state unchanged — the next incoming signature retries. Release holds on `settle`, `reject`, and sweeper cleanup.
@@ -138,7 +138,7 @@ Address docs map a pubkey to a human-readable name and a push-receipt URL. They 
 ## 9. Write a client and test end-to-end
 
 You need a client that can:
-1. Mint (`mint`: Promise + two Accounts on distinct Pocket hashes).
+1. Mint (`mint`: Voucher + two Accounts on distinct Pocket hashes).
 2. Produce and consume `barter://` invite strings.
 3. Initiate a trade: call `create_records` on each bank, build one Tx per holder, sign yours as `lead`, `submit_tx`, register Subscriptions, and print a `barterdeal:` token per counterparty.
 4. Accept: verify a deal token against the banks via `get_deal`, sign your Tx as `follow`, `submit_tx`.
@@ -148,7 +148,7 @@ Test against the reference banks: mint → invite → trade → accept → statu
 
 ## 10. Production considerations
 
-- **Backup your bank private key.** Lose it and every Promise issued by that bank becomes unverifiable.
+- **Backup your bank private key.** Lose it and every Voucher issued by that bank becomes unverifiable.
 - **Rate-limit your RPC endpoint.** Signed RPCs are cheap to verify but expensive to handle.
 - **Monitor the sum invariant.** Alert if it ever drifts — it should be impossible, but bugs happen.
 - **Decide on a sweeper.** Stuck holds happen. A cron job that releases holds older than N hours is pragmatic.

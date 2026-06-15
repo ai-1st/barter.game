@@ -27,8 +27,8 @@ for (const v of vectors) {
 }
 
 Deno.test("canonicalizeWithoutSig removes top-level sig only (Deno)", () => {
-  const doc = { type: "promise", name: "1 logo", sig: "abc123" };
-  const expected = `{"name":"1 logo","type":"promise"}`;
+  const doc = { type: "voucher", name: "1 logo", sig: "abc123" };
+  const expected = `{"name":"1 logo","type":"voucher"}`;
   const actual = canonicalizeWithoutSig(doc);
   if (actual !== expected) {
     throw new Error(`expected ${expected}, got ${actual}`);

@@ -6,11 +6,11 @@ import { loadProfile } from "../profile.ts";
 type ListAccountsResult = {
   accounts: Array<{
     account_hash: string;
-    promise_hash: string;
+    voucher_hash: string;
     pocket_hash: string;
     balance: string;
   }>;
-  promises: Record<string, { name?: string; bank?: string }>;
+  vouchers: Record<string, { name?: string; bank?: string }>;
 };
 
 export async function runInbox(argv: string[]): Promise<number> {
@@ -28,11 +28,11 @@ export async function runInbox(argv: string[]): Promise<number> {
   }
   process.stdout.write(`accounts at ${url}:\n`);
   for (const a of res.accounts) {
-    const p = res.promises[a.promise_hash];
-    const promiseLabel = p?.name ? `"${p.name}"` : `(${a.promise_hash.slice(0, 12)}...)`;
+    const p = res.vouchers[a.voucher_hash];
+    const voucherLabel = p?.name ? `"${p.name}"` : `(${a.voucher_hash.slice(0, 12)}...)`;
     const bal = String(a.balance).padStart(6);
     process.stdout.write(
-      `  ${promiseLabel.padEnd(22)} balance=${bal}\n` +
+      `  ${voucherLabel.padEnd(22)} balance=${bal}\n` +
         `    account: ${a.account_hash}\n`,
     );
   }

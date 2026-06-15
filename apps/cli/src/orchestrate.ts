@@ -98,7 +98,7 @@ export async function createRecordsAndLead(
     const transfers = spec.transfers.filter((t) => t.issuerBank === bank);
     const requests = transfers.map((t) => ({
       type: "transfer" as const,
-      promise_hash: t.promise,
+      voucher_hash: t.voucher,
       amount: t.amount,
       debit_account_hash: t.from.account,
       credit_account_hash: t.to.account,
@@ -201,7 +201,7 @@ export function makeDealTokens(
 
 /** Submit a holder's signed "follow" Tx to every bank owning its records.
  *  docsByBank maps bank pubkey → supporting docs to attach at that bank only.
- *  Account docs must be paired with the bank that issued their promise. */
+ *  Account docs must be paired with the bank that issued their voucher. */
 export async function submitFollow(
   profile: Profile,
   tx: Tx,

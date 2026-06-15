@@ -27,7 +27,7 @@
 CREATE TABLE docs (
   hash         TEXT NOT NULL,            -- base58(SHA-256(canonical(doc)))
   bank_pubkey  TEXT NOT NULL,            -- which bank holds this doc
-  type         TEXT NOT NULL,            -- promise | account | tx | credit | debit | signature | order | subscription
+  type         TEXT NOT NULL,            -- voucher | account | tx | credit | debit | signature | order | subscription
   pubkey       TEXT NOT NULL,            -- doc.pubkey (owner / signer)
   body         JSONB NOT NULL,           -- the full signed doc
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -37,22 +37,22 @@ CREATE TABLE docs (
 CREATE INDEX docs_by_type_pubkey ON docs (bank_pubkey, type, pubkey);
 CREATE INDEX docs_by_created_at  ON docs (bank_pubkey, created_at DESC);
 
-COMMENT ON TABLE docs IS 'Content-addressed signed doc archive. PK is (hash, bank_pubkey) so the same hash can in principle live at multiple banks (separate observers), though in v1 each promise has a single issuing bank.';
+COMMENT ON TABLE docs IS 'Content-addressed signed doc archive. PK is (hash, bank_pubkey) so the same hash can in principle live at multiple banks (separate observers), though in v1 each voucher has a single issuing bank.';
 
 -- ─────────────────────────────────────────────────────────────────────────
--- accounts: per-(promise, holder, pocket) balance row at the issuing bank
+-- accounts: per-(voucher, holder, pocket) balance row at the issuing bank
 -- ─────────────────────────────────────────────────────────────────────────
 --
--- The issuing bank is the sole authority for balances of its Promises.
+-- The issuing bank is the sole authority for balances of its Vouchers.
 -- Accounts are implicit: a row is created the first time the Account doc is
--- presented with any request (mint_promise, create_records, submit_tx) — no
+-- presented with any request (mint_voucher, create_records, submit_tx) — no
 -- open_account call. Issuers go negative when they mint: the mint is itself
 -- the first ledger record pair, debiting the issue account.
 
 CREATE TABLE accounts (
   account_hash    TEXT PRIMARY KEY,        -- hash of the Account doc
   bank_pubkey     TEXT NOT NULL,           -- issuing bank (sole authority for this row)
-  promise_hash    TEXT NOT NULL,           -- which Promise this account holds
+  voucher_hash    TEXT NOT NULL,           -- which Voucher this account holds
   pocket_hash     TEXT NOT NULL,           -- holder's Pocket doc hash (opaque to the bank)
   holder_pubkey   TEXT NOT NULL,           -- holder's pubkey (account owner)
   balance         NUMERIC NOT NULL DEFAULT 0,
@@ -61,9 +61,9 @@ CREATE TABLE accounts (
 );
 
 CREATE INDEX accounts_by_holder  ON accounts (bank_pubkey, holder_pubkey);
-CREATE INDEX accounts_by_promise ON accounts (bank_pubkey, promise_hash);
+CREATE INDEX accounts_by_voucher ON accounts (bank_pubkey, voucher_hash);
 
-COMMENT ON TABLE accounts IS 'Per-promise per-holder balance. balance can be negative for issuers (mutual credit). Rows are created lazily when an Account doc is first presented.';
+COMMENT ON TABLE accounts IS 'Per-voucher per-holder balance. balance can be negative for issuers (mutual credit). Rows are created lazily when an Account doc is first presented.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- ledger_records: bank-minted, ULID-identified, grouped by deal

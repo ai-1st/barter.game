@@ -18,8 +18,8 @@ describe("canonical JSON — golden vectors", () => {
 
 describe("canonicalizeWithoutSig", () => {
   test("removes top-level sig field", () => {
-    const doc = { type: "promise", name: "1 logo", sig: "abc123" };
-    expect(canonicalizeWithoutSig(doc)).toBe(`{"name":"1 logo","type":"promise"}`);
+    const doc = { type: "voucher", name: "1 logo", sig: "abc123" };
+    expect(canonicalizeWithoutSig(doc)).toBe(`{"name":"1 logo","type":"voucher"}`);
   });
 
   test("does not remove nested sig fields", () => {

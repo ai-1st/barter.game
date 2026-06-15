@@ -2,15 +2,15 @@
 //
 // Format (per design doc, "Invite String Format" section):
 //
-//   barter://<inviter-pubkey>@<inviter-bank-url>?give=<promise-hash>:<amount>
-//          &get=<promise-hash>:<amount>&exp=<unix-seconds>&sig=<inviter-sig>
+//   barter://<inviter-pubkey>@<inviter-bank-url>?give=<voucher-hash>:<amount>
+//          &get=<voucher-hash>:<amount>&exp=<unix-seconds>&sig=<inviter-sig>
 //
 // - `inviter-pubkey` (base58): user proposing the trade. Verifier checks `sig`
 //   against this pubkey.
 // - `inviter-bank-url`: full bank RPC URL. Pinned to inviter-pubkey by the
 //   receiver's pubkey-pinning logic.
-// - `give`: what inviter offers — `<promise-hash>:<amount>`.
-// - `get`: what inviter wants — `<promise-hash>:<amount>`.
+// - `give`: what inviter offers — `<voucher-hash>:<amount>`.
+// - `get`: what inviter wants — `<voucher-hash>:<amount>`.
 // - `exp`: Unix seconds; receiver rejects if past.
 // - `sig`: ed25519 sig over canonical JSON of the invite minus `sig`, by
 //   inviter-pubkey.
@@ -22,9 +22,9 @@ import { signDoc, verifyDoc, type Base58PubKey, type Base58Signature } from "./c
 import type { RecordDoc, Tx, ULID } from "./schemas.ts";
 
 export type InviteLeg = {
-  promise: string; // base58 promise hash
+  voucher: string; // base58 voucher hash
   amount: number;
-  /** Hash of the inviter's Account doc for this promise — the account the
+  /** Hash of the inviter's Account doc for this voucher — the account the
    *  initiator points the ledger records at. The inviter creates the Account
    *  doc locally (accounts are implicit; no open_account call). */
   account: string;
@@ -51,8 +51,8 @@ function inviteDoc(inv: Invite | SignedInvite, withSig = false): Record<string, 
   const doc: Record<string, unknown> = {
     pubkey: inv.pubkey,
     bankUrl: inv.bankUrl,
-    give: { promise: inv.give.promise, amount: inv.give.amount, account: inv.give.account },
-    get: { promise: inv.get.promise, amount: inv.get.amount, account: inv.get.account },
+    give: { voucher: inv.give.voucher, amount: inv.give.amount, account: inv.give.account },
+    get: { voucher: inv.get.voucher, amount: inv.get.amount, account: inv.get.account },
     exp: inv.exp,
   };
   if (inv.accounts && inv.accounts.length > 0) {
@@ -81,8 +81,8 @@ export function verifyInvite(signed: SignedInvite): boolean {
 /** Build an invite URL string from a SignedInvite. */
 export function encodeInvite(signed: SignedInvite): string {
   const params = new URLSearchParams();
-  params.set("give", `${signed.give.promise}:${signed.give.amount}:${signed.give.account}`);
-  params.set("get", `${signed.get.promise}:${signed.get.amount}:${signed.get.account}`);
+  params.set("give", `${signed.give.voucher}:${signed.give.amount}:${signed.give.account}`);
+  params.set("get", `${signed.get.voucher}:${signed.get.amount}:${signed.get.account}`);
   if (signed.accounts && signed.accounts.length > 0) {
     params.set("accs", base64urlnopad.encode(new TextEncoder().encode(JSON.stringify(signed.accounts))));
   }
@@ -137,16 +137,16 @@ function parseLeg(raw: string | null, label: string): InviteLeg {
   if (!raw) throw new Error(`invite missing ${label}`);
   const parts = raw.split(":");
   if (parts.length !== 3) {
-    throw new Error(`invite ${label} must be <promise>:<amount>:<account>`);
+    throw new Error(`invite ${label} must be <voucher>:<amount>:<account>`);
   }
-  const [promise, amountStr, account] = parts;
+  const [voucher, amountStr, account] = parts;
   const amount = Number(amountStr);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error(`invite ${label}.amount must be positive`);
   }
-  if (!promise) throw new Error(`invite ${label}.promise empty`);
+  if (!voucher) throw new Error(`invite ${label}.voucher empty`);
   if (!account) throw new Error(`invite ${label}.account empty`);
-  return { promise, amount, account };
+  return { voucher, amount, account };
 }
 
 /** Check whether an invite has expired (relative to caller's clock). */

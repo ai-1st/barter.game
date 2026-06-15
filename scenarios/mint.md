@@ -1,21 +1,21 @@
-# Scenario: Minting a Promise
+# Scenario: Minting a Voucher
 
-Alice wants to issue a new Promise: "1 hour of consulting", backed by her bank Abank.
+Alice wants to issue a new Voucher: "1 hour of consulting", backed by her bank Abank.
 
 ## Setup
 
 - Alice: user keypair `A.pub` / `A.priv`.
 - Abank: bank keypair `Abank.pub` / `Abank.priv`.
-- Alice has not yet created any Pockets or Accounts for this Promise.
+- Alice has not yet created any Pockets or Accounts for this Voucher.
 
 ## Step 1 — Alice builds the docs
 
 Alice creates:
 
-1. **Promise** doc:
+1. **Voucher** doc:
    ```ts
    {
-     type: "promise",
+     type: "voucher",
      pubkey: A.pub,
      ulid: <new>,
      bank: Abank.pub,
@@ -29,11 +29,11 @@ Alice creates:
    ```
 3. **Account** docs. Accounts are NOT signed.
    ```ts
-   { type: "account", holder: A.pub, pocket: <issuance-pocket-hash>, promise: <promise-hash> }
-   { type: "account", holder: A.pub, pocket: <inventory-pocket-hash>, promise: <promise-hash> }
+   { type: "account", holder: A.pub, pocket: <issuance-pocket-hash>, voucher: <voucher-hash> }
+   { type: "account", holder: A.pub, pocket: <inventory-pocket-hash>, voucher: <voucher-hash> }
    ```
 
-Alice signs only the Promise doc. Account and Pocket docs are not signed.
+Alice signs only the Voucher doc. Account and Pocket docs are not signed.
 
 ## Step 2 — Alice calls `mint`
 
@@ -43,7 +43,7 @@ Alice signs only the Promise doc. Account and Pocket docs are not signed.
   "id": <ulid>,
   "method": "mint",
   "params": {
-    "promise": <promise-doc>,
+    "voucher": <voucher-doc>,
     "accounts": [<account-1>, <account-2>],
     "amount": 10
   },
@@ -59,14 +59,14 @@ Alice signs only the Promise doc. Account and Pocket docs are not signed.
 
 Abank checks:
 
-- `promise.pubkey == A.pub`.
-- `promise.bank == Abank.pub`.
-- Both Accounts reference `promise` and use distinct Pocket hashes.
-- Alice's signature on the Promise is valid.
+- `voucher.pubkey == A.pub`.
+- `voucher.bank == Abank.pub`.
+- Both Accounts reference `voucher` and use distinct Pocket hashes.
+- Alice's signature on the Voucher is valid.
 
 Abank stores:
 
-- Promise doc.
+- Voucher doc.
 - Two Account docs.
 - (Pocket bodies are never stored by the bank.)
 
@@ -75,11 +75,11 @@ Abank mints a debit/credit record pair for the requested `amount` and applies th
 - `<issuance-account>`: `-10` (the negative-balance issuance row).
 - `<inventory-account>`: `+10` (the positive-balance inventory row).
 
-The Promise now exists with a net-zero position across the two issuer accounts: `-10 + 10 = 0`. The issuer creates value by transferring from the negative-balance row to a holder.
+The Voucher now exists with a net-zero position across the two issuer accounts: `-10 + 10 = 0`. The issuer creates value by transferring from the negative-balance row to a holder.
 
 ## Step 4 — Abank issues settlement signatures
 
-Abank creates and signs record-level `settle` Signatures for each of the freshly created records. No separate `ack` attestation is needed; the Promise itself is the signed declaration.
+Abank creates and signs record-level `settle` Signatures for each of the freshly created records. No separate `ack` attestation is needed; the Voucher itself is the signed declaration.
 
 Abank returns these signatures and the record pair to Alice.
 
@@ -87,8 +87,8 @@ Abank returns these signatures and the record pair to Alice.
 
 Alice now has:
 
-- A published Promise at `<promise-hash>`.
-- Two Accounts at Abank for that Promise.
-- A settled debit/credit record pair showing the Promise's initial position.
+- A published Voucher at `<voucher-hash>`.
+- Two Accounts at Abank for that Voucher.
+- A settled debit/credit record pair showing the Voucher's initial position.
 
 She can now receive consulting-hour payments into the inventory account or transfer consulting hours out of the issuance account.

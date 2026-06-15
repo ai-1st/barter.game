@@ -1,6 +1,6 @@
 # Scenario: Invoice
 
-Alice runs a consulting business and publishes an invoice so anyone can pay her in Bpromise. Bob decides to pay the invoice.
+Alice runs a consulting business and publishes an invoice so anyone can pay her in Bvoucher. Bob decides to pay the invoice.
 
 An invoice is an **Order with `debit` omitted** — it authorizes an unconditional credit to the holder.
 
@@ -8,9 +8,9 @@ An invoice is an **Order with `debit` omitted** — it authorizes an uncondition
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
-- Bbank: bank keypair `Bbank.pub`, issues Bpromise.
-- Alice has a Bpromise Account at Bbank.
-- Bob has a Bpromise Account at Bbank.
+- Bbank: bank keypair `Bbank.pub`, issues Bvoucher.
+- Alice has a Bvoucher Account at Bbank.
+- Bob has a Bvoucher Account at Bbank.
 
 ## Step 1 — Alice creates and publishes the invoice
 
@@ -23,8 +23,8 @@ Alice builds an Order with `debit` omitted:
   ulid: <new>,
   rate: 1,                       // not strictly needed for a one-sided invoice, but present
   credit: {
-    account: <alice-bpromise-account>,
-    promise: <bpromise-hash>,
+    account: <alice-bvoucher-account>,
+    voucher: <bvoucher-hash>,
     min: 1,
     max: 1000
   },
@@ -39,7 +39,7 @@ Alice signs the Order and calls `submit_order` on Bbank with `publish_offer: tru
 { "method": "submit_order",
   "params": {
     "order": <invoice-order>,
-    "accounts": [<alice-bpromise-account>],
+    "accounts": [<alice-bvoucher-account>],
     "publish_offer": true
   },
   "pubkey": A.pub, "to": Bbank.pub }
@@ -49,7 +49,7 @@ Bbank stores the Order, verifies Alice's account, derives an Offer hiding Alice'
 
 ## Step 2 — Bob discovers the invoice and pays
 
-Bob obtains the invoice Offer hash out-of-band (QR code, link, etc.). He wants to pay `10` Bpromise.
+Bob obtains the invoice Offer hash out-of-band (QR code, link, etc.). He wants to pay `10` Bvoucher.
 
 Bob calls `create_records` on Bbank with an `offer_match` request:
 
@@ -60,13 +60,13 @@ Bob calls `create_records` on Bbank with an `offer_match` request:
       { "type": "offer_match",
         "offer_hash": <invoice-offer-hash>,
         "amount": 10,
-        "account_hash": <bob-bpromise-account> }
+        "account_hash": <bob-bvoucher-account> }
     ]
   },
   "pubkey": B.pub, "to": Bbank.pub }
 ```
 
-Bbank resolves the Offer to Alice's invoice Order, validates that Bob's account is a valid counterparty (payer) for `10` Bpromise, and creates:
+Bbank resolves the Offer to Alice's invoice Order, validates that Bob's account is a valid counterparty (payer) for `10` Bvoucher, and creates:
 
 - Debit record: Bob's account, amount `10`.
 - Credit record: Alice's account, amount `10`.
@@ -108,7 +108,7 @@ Bbank issues per-record `ready` Signatures. Because Bbank is the only bank in th
 
 ## Result
 
-- Bob's Bpromise balance decreases by `10`.
-- Alice's Bpromise balance increases by `10`.
+- Bob's Bvoucher balance decreases by `10`.
+- Alice's Bvoucher balance increases by `10`.
 - Alice never had to sign; the invoice Offer authorized the credit.
 - Bbank has issued verifiable `settle` Signatures on both records.

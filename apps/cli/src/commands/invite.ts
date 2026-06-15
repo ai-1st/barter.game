@@ -1,9 +1,9 @@
-// `barter invite --give <promise>:N --get <promise>:N` — offer a swap.
+// `barter invite --give <voucher>:N --get <voucher>:N` — offer a swap.
 //
 // The inviter (say Bob) names what he gives and what he wants, and bundles
 // the two Account docs the deal will touch on his side: his funded account
-// for the give promise (resolved from his bank, or --give-account) and a
-// freshly authored local account for the get promise. The signed barter://
+// for the give voucher (resolved from his bank, or --give-account) and a
+// freshly authored local account for the get voucher. The signed barter://
 // string travels to the counterparty over any channel; she runs
 // `barter trade --invite "<string>"`.
 
@@ -17,7 +17,7 @@ import { call } from "../client.ts";
 import { createLocalAccount, listLocalDocs, loadLocalDoc } from "../docstore.ts";
 import { loadProfile, profilePrivateKeyBytes } from "../profile.ts";
 
-type Leg = { promise: string; amount: number };
+type Leg = { voucher: string; amount: number };
 type InviteArgs = {
   give?: Leg;
   get?: Leg;
@@ -27,12 +27,12 @@ type InviteArgs = {
 };
 
 function parseLeg(raw: string | undefined, label: string): Leg {
-  if (!raw) throw new Error(`--${label} <promise-hash>:<amount> required`);
+  if (!raw) throw new Error(`--${label} <voucher-hash>:<amount> required`);
   const colon = raw.lastIndexOf(":");
-  if (colon < 0) throw new Error(`--${label} must be <promise-hash>:<amount>`);
+  if (colon < 0) throw new Error(`--${label} must be <voucher-hash>:<amount>`);
   const amount = Number(raw.slice(colon + 1));
   if (!Number.isFinite(amount) || amount <= 0) throw new Error(`--${label} amount must be positive`);
-  return { promise: raw.slice(0, colon), amount };
+  return { voucher: raw.slice(0, colon), amount };
 }
 
 function parseArgs(argv: string[]): InviteArgs {
@@ -52,32 +52,32 @@ function parseArgs(argv: string[]): InviteArgs {
 export async function runInvite(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
   if (!args.give || !args.get) {
-    process.stderr.write(`barter invite: --give <promise>:<amount> and --get <promise>:<amount> required\n`);
+    process.stderr.write(`barter invite: --give <voucher>:<amount> and --get <voucher>:<amount> required\n`);
     return 1;
   }
   const profile = loadProfile();
   const bankUrl = args.bank ?? profile.defaultBankUrl;
 
-  // Resolve my funded account for the give promise at my bank.
+  // Resolve my funded account for the give voucher at my bank.
   let giveAccount = args.giveAccount;
   if (!giveAccount) {
     const res = (await call(profile, "list_accounts", {}, { bankUrl })) as {
-      accounts: Array<{ account_hash: string; promise_hash: string; balance: string }>;
+      accounts: Array<{ account_hash: string; voucher_hash: string; balance: string }>;
     };
     const funded = res.accounts.find(
-      (a) => a.promise_hash === args.give!.promise && Number(a.balance) > 0,
+      (a) => a.voucher_hash === args.give!.voucher && Number(a.balance) > 0,
     );
     if (!funded) {
       process.stderr.write(
-        `barter invite: no funded account for ${args.give.promise} at ${bankUrl} — pass --give-account\n`,
+        `barter invite: no funded account for ${args.give.voucher} at ${bankUrl} — pass --give-account\n`,
       );
       return 1;
     }
     giveAccount = funded.account_hash;
   }
 
-  // Author my receiving account for the get promise (offline, implicit).
-  const receiving = createLocalAccount(profile, args.get.promise, "main");
+  // Author my receiving account for the get voucher (offline, implicit).
+  const receiving = createLocalAccount(profile, args.get.voucher, "main");
 
   // Bundle the account doc bodies so the initiator can present them to the
   // banks (accounts come into existence when shown).

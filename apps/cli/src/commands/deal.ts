@@ -11,11 +11,11 @@
 //   "leadBanks": ["<bankPubkey>", ...],          // banks that settle first
 //   "banks": { "<bankPubkey>": "<rpc-url>", ... },
 //   "transfers": [
-//     { "promise": "<hash>", "issuerBank": "<bankPubkey>", "amount": 1,
+//     { "voucher": "<hash>", "issuerBank": "<bankPubkey>", "amount": 1,
 //       "from": { "holder": "<pubkey>", "account": "<hash>" },
 //       "to":   { "holder": "<pubkey>", "account": "<hash>" } }
 //   ],
-//   "docs": { "<bankPubkey>": [ <Promise/Account doc bodies> ] }   // optional
+//   "docs": { "<bankPubkey>": [ <Voucher/Account doc bodies> ] }   // optional
 // }
 //
 // Account docs referenced by the transfers and present in the local doc

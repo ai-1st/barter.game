@@ -1,23 +1,23 @@
 # Scenario: Matchmaker Bilateral Arbitrage
 
-Alice wants to sell Apromise for Bpromise. Bob wants to sell Bpromise for Apromise. A matchmaker discovers both Offers, matches them, and pockets a spread.
+Alice wants to sell Avoucher for Bvoucher. Bob wants to sell Bvoucher for Avoucher. A matchmaker discovers both Offers, matches them, and pockets a spread.
 
 ## Parties and terms
 
-- Alice: user keypair `A.pub`. Offer at Abank: sell up to `100` Apromise, receive `90` Bpromise (`lead: true`).
-- Bob: user keypair `B.pub`. Offer at Bbank: sell up to `100` Bpromise, receive `90` Apromise (`lead: true`).
-- Matchmaker: user keypair `M.pub`. Has Accounts at both Abank and Bbank for both promises.
-- Abank issues Apromise; Bbank issues Bpromise.
+- Alice: user keypair `A.pub`. Offer at Abank: sell up to `100` Avoucher, receive `90` Bvoucher (`lead: true`).
+- Bob: user keypair `B.pub`. Offer at Bbank: sell up to `100` Bvoucher, receive `90` Avoucher (`lead: true`).
+- Matchmaker: user keypair `M.pub`. Has Accounts at both Abank and Bbank for both vouchers.
+- Abank issues Avoucher; Bbank issues Bvoucher.
 
 The matchmaker will arrange:
 
-- Alice gives `100` Apromise and receives `90` Bpromise.
-- Bob gives `100` Bpromise and receives `90` Apromise.
-- Matchmaker receives `10` Apromise and `10` Bpromise as spread.
+- Alice gives `100` Avoucher and receives `90` Bvoucher.
+- Bob gives `100` Bvoucher and receives `90` Avoucher.
+- Matchmaker receives `10` Avoucher and `10` Bvoucher as spread.
 
 ## Phase 0 — Matchmaker discovers Offers
 
-The matchmaker subscribes to Offer streams from Abank and Bbank by sending a `Subscription` doc whose `hashes` include the relevant watch keys (e.g., the promise hashes):
+The matchmaker subscribes to Offer streams from Abank and Bbank by sending a `Subscription` doc whose `hashes` include the relevant watch keys (e.g., the voucher hashes):
 
 ```json
 { "method": "subscribe",
@@ -26,7 +26,7 @@ The matchmaker subscribes to Offer streams from Abank and Bbank by sending a `Su
       type: "subscription",
       pubkey: M.pub,
       ulid: <new>,
-      hashes: [<apromise-hash>],
+      hashes: [<avoucher-hash>],
       url: <matchmaker-url>
     }
   },
@@ -38,7 +38,7 @@ The matchmaker subscribes to Offer streams from Abank and Bbank by sending a `Su
       type: "subscription",
       pubkey: M.pub,
       ulid: <new>,
-      hashes: [<bpromise-hash>],
+      hashes: [<bvoucher-hash>],
       url: <matchmaker-url>
     }
   },
@@ -51,25 +51,25 @@ Banks push Alice's and Bob's Offer signatures (and any later Offer-derived signa
 
 The matchmaker cannot see Alice's or Bob's account hashes, but they know the Offer hashes and their own accounts. They call `create_records` with `offer_match` requests.
 
-### At Abank (Apromise)
+### At Abank (Avoucher)
 
 ```json
 { "method": "create_records",
   "params": {
     "requests": [
       { "type": "offer_match",
-        "offer_hash": <alice-apromise-offer-hash>,
+        "offer_hash": <alice-avoucher-offer-hash>,
         "amount": 90,
-        "account_hash": <bob-apromise-account> },
+        "account_hash": <bob-avoucher-account> },
       { "type": "offer_match",
-        "offer_hash": <alice-apromise-offer-hash>,
+        "offer_hash": <alice-avoucher-offer-hash>,
         "amount": 10,
-        "account_hash": <matchmaker-apromise-account> }
+        "account_hash": <matchmaker-avoucher-account> }
     ],
     "record_subscriptions": [
-      { "record": <alice-apromise-debit-90-hash>, "url": <bbank-notify-url> },
-      { "record": <bob-apromise-credit-90-hash>, "url": <bbank-notify-url> },
-      { "record": <matchmaker-apromise-credit-10-hash>, "url": <bbank-notify-url> }
+      { "record": <alice-avoucher-debit-90-hash>, "url": <bbank-notify-url> },
+      { "record": <bob-avoucher-credit-90-hash>, "url": <bbank-notify-url> },
+      { "record": <matchmaker-avoucher-credit-10-hash>, "url": <bbank-notify-url> }
     ]
   },
   "pubkey": M.pub, "to": Abank.pub }
@@ -77,30 +77,30 @@ The matchmaker cannot see Alice's or Bob's account hashes, but they know the Off
 
 Abank resolves Alice's Offer, validates the amounts and accounts, and mints:
 
-- Record pair 1: debit Alice `90` Apromise, credit Bob `90` Apromise.
-- Record pair 2: debit Alice `10` Apromise, credit Matchmaker `10` Apromise.
+- Record pair 1: debit Alice `90` Avoucher, credit Bob `90` Avoucher.
+- Record pair 2: debit Alice `10` Avoucher, credit Matchmaker `10` Avoucher.
 
 Abank returns all four record bodies.
 
-### At Bbank (Bpromise)
+### At Bbank (Bvoucher)
 
 ```json
 { "method": "create_records",
   "params": {
     "requests": [
       { "type": "offer_match",
-        "offer_hash": <bob-bpromise-offer-hash>,
+        "offer_hash": <bob-bvoucher-offer-hash>,
         "amount": 90,
-        "account_hash": <alice-bpromise-account> },
+        "account_hash": <alice-bvoucher-account> },
       { "type": "offer_match",
-        "offer_hash": <bob-bpromise-offer-hash>,
+        "offer_hash": <bob-bvoucher-offer-hash>,
         "amount": 10,
-        "account_hash": <matchmaker-bpromise-account> }
+        "account_hash": <matchmaker-bvoucher-account> }
     ],
     "record_subscriptions": [
-      { "record": <bob-bpromise-debit-90-hash>, "url": <abank-notify-url> },
-      { "record": <alice-bpromise-credit-90-hash>, "url": <abank-notify-url> },
-      { "record": <matchmaker-bpromise-credit-10-hash>, "url": <abank-notify-url> }
+      { "record": <bob-bvoucher-debit-90-hash>, "url": <abank-notify-url> },
+      { "record": <alice-bvoucher-credit-90-hash>, "url": <abank-notify-url> },
+      { "record": <matchmaker-bvoucher-credit-10-hash>, "url": <abank-notify-url> }
     ]
   },
   "pubkey": M.pub, "to": Bbank.pub }
@@ -108,8 +108,8 @@ Abank returns all four record bodies.
 
 Bbank mints:
 
-- Record pair 1: debit Bob `90` Bpromise, credit Alice `90` Bpromise.
-- Record pair 2: debit Bob `10` Bpromise, credit Matchmaker `10` Bpromise.
+- Record pair 1: debit Bob `90` Bvoucher, credit Alice `90` Bvoucher.
+- Record pair 2: debit Bob `10` Bvoucher, credit Matchmaker `10` Bvoucher.
 
 ## Phase 2 — Matchmaker builds Txs
 
@@ -121,8 +121,8 @@ All three parties build their own Txs containing only the record hashes that tou
   type: "tx",
   pubkey: A.pub,
   ulid: <new>,
-  records: [<alice-apromise-debit-90-hash>, <alice-bpromise-credit-90-hash>],
-  offer: <alice-apromise-offer-hash>
+  records: [<alice-avoucher-debit-90-hash>, <alice-bvoucher-credit-90-hash>],
+  offer: <alice-avoucher-offer-hash>
 }
 ```
 
@@ -132,8 +132,8 @@ All three parties build their own Txs containing only the record hashes that tou
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  records: [<bob-bpromise-debit-90-hash>, <bob-apromise-credit-90-hash>],
-  offer: <bob-bpromise-offer-hash>
+  records: [<bob-bvoucher-debit-90-hash>, <bob-avoucher-credit-90-hash>],
+  offer: <bob-bvoucher-offer-hash>
 }
 ```
 
@@ -143,8 +143,8 @@ All three parties build their own Txs containing only the record hashes that tou
   type: "tx",
   pubkey: M.pub,
   ulid: <new>,
-  records: [<matchmaker-apromise-credit-10-hash>, <matchmaker-bpromise-credit-10-hash>],
-  offer: <alice-apromise-offer-hash>   // or any offer authorizing the matchmaker's credit
+  records: [<matchmaker-avoucher-credit-10-hash>, <matchmaker-bvoucher-credit-10-hash>],
+  offer: <alice-avoucher-offer-hash>   // or any offer authorizing the matchmaker's credit
 }
 ```
 
@@ -178,7 +178,7 @@ The matchmaker submits all three Txs to both banks. Each bank only processes the
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank now has authorization for every Apromise record:
+Abank now has authorization for every Avoucher record:
 
 - Alice's records are authorized by Alice's `lead` Offer.
 - Bob's records are authorized by Bob's `lead` Offer (which is on Bbank, but Abank sees the Offer referenced in Bob's Tx and trusts the bank signature on it).
@@ -192,31 +192,31 @@ The matchmaker repeats the same three `submit_tx` calls at Bbank.
 
 Abank sees that all its records are `ready` and at least one touching Tx is `lead` (Alice's Offer is `lead`, and the matchmaker signed as `lead`). Abank's advance engine acquires holds on Alice's debit account and issues record-level `hold` Signatures.
 
-Bbank is follower (none of the touching Txs are `lead` from Bbank's perspective; Bob's Offer is `lead` for Bpromise but it's an Offer, and the matchmaker's Tx might be follow). Bbank waits until it sees Abank's `hold` Signatures via subscription fan-out (or client relay with `get_record_signatures` → `notify_signatures`), then acquires holds on Bob's debit account and issues its own record-level `hold` Signatures.
+Bbank is follower (none of the touching Txs are `lead` from Bbank's perspective; Bob's Offer is `lead` for Bvoucher but it's an Offer, and the matchmaker's Tx might be follow). Bbank waits until it sees Abank's `hold` Signatures via subscription fan-out (or client relay with `get_record_signatures` → `notify_signatures`), then acquires holds on Bob's debit account and issues its own record-level `hold` Signatures.
 
 ## Phase 5 — Settle
 
 Abank is lead and has no predecessor dependency. Once Abank has observed record-level `hold` Signatures from Bbank on the corresponding records, its advance engine applies balances:
 
-- Alice: `-100` Apromise.
-- Bob: `+90` Apromise.
-- Matchmaker: `+10` Apromise.
+- Alice: `-100` Avoucher.
+- Bob: `+90` Avoucher.
+- Matchmaker: `+10` Avoucher.
 
 Abank issues `settle` Signatures.
 
 Bbank is follower. Once it has verified Abank's record-level `settle` Signatures via fan-out or client relay, its advance engine applies balances:
 
-- Bob: `-100` Bpromise.
-- Alice: `+90` Bpromise.
-- Matchmaker: `+10` Bpromise.
+- Bob: `-100` Bvoucher.
+- Alice: `+90` Bvoucher.
+- Matchmaker: `+10` Bvoucher.
 
 Bbank issues `settle` Signatures citing Abank's settle in `Signature.seen`.
 
 ## Result
 
-- Alice gave `100` Apromise, got `90` Bpromise.
-- Bob gave `100` Bpromise, got `90` Apromise.
-- Matchmaker pocketed `10` Apromise and `10` Bpromise.
+- Alice gave `100` Avoucher, got `90` Bvoucher.
+- Bob gave `100` Bvoucher, got `90` Avoucher.
+- Matchmaker pocketed `10` Avoucher and `10` Bvoucher.
 - Neither Alice nor Bob signed anything; their `lead` Offers authorized execution.
 - Abank settled first; Bbank settled after verifying Abank's settle signature.
-- Every bank's Apromise and Bpromise balances still sum to zero (or the agreed limit).
+- Every bank's Avoucher and Bvoucher balances still sum to zero (or the agreed limit).

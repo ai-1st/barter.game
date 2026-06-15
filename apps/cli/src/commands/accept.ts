@@ -62,8 +62,8 @@ export async function runAccept(argv: string[]): Promise<number> {
   }
 
   // Attach my Account doc bodies for any of my accounts the records touch.
-  // Each account must be presented ONLY to the bank that issued its promise;
-  // a bank's intakeDocs rejects accounts referencing foreign promises.
+  // Each account must be presented ONLY to the bank that issued its voucher;
+  // a bank's intakeDocs rejects accounts referencing foreign vouchers.
   const myAccounts = new Set(
     token.records.map((r) => r.account).filter((a): a is string => typeof a === "string"),
   );

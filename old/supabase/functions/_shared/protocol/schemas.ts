@@ -28,7 +28,7 @@ export type BaseDoc = {
 };
 
 export type DocType =
-  | "promise"
+  | "voucher"
   | "pocket"
   | "account"
   | "tx"
@@ -38,9 +38,9 @@ export type DocType =
   | "order"
   | "subscription";
 
-/** Promise: minted by Promise owner. Bound to an issuing bank pubkey. */
-export type Promise = BaseDoc & {
-  type: "promise";
+/** Voucher: minted by Voucher owner. Bound to an issuing bank pubkey. */
+export type Voucher = BaseDoc & {
+  type: "voucher";
   bank: Base58PubKey;
   name: string;
   due?: DateString;
@@ -54,11 +54,11 @@ export type Pocket = BaseDoc & {
   name: string;
 };
 
-/** Account: issuer-bank-owned record of a holder's balance for a Promise. */
+/** Account: issuer-bank-owned record of a holder's balance for a Voucher. */
 export type Account = BaseDoc & {
   type: "account";
   pocket: Base58SHA256;
-  promise: Base58SHA256;
+  voucher: Base58SHA256;
 };
 
 /** Record: one half of a paired credit/debit accounting entry.
@@ -89,7 +89,7 @@ export type Tx = BaseDoc & {
 /** Signature: attestation doc. `sig` populated after signing.
  *  Exactly one target field accompanies an action:
  *  - `hash`   — content-addressed docs: a holder's lead/follow over a Tx
- *               hash, or a bank's approve over a Promise hash (mint).
+ *               hash, or a bank's approve over a Voucher hash (mint).
  *  - `record` — a bank's per-ledger-record approve/reject.
  *  - `deal`   — leg-level hold/settle/reject, keyed by the deal ULID.
  *  `seen` carries hashes of upstream settle Signature docs (the cross-bank
@@ -144,7 +144,7 @@ export type Subscription = BaseDoc & {
 };
 
 export type AnyDoc =
-  | Promise
+  | Voucher
   | Pocket
   | Account
   | LedgerRecord
@@ -156,7 +156,7 @@ export type AnyDoc =
 // ------- Hash helpers -------
 // LedgerRecords are bank-minted by ULID and are NOT content-addressed.
 
-export const hashPromise = (p: Promise): Base58SHA256 => hashDoc(p);
+export const hashVoucher = (p: Voucher): Base58SHA256 => hashDoc(p);
 export const hashPocket = (p: Pocket): Base58SHA256 => hashDoc(p);
 export const hashAccount = (a: Account): Base58SHA256 => hashDoc(a);
 export const hashTx = (t: Tx): Base58SHA256 => hashDoc(t);
@@ -190,23 +190,23 @@ function assertBaseDoc(d: unknown, expectedType: DocType): asserts d is BaseDoc 
   }
 }
 
-export function validatePromise(d: unknown): asserts d is Promise {
-  assertBaseDoc(d, "promise");
+export function validateVoucher(d: unknown): asserts d is Voucher {
+  assertBaseDoc(d, "voucher");
   const p = d as Record<string, unknown>;
   if (typeof p.bank !== "string" || !BASE58_RE.test(p.bank)) {
-    throw new TypeError("promise.bank must be a base58 pubkey");
+    throw new TypeError("voucher.bank must be a base58 pubkey");
   }
   if (typeof p.name !== "string" || p.name.length === 0) {
-    throw new TypeError("promise.name must be a non-empty string");
+    throw new TypeError("voucher.name must be a non-empty string");
   }
   if (p.due !== undefined && (typeof p.due !== "string" || !DATE_RE.test(p.due))) {
-    throw new TypeError("promise.due must be a YYYY-MM-DD date if present");
+    throw new TypeError("voucher.due must be a YYYY-MM-DD date if present");
   }
   if (p.limit !== undefined && (typeof p.limit !== "number" || p.limit <= 0)) {
-    throw new TypeError("promise.limit must be a positive number if present");
+    throw new TypeError("voucher.limit must be a positive number if present");
   }
   if (p.integer !== undefined && typeof p.integer !== "boolean") {
-    throw new TypeError("promise.integer must be a boolean if present");
+    throw new TypeError("voucher.integer must be a boolean if present");
   }
 }
 
@@ -224,8 +224,8 @@ export function validateAccount(d: unknown): asserts d is Account {
   if (typeof a.pocket !== "string" || !BASE58_RE.test(a.pocket)) {
     throw new TypeError("account.pocket must be a base58 hash");
   }
-  if (typeof a.promise !== "string" || !BASE58_RE.test(a.promise)) {
-    throw new TypeError("account.promise must be a base58 hash");
+  if (typeof a.voucher !== "string" || !BASE58_RE.test(a.voucher)) {
+    throw new TypeError("account.voucher must be a base58 hash");
   }
 }
 
@@ -406,7 +406,7 @@ export function validateDoc(d: unknown): asserts d is AnyDoc {
   }
   const t = (d as Record<string, unknown>).type;
   switch (t) {
-    case "promise": return validatePromise(d);
+    case "voucher": return validateVoucher(d);
     case "pocket": return validatePocket(d);
     case "account": return validateAccount(d);
     case "credit":

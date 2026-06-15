@@ -3,17 +3,17 @@
 // Run: deno test --allow-read supabase/functions/_shared/bank/test-deno/subscription.deno-test.ts
 
 import { hashDoc, newUlid, verifyDoc } from "../../protocol/crypto.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { subscribe } from "../handlers/subscribe.ts";
 import { assert, ctx, eq, installFetchRouter, key, Store, type Key } from "./_harness.ts";
 
-function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
   return {
     type: "account",
     pubkey: holder.pub,
     ulid: newUlid(),
     pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
-    promise: promiseHash,
+    voucher: voucherHash,
   };
 }
 
@@ -25,18 +25,18 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
   const restoreFetch = installFetchRouter(store, new Map(), pushLog);
 
   try {
-    // Alice knows her promise hash before minting (content-addressed), so she
+    // Alice knows her voucher hash before minting (content-addressed), so she
     // can subscribe to it up front.
-    const promise: Record<string, unknown> = {
-      type: "promise", pubkey: alice.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
+    const voucher: Record<string, unknown> = {
+      type: "voucher", pubkey: alice.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
     };
-    const promiseHash = hashDoc(promise);
+    const voucherHash = hashDoc(voucher);
     const aliceUrl = "https://alice-client.test/notify";
     await subscribe(
       {
         subscription: {
           type: "subscription", pubkey: alice.pub, ulid: newUlid(),
-          hashes: [promiseHash], url: aliceUrl,
+          hashes: [voucherHash], url: aliceUrl,
         },
       },
       ctx(store, bank, alice.pub),
@@ -48,24 +48,24 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
       {
         subscription: {
           type: "subscription", pubkey: alice.pub, ulid: newUlid(),
-          hashes: [promiseHash], url: deadUrl, until: "2020-01-01",
+          hashes: [voucherHash], url: deadUrl, until: "2020-01-01",
         },
       },
       ctx(store, bank, alice.pub),
     );
 
-    // Mint — the bank creates signatures; the promise attestation targets
+    // Mint — the bank creates signatures; the voucher attestation targets
     // the watched hash.
-    const res = await mintPromise(
+    const res = await mintVoucher(
       {
-        promise,
-        debit_account: accountDoc(alice, promiseHash, "issue"),
-        credit_account: accountDoc(alice, promiseHash, "holding"),
+        voucher,
+        debit_account: accountDoc(alice, voucherHash, "issue"),
+        credit_account: accountDoc(alice, voucherHash, "holding"),
         amount: 1,
       },
       ctx(store, bank, alice.pub),
-    ) as { promise_hash: string };
-    eq(res.promise_hash, promiseHash, "mint succeeded despite failing pushes");
+    ) as { voucher_hash: string };
+    eq(res.voucher_hash, voucherHash, "mint succeeded despite failing pushes");
 
     const toAlice = pushLog.filter((p) => p.url === aliceUrl);
     eq(toAlice.length, 1, "one push to the live subscription");
@@ -80,8 +80,8 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
     assert(verifyDoc(env, env.sig as string, bank.pub), "envelope must verify against the bank key");
     const sigs = (env.params as { signatures: Array<Record<string, unknown>> }).signatures;
     assert(
-      sigs.some((s) => s.hash === promiseHash && s.action === "approve"),
-      "pushed batch contains the promise attestation",
+      sigs.some((s) => s.hash === voucherHash && s.action === "approve"),
+      "pushed batch contains the voucher attestation",
     );
   } finally {
     restoreFetch();

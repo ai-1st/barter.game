@@ -5,26 +5,26 @@
 > If you are building your own bank or client, read this overview first, then see:
 >
 > - [`base.md`](./base.md) — identity, canonical JSON, `BaseDoc`, `Signature`, `Address`, the JSON-RPC envelope, replay protection, and request signing.
-> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Promise`, `Account`, `Record`, `Tx`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
+> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Tx`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
 > - [`bank-rpc.md`](./bank-rpc.md) — the bank JSON-RPC API and REST address-directory endpoints.
 >
 > `MASTER-INPUT.md` is the source-of-truth design narrative from the product owner; `scenarios/*.md` are step-by-step interaction traces. `IMPLEMENTATION.md` explains how the reference team built it.
 
-A federated mutual-credit ledger. A deal is a chain of paired credit/debit transfers — one or more holders moving promises among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
+A federated mutual-credit ledger enabling mupli-party barter deals. A deal is a chain of paired credit/debit transfers — one or more holders moving tokens ("vouchers") among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
-The simplest deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, each holder authorizes their own view of it by signing **their own Tx**, and one or more **lead** banks settle first while everyone else follows.
+The simplest non-trivial deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, each holder authorizes their own view of it by signing **their own Tx**, and one or more **lead** banks settle first while everyone else follows.
 
-### Core concepts: Promise, issuer, holder, bank
+### Core concepts: Voucher, Issuer, Holder, Bank
 
-A **Promise** is a signed, content-addressed document in which one party (the **issuer**) commits to deliver a specific good or service — "1 logo," "1 hour of consulting," "a hand-drawn portrait." The Promise is bound to a single **bank** (an ed25519 keypair operating a ledger) that tracks every unit of that Promise issued, held, and transferred.
+A **Voucher** is a signed, content-addressed document in which one party (the **Issuer**) commits to deliver a specific good or service — "1 logo," "1 hour of consulting," "a hand-drawn portrait." The Voucher is bound to a single **Bank** (an ed25519 keypair operating a ledger) that tracks every unit of that Voucher issued, held, and transferred.
 
-- **Issuer**: the owner of the Promise doc (`pubkey` field). The issuer decides what the Promise means, how many exist (`limit`), and when it matures (`due`). The issuer is personally accountable for redemption.
-- **Holder**: any user with a positive balance in an Account for that Promise. Holders trade Promises among themselves; they are not accountable for the issuer's delivery, only for their own ledger position.
-- **Bank**: the ledger operator whose pubkey appears in `Promise.bank`. The bank is the sole source of truth for balances of that Promise. It stores the docs presented to it, verifies signatures, and applies transfers. **The only artifacts a bank creates are ledger records and signatures.** It does not guarantee the issuer's performance — that trust is social, out-of-band.
+- **Issuer**: the owner of the Voucher. The issuer decides what the Voucher means and how many may exist. The issuer is personally accountable for redemption.
+- **Holder**: any user with a positive balance in an Account for that Voucher. Holders trade Vouchers among themselves; they are not accountable for the issuer's delivery, only for their own ledger position.
+- **Bank**: the ledger operator whose pubkey appears in `Voucher.bank`. The bank is the sole source of truth for balances of that Voucher. It stores the docs presented to it, verifies signatures, and applies transfers. **The only artifacts a bank creates are ledger records and signatures.** It does not guarantee the issuer's performance — that trust is social, out-of-band.
 
-A **transfer** moves a Promise from one holder to another. The debit holder's balance decreases; the credit holder's balance increases. The sum across all Accounts for a given Promise is always zero.
+A **transfer** moves a Voucher from one holder to another. The debit holder's balance decreases; the credit holder's balance increases. The sum across all Accounts for a given Voucher is always zero.
 
-**Minting is a transfer too.** Issuing a Promise creates the first debit/credit record pair between two of the issuer's own accounts: the *issue* account goes negative, the *holding* account goes positive. There is no special mint balance logic — the same mechanism that moves value in trades creates it at mint.
+**Minting is a transfer too.** Issuing a Voucher creates the first debit/credit record pair between two of the issuer's own accounts: the *issue* account goes negative, the *holding* account goes positive. There is no special mint balance logic — the same mechanism that moves value in trades creates it at mint.
 
 ---
 
@@ -32,22 +32,22 @@ A **transfer** moves a Promise from one holder to another. The debit holder's ba
 
 barter.game v1 is built on three behavioral assumptions. They are not enforced by cryptography; they are the social substrate that makes the protocol's risk posture coherent.
 
-1. **Users already know the issuers of the Promises they hold.**
+1. **Users already know the issuers of the Vouchers they hold.**
    Discovery is out of band — DM, in-person, group chat. The protocol does not search for trading partners, rate issuers, or verify delivery.
 
 2. **Trust is socially enforced.**
    If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate. Recourse is human, not algorithmic.
 
 3. **Bank operators are accountable to their issuers.**
-   Anyone can run a bank, but the issuers who route their Promises through it have a real relationship with the operator. An operator can erase its ledger or abort transactions — there is no cryptographic prevention — but it cannot forge a plausible alternative history alone, because every deal requires interlinked signatures from multiple independent parties.
+   Anyone can run a bank, but the issuers who route their Vouchers through it have a real relationship with the operator. An operator can erase its ledger or abort transactions — there is no cryptographic prevention — but it cannot forge a plausible alternative history alone, because every deal requires interlinked signatures from multiple independent parties.
 
 ### 1.1 v0 openness
 
 Banks are open by default. The v1 reference posture:
 
-- Banks allow minting **any** promise that references them.
-- Banks accept new ledger records for new accounts and new promises; they only check that the promise references the bank.
-- Banks accept and store any docs/signatures linked to promises that reference this bank, **from anyone** — the sender of a request need not be the doc's owner (counterparties legitimately carry each other's Account docs and relay each other's signatures).
+- Banks allow minting **any** voucher that references them.
+- Banks accept new ledger records for new accounts and new vouchers; they only check that the voucher references the bank.
+- Banks accept and store any docs/signatures linked to vouchers that reference this bank, **from anyone** — the sender of a request need not be the doc's owner (counterparties legitimately carry each other's Account docs and relay each other's signatures).
 - All calls to bank APIs are signed by the sender's key. Moderation is **key-blocking**, not gatekeeping: banks MAY refuse service to spammers and abusers based on their pubkey.
 
 > **Extensibility:** Implementers MAY add additional trust, reputation, KYC, or audit mechanisms on top of the protocol. Such extensions MUST be backward-compatible: they must not prevent a client and bank from interacting using only the base v1 wire format.
@@ -105,20 +105,20 @@ The lead set is whichever holders must move before anyone downstream can be made
 
   C is made whole only once **both** A and B give, so the lead set is `{A's bank, B's bank}`. After they settle, C's bank settles `C → D`, then D's bank settles `D → A` and `D → B`, closing both cycles.
 
-If any downstream bank refuses to apply (compromise, malice, downtime), every record that already settled stays settled: their promises moved, the rest of the chain didn't. The protocol accepts this risk because the trust model says the lead party knows the operators personally. Leads choose to carry it; followers wait for upstream proof before moving.
+If any downstream bank refuses to apply (comvoucher, malice, downtime), every record that already settled stays settled: their vouchers moved, the rest of the chain didn't. The protocol accepts this risk because the trust model says the lead party knows the operators personally. Leads choose to carry it; followers wait for upstream proof before moving.
 
 > **Invariant:** There is no protocol-level rollback mechanism and no protocol-level timeout. An implementation MAY add a sweeper that releases stuck holds for hygiene, but that is an implementation convenience, not a correctness mechanism.
 
 ### 2.3 Visibility — every bank sees only its own records
 
-**No bank ever sees the whole deal.** A bank sees only the transfers of the promises *it issues* — "this much of my promise leaves holder X; this much arrives at holder Y" — and nothing about the other records.
+**No bank ever sees the whole deal.** A bank sees only the transfers of the vouchers *it issues* — "this much of my voucher leaves holder X; this much arrives at holder Y" — and nothing about the other records.
 
-This falls straight out of the issuer-authority rule: a transfer of promise `P` lives entirely at `P`'s issuer bank (debit and credit are both `P`-accounts there), and every record carries `pubkey =` `P`'s issuer bank. A bank only ever locks, applies, and signs records whose `pubkey` is its own.
+This falls straight out of the issuer-authority rule: a transfer of voucher `P` lives entirely at `P`'s issuer bank (debit and credit are both `P`-accounts there), and every record carries `pubkey =` `P`'s issuer bank. A bank only ever locks, applies, and signs records whose `pubkey` is its own.
 
 The **initiating client** is the one party that legitimately knows the whole deal — it designed it — so it builds the graph and hands each bank only that bank's slice:
 
-- **Bodies it gets:** only the credit/debit records whose promise this bank issues.
-- **Hashes it gets:** the record hashes in each holder Tx presented to it. These are opaque identifiers. A bank needs them to verify that its own records are included in each Tx; it cannot infer another record's amount, account, holder, or promise from a record hash alone.
+- **Bodies it gets:** only the credit/debit records whose voucher this bank issues.
+- **Hashes it gets:** the record hashes in each holder Tx presented to it. These are opaque identifiers. A bank needs them to verify that its own records are included in each Tx; it cannot infer another record's amount, account, holder, or voucher from a record hash alone.
 - **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their record-level `settle` signatures, see `base.md`). It learns *that* a peer bank participates, not *what* that peer transfers.
 
 > **Invariant:** This visibility boundary is load-bearing. Any implementation that lets a bank see another bank's record bodies violates the protocol.
@@ -144,20 +144,20 @@ The inviter's offer:
 
 ```
 barter://<inviter-pubkey>@<inviter-bank-url>
-  ?give=<promise-hash>:<amount>:<account-hash>
-  &get=<promise-hash>:<amount>:<account-hash>
+  ?give=<voucher-hash>:<amount>:<account-hash>
+  &get=<voucher-hash>:<amount>:<account-hash>
   [&accs=<base64url(JSON Account bodies)>]
   &exp=<unix-seconds>&sig=<inviter-sig>
 ```
 
-- `give`: what the inviter offers — promise, amount, and the inviter's **funded account** it will be debited from.
-- `get`: what the inviter wants — promise, amount, and the inviter's **receiving account** (authored locally; accounts are implicit).
+- `give`: what the inviter offers — voucher, amount, and the inviter's **funded account** it will be debited from.
+- `get`: what the inviter wants — voucher, amount, and the inviter's **receiving account** (authored locally; accounts are implicit).
 - `accs`: the bodies of the inviter's Account docs referenced by the records, so the initiator can present them to the banks.
 - `sig`: ed25519 over canonical JSON of the invite minus `sig`, by the inviter's pubkey.
 
 ### 3.2 Deal tokens
 
-Users share these as short deep links, typically rendered as QR codes. When another user scans the link with a smartphone camera, it opens a bank webapp that suggests creating a new key or logging into an existing app. Inside the app the user adds the promise, address, or issuer to their personal catalog. The exact UX is implementation-specific; the link format and its self-validating property are protocol.
+Users share these as short deep links, typically rendered as QR codes. When another user scans the link with a smartphone camera, it opens a bank webapp that suggests creating a new key or logging into an existing app. Inside the app the user adds the voucher, address, or issuer to their personal catalog. The exact UX is implementation-specific; the link format and its self-validating property are protocol.
 
 > **Invariant:** The invite string format, its fields, and its self-validating property are protocol. How the invite is conveyed (QR code, NFC, deep link, copy-paste) is an implementation detail.
 
@@ -170,17 +170,17 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
 | Coordinator pattern | **Client-orchestrated**: the proposing user calls each bank with its own slice and relays signatures; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the promises it issues + the holder Tx hash lists + its predecessor bank pubkeys; no bank sees the full deal | **Yes** |
-| Issuer authority | Issuer is sole source of truth for its Promise's balances | **Yes** |
+| Visibility | Each bank sees only the records of the vouchers it issues + the holder Tx hash lists + its predecessor bank pubkeys; no bank sees the full deal | **Yes** |
+| Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
 | Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
-| Key rotation | Out of scope; redeploy with new secret if compromised | **Yes** |
+| Key rotation | Out of scope; redeploy with new secret if comvoucherd | **Yes** |
 | Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
 | Account creation | Accounts are opened by presenting an unsigned Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
-| Promise fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
+| Voucher fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
 | Tx cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
 | Tx ownership | **One Tx per participating holder**, containing only records that touch that holder's accounts | **Yes** |
-| Holder authorization | Holders sign Promise, Order, Tx, and Address docs; banks sign Record and Offer docs | **Yes** |
+| Holder authorization | Holders sign Voucher, Order, Tx, and Address docs; banks sign Record and Offer docs | **Yes** |
 | Balance floor | Holder-authorized transfers cannot overdraw the debit account; negative balances are created only by issuer minting | **Yes** |
 | Offers | Banks MAY derive and publish Offer docs from Orders; Offers hide holder identity and account hashes | **Yes** |
 
@@ -194,7 +194,7 @@ These are out of scope for v1. An implementation MAY add them, but they are not 
 - **No protocol-level rollback.** If a follow bank goes rogue after the lead settles, the lead is out. Recourse is social.
 - **No guaranteed delivery.** Fan-out is fire-and-forget; client relay is the recovery path. There is no message queue in the protocol.
 - **No key recovery, no key rotation.** Forever-keys in v1.
-- **No NFT-like Promises.** Issued Promises are fungible.
+- **No NFT-like Vouchers.** Issued Vouchers are fungible.
 - **No automated settle-cascade retry.** The advance engine re-evaluates whenever a new signature arrives, but if a follower bank goes permanently offline after the lead settles, the lead remains settled — the lead/follow risk, resolved socially. The protocol provides only per-record `reject` for pre-settled aborts.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
 - **No global bank discovery directory.** `barter-bank.json`, Address docs, and direct URL+pubkey pinning are the v1 baseline; a global federated directory is a v1.5+ extension.

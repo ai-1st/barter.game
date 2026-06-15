@@ -1,21 +1,21 @@
 # Scenario: Direct Approval Bilateral Swap
 
-Alice and Bob swap promises directly. Alice gives 1 Apromise (issued by Abank) and receives 1 Bpromise (issued by Bbank). Bob gives 1 Bpromise and receives 1 Apromise. Alice acts as lead; Bob follows.
+Alice and Bob swap vouchers directly. Alice gives 1 Avoucher (issued by Abank) and receives 1 Bvoucher (issued by Bbank). Bob gives 1 Bvoucher and receives 1 Avoucher. Alice acts as lead; Bob follows.
 
 ## Setup
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
-- Abank: bank keypair `Abank.pub`, issues Apromise.
-- Bbank: bank keypair `Bbank.pub`, issues Bpromise.
-- All parties already have Accounts for the promises they will receive, created via `submit_account`.
+- Abank: bank keypair `Abank.pub`, issues Avoucher.
+- Bbank: bank keypair `Bbank.pub`, issues Bvoucher.
+- All parties already have Accounts for the vouchers they will receive, created via `submit_account`.
 
 ## Phase 0 — Create records
 
 Alice (the coordinator) builds two explicit transfers:
 
-1. At Abank: debit Alice's Apromise account, credit Bob's Apromise account, amount `1`.
-2. At Bbank: debit Bob's Bpromise account, credit Alice's Bpromise account, amount `1`.
+1. At Abank: debit Alice's Avoucher account, credit Bob's Avoucher account, amount `1`.
+2. At Bbank: debit Bob's Bvoucher account, credit Alice's Bvoucher account, amount `1`.
 
 Alice calls `create_records` on each bank:
 
@@ -25,14 +25,14 @@ Alice calls `create_records` on each bank:
   "params": {
     "requests": [
       { "type": "transfer",
-        "promise_hash": <apromise-hash>,
+        "voucher_hash": <avoucher-hash>,
         "amount": 1,
-        "debit_account_hash": <alice-apromise-account>,
-        "credit_account_hash": <bob-apromise-account> }
+        "debit_account_hash": <alice-avoucher-account>,
+        "credit_account_hash": <bob-avoucher-account> }
     ],
     "record_subscriptions": [
-      { "record": <alice-apromise-debit-hash>, "url": <bbank-notify-url> },
-      { "record": <bob-apromise-credit-hash>, "url": <bbank-notify-url> }
+      { "record": <alice-avoucher-debit-hash>, "url": <bbank-notify-url> },
+      { "record": <bob-avoucher-credit-hash>, "url": <bbank-notify-url> }
     ]
   },
   "pubkey": A.pub, "to": Abank.pub }
@@ -42,14 +42,14 @@ Alice calls `create_records` on each bank:
   "params": {
     "requests": [
       { "type": "transfer",
-        "promise_hash": <bpromise-hash>,
+        "voucher_hash": <bvoucher-hash>,
         "amount": 1,
-        "debit_account_hash": <bob-bpromise-account>,
-        "credit_account_hash": <alice-bpromise-account> }
+        "debit_account_hash": <bob-bvoucher-account>,
+        "credit_account_hash": <alice-bvoucher-account> }
     ],
     "record_subscriptions": [
-      { "record": <bob-bpromise-debit-hash>, "url": <abank-notify-url> },
-      { "record": <alice-bpromise-credit-hash>, "url": <abank-notify-url> }
+      { "record": <bob-bvoucher-debit-hash>, "url": <abank-notify-url> },
+      { "record": <alice-bvoucher-credit-hash>, "url": <abank-notify-url> }
     ]
   },
   "pubkey": A.pub, "to": Bbank.pub }
@@ -67,7 +67,7 @@ Alice and Bob each build their own Tx containing the record hashes that touch th
   type: "tx",
   pubkey: A.pub,
   ulid: <new>,
-  records: [<alice-apromise-debit-hash>, <alice-bpromise-credit-hash>]
+  records: [<alice-avoucher-debit-hash>, <alice-bvoucher-credit-hash>]
 }
 ```
 
@@ -77,7 +77,7 @@ Alice and Bob each build their own Tx containing the record hashes that touch th
   type: "tx",
   pubkey: B.pub,
   ulid: <new>,
-  records: [<bob-bpromise-debit-hash>, <bob-apromise-credit-hash>]
+  records: [<bob-bvoucher-debit-hash>, <bob-avoucher-credit-hash>]
 }
 ```
 
@@ -139,20 +139,20 @@ Bbank's records are touched only by `follow` Txs. Bbank's advance engine holds o
 
 Abank is lead and has no predecessor dependency. Once Abank has observed record-level `hold` Signatures from Bbank on the corresponding records, its advance engine applies the balances:
 
-- Alice's Apromise account: `-1`.
-- Bob's Apromise account: `+1`.
+- Alice's Avoucher account: `-1`.
+- Bob's Avoucher account: `+1`.
 
 Abank releases holds and issues record-level `settle` Signatures, citing Bbank's `hold` as appropriate in `Signature.seen`.
 
 Bbank is follower. Once it has verified Abank's record-level `settle` Signatures (received via fan-out or client relay from `get_record_signatures` → `notify_signatures`), its advance engine applies balances:
 
-- Bob's Bpromise account: `-1`.
-- Alice's Bpromise account: `+1`.
+- Bob's Bvoucher account: `-1`.
+- Alice's Bvoucher account: `+1`.
 
 Bbank releases holds and issues its own `settle` Signatures, citing Abank's settle in `Signature.seen`.
 
 ## Result
 
-- Alice owns `+1` Bpromise at Bbank and owes `-1` Apromise at Abank.
-- Bob owns `+1` Apromise at Abank and owes `-1` Bpromise at Bbank.
+- Alice owns `+1` Bvoucher at Bbank and owes `-1` Avoucher at Abank.
+- Bob owns `+1` Avoucher at Abank and owes `-1` Bvoucher at Bbank.
 - Both banks have issued verifiable `settle` Signatures, with Bbank's settle proving it saw Abank's settle first.

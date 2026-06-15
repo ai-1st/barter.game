@@ -52,7 +52,7 @@ describe("ed25519 sign / verify", () => {
 describe("signDoc / verifyDoc", () => {
   test("sign a doc, verify without the sig field", () => {
     const { privateKey, pubkeyBase58 } = genKeyPair();
-    const doc = { type: "promise", name: "1 logo", ulid: "01J84XCEPZ8B7K3NJ60ZBQX4K3" };
+    const doc = { type: "voucher", name: "1 logo", ulid: "01J84XCEPZ8B7K3NJ60ZBQX4K3" };
     const sig = signDoc(doc, privateKey);
     expect(verifyDoc(doc, sig, pubkeyBase58)).toBe(true);
     // Same doc with sig attached still verifies (sig is stripped before hashing)
@@ -61,14 +61,14 @@ describe("signDoc / verifyDoc", () => {
 
   test("tampering with any field invalidates the signature", () => {
     const { privateKey, pubkeyBase58 } = genKeyPair();
-    const doc = { type: "promise", name: "1 logo" };
+    const doc = { type: "voucher", name: "1 logo" };
     const sig = signDoc(doc, privateKey);
     expect(verifyDoc({ ...doc, name: "1 logo!" }, sig, pubkeyBase58)).toBe(false);
   });
 
   test("two runs of signDoc on the same input produce the same signature (deterministic)", () => {
     const { privateKey } = genKeyPair();
-    const doc = { type: "promise", name: "1 logo" };
+    const doc = { type: "voucher", name: "1 logo" };
     expect(signDoc(doc, privateKey)).toBe(signDoc(doc, privateKey));
   });
 });

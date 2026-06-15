@@ -25,14 +25,14 @@ COMMANDS:
       Create or rotate the local profile (~/.barter/profile.json).
 
   mint <name> --amount N [--integer] [--due YYYY-MM-DD] [--limit N]
-      Issue a Promise: the mint is the first debit/credit record pair
+      Issue a Voucher: the mint is the first debit/credit record pair
       (issue account goes negative, holding account positive).
 
-  account <promise-hash> [--name <pocket-name>]
+  account <voucher-hash> [--name <pocket-name>]
       Author a receiving Account locally. No bank call — accounts are
       implicit and come into existence when the doc is first presented.
 
-  invite --give <promise>:N --get <promise>:N [--give-account <hash>]
+  invite --give <voucher>:N --get <voucher>:N [--give-account <hash>]
       Offer a swap. Prints a signed barter:// string for the counterparty.
 
   trade --invite "<barter://...>"

@@ -68,13 +68,13 @@ detail "A=$APUB  B=$BPUB  C=$CPUB  D=$DPUB"
 
 step "3. Each user mints their coin — the mint IS the first record pair"
 OUT=$(BARTER_PROFILE=$A cli mint "A-coin demo" --amount 1 --integer)
-ACOIN=$(echo "$OUT" | awk '/promise hash:/{print $3}');  AHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
+ACOIN=$(echo "$OUT" | awk '/voucher hash:/{print $3}');  AHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
 OUT=$(BARTER_PROFILE=$B cli mint "B-coin demo" --amount 1 --integer)
-BCOIN=$(echo "$OUT" | awk '/promise hash:/{print $3}');  BHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
+BCOIN=$(echo "$OUT" | awk '/voucher hash:/{print $3}');  BHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
 OUT=$(BARTER_PROFILE=$C cli mint "C-coin demo" --amount 2 --integer)
-CCOIN=$(echo "$OUT" | awk '/promise hash:/{print $3}');  CHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
+CCOIN=$(echo "$OUT" | awk '/voucher hash:/{print $3}');  CHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
 OUT=$(BARTER_PROFILE=$D cli mint "D-coin demo" --amount 2 --integer)
-DCOIN=$(echo "$OUT" | awk '/promise hash:/{print $3}');  DHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
+DCOIN=$(echo "$OUT" | awk '/voucher hash:/{print $3}');  DHOLD=$(echo "$OUT" | awk '/holding account:/{print $3}')
 detail "minted A/B/C/D coins (issue −N, holding +N)"
 
 step "4. Receivers author accounts locally — implicit, no bank call"
@@ -96,11 +96,11 @@ cat > "$DEAL_FILE" <<JSON
     "$DBANK": "$DAVE_BANK"
   },
   "transfers": [
-    { "promise": "$ACOIN", "issuerBank": "$ABANK", "amount": 1, "from": { "holder": "$APUB", "account": "$AHOLD" }, "to": { "holder": "$CPUB", "account": "$CACC_A" } },
-    { "promise": "$BCOIN", "issuerBank": "$BBANK", "amount": 1, "from": { "holder": "$BPUB", "account": "$BHOLD" }, "to": { "holder": "$CPUB", "account": "$CACC_B" } },
-    { "promise": "$CCOIN", "issuerBank": "$CBANK", "amount": 2, "from": { "holder": "$CPUB", "account": "$CHOLD" }, "to": { "holder": "$DPUB", "account": "$DACC_C" } },
-    { "promise": "$DCOIN", "issuerBank": "$DBANK", "amount": 1, "from": { "holder": "$DPUB", "account": "$DHOLD" }, "to": { "holder": "$APUB", "account": "$AACC_D" } },
-    { "promise": "$DCOIN", "issuerBank": "$DBANK", "amount": 1, "from": { "holder": "$DPUB", "account": "$DHOLD" }, "to": { "holder": "$BPUB", "account": "$BACC_D" } }
+    { "voucher": "$ACOIN", "issuerBank": "$ABANK", "amount": 1, "from": { "holder": "$APUB", "account": "$AHOLD" }, "to": { "holder": "$CPUB", "account": "$CACC_A" } },
+    { "voucher": "$BCOIN", "issuerBank": "$BBANK", "amount": 1, "from": { "holder": "$BPUB", "account": "$BHOLD" }, "to": { "holder": "$CPUB", "account": "$CACC_B" } },
+    { "voucher": "$CCOIN", "issuerBank": "$CBANK", "amount": 2, "from": { "holder": "$CPUB", "account": "$CHOLD" }, "to": { "holder": "$DPUB", "account": "$DACC_C" } },
+    { "voucher": "$DCOIN", "issuerBank": "$DBANK", "amount": 1, "from": { "holder": "$DPUB", "account": "$DHOLD" }, "to": { "holder": "$APUB", "account": "$AACC_D" } },
+    { "voucher": "$DCOIN", "issuerBank": "$DBANK", "amount": 1, "from": { "holder": "$DPUB", "account": "$DHOLD" }, "to": { "holder": "$BPUB", "account": "$BACC_D" } }
   ]
 }
 JSON

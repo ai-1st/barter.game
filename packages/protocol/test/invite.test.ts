@@ -23,8 +23,8 @@ function makeInvite(pubkey: string): Invite {
   return {
     pubkey,
     bankUrl: "https://barter.game/functions/v1/bank-alice/rpc",
-    give: { promise: PROMISE_A, amount: 1, account: ACCOUNT_A },
-    get: { promise: PROMISE_B, amount: 1, account: ACCOUNT_B },
+    give: { voucher: PROMISE_A, amount: 1, account: ACCOUNT_A },
+    get: { voucher: PROMISE_B, amount: 1, account: ACCOUNT_B },
     exp: Math.floor(Date.now() / 1000) + 3600,
   };
 }

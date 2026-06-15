@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-  hashPromise,
+  hashVoucher,
   validateAccount,
   validateAddress,
   validateDoc,
   validateOffer,
   validateOrder,
   validatePocket,
-  validatePromise,
+  validateVoucher,
   validateRecord,
   validateSignature,
   validateSubscription,
@@ -18,40 +18,40 @@ const PUBKEY = "CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza";
 const ULID = "01J84XCEPZ8B7K3NJ60ZBQX4K3";
 const HASH = "8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N";
 
-describe("Promise validator", () => {
+describe("Voucher validator", () => {
   const valid = {
-    type: "promise" as const,
+    type: "voucher" as const,
     pubkey: PUBKEY,
     ulid: ULID,
     bank: PUBKEY,
     name: "1 logo",
   };
 
-  test("accepts a minimal valid promise", () => {
-    expect(() => validatePromise(valid)).not.toThrow();
+  test("accepts a minimal valid voucher", () => {
+    expect(() => validateVoucher(valid)).not.toThrow();
   });
 
   test("accepts optional fields when valid", () => {
     expect(() =>
-      validatePromise({ ...valid, due: "2026-12-31", limit: 100, integer: true }),
+      validateVoucher({ ...valid, due: "2026-12-31", limit: 100, integer: true }),
     ).not.toThrow();
   });
 
   test("rejects wrong type", () => {
-    expect(() => validatePromise({ ...valid, type: "pocket" })).toThrow();
+    expect(() => validateVoucher({ ...valid, type: "pocket" })).toThrow();
   });
 
   test("rejects missing name", () => {
-    expect(() => validatePromise({ ...valid, name: "" })).toThrow();
+    expect(() => validateVoucher({ ...valid, name: "" })).toThrow();
   });
 
   test("rejects invalid due date", () => {
-    expect(() => validatePromise({ ...valid, due: "tomorrow" })).toThrow();
+    expect(() => validateVoucher({ ...valid, due: "tomorrow" })).toThrow();
   });
 
   test("rejects non-positive limit", () => {
-    expect(() => validatePromise({ ...valid, limit: 0 })).toThrow();
-    expect(() => validatePromise({ ...valid, limit: -5 })).toThrow();
+    expect(() => validateVoucher({ ...valid, limit: 0 })).toThrow();
+    expect(() => validateVoucher({ ...valid, limit: -5 })).toThrow();
   });
 });
 
@@ -65,13 +65,13 @@ describe("Pocket / Account validators", () => {
     ).toThrow();
   });
 
-  test("account needs holder + pocket + promise hashes", () => {
+  test("account needs holder + pocket + voucher hashes", () => {
     expect(() =>
       validateAccount({
         type: "account",
         holder: PUBKEY,
         pocket: HASH,
-        promise: HASH,
+        voucher: HASH,
       }),
     ).not.toThrow();
   });
@@ -83,7 +83,7 @@ describe("Pocket / Account validators", () => {
         pubkey: PUBKEY,
         ulid: ULID,
         pocket: HASH,
-        promise: HASH,
+        voucher: HASH,
       }),
     ).toThrow(/pubkey/);
   });
@@ -94,7 +94,7 @@ describe("Pocket / Account validators", () => {
         type: "account",
         holder: PUBKEY,
         pocket: HASH,
-        promise: HASH,
+        voucher: HASH,
         sig: "abc",
       }),
     ).toThrow(/sig/);
@@ -213,7 +213,7 @@ describe("Tx + Signature validators", () => {
     ).not.toThrow();
   });
 
-  test("signature accepts hash-only attestation for Promise/Address", () => {
+  test("signature accepts hash-only attestation for Voucher/Address", () => {
     expect(() =>
       validateSignature({
         type: "signature", pubkey: PUBKEY, ulid: ULID, hash: HASH,
@@ -329,8 +329,8 @@ describe("Order validator", () => {
     ulid: ULID,
     rate: 1.5,
     lead: false,
-    debit: { account: HASH, promise: HASH, min: 0.1, max: 10 },
-    credit: { account: HASH, promise: HASH, min: 0.1, max: 10 },
+    debit: { account: HASH, voucher: HASH, min: 0.1, max: 10 },
+    credit: { account: HASH, voucher: HASH, min: 0.1, max: 10 },
   };
 
   test("accepts a minimal valid order", () => {
@@ -378,8 +378,8 @@ describe("Offer validator", () => {
     expect(() =>
       validateOffer({
         ...valid,
-        debit: { promise: HASH, min: 0.1, max: 10 },
-        credit: { promise: HASH, min: 0.1, max: 10 },
+        debit: { voucher: HASH, min: 0.1, max: 10 },
+        credit: { voucher: HASH, min: 0.1, max: 10 },
       }),
     ).not.toThrow();
   });
@@ -393,15 +393,15 @@ describe("Offer validator", () => {
   });
 
   test("rejects invalid side shape", () => {
-    expect(() => validateOffer({ ...valid, debit: { promise: HASH, min: -1, max: 0 } })).toThrow();
+    expect(() => validateOffer({ ...valid, debit: { voucher: HASH, min: -1, max: 0 } })).toThrow();
   });
 });
 
 describe("validateDoc dispatch", () => {
-  test("routes promise to validatePromise", () => {
+  test("routes voucher to validateVoucher", () => {
     expect(() =>
       validateDoc({
-        type: "promise",
+        type: "voucher",
         pubkey: PUBKEY,
         ulid: ULID,
         bank: PUBKEY,
@@ -440,10 +440,10 @@ describe("validateDoc dispatch", () => {
   });
 });
 
-describe("hashPromise", () => {
+describe("hashVoucher", () => {
   test("hash is stable across reorderings of optional fields", () => {
     const a = {
-      type: "promise" as const,
+      type: "voucher" as const,
       pubkey: PUBKEY,
       ulid: ULID,
       bank: PUBKEY,
@@ -456,8 +456,8 @@ describe("hashPromise", () => {
       bank: PUBKEY,
       ulid: ULID,
       pubkey: PUBKEY,
-      type: "promise" as const,
+      type: "voucher" as const,
     };
-    expect(hashPromise(a)).toBe(hashPromise(b));
+    expect(hashVoucher(a)).toBe(hashVoucher(b));
   });
 });

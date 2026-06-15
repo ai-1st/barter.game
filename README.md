@@ -5,7 +5,7 @@ A federated mutual-credit ledger. **Be your own bank.**
 Mint a personal currency — "1 logo", "1 hour of consulting", "1 home-cooked
 dinner" — issued by you, signed by you, redeemable from you. Trade it with
 people who know and trust you. The math binds you and them and the banks
-together. No central authority. No middleman. Just signed promises and
+together. No central authority. No middleman. Just signed vouchers and
 their atomic settlement.
 
 This is v1. It works end-to-end today.
@@ -37,11 +37,11 @@ export BARTER_BANK_DAVE_URL=https://barter-game-banks.ai-1st.deno.net/dave
 ./scripts/demo-deploy.sh
 ```
 
-The script narrates each step. By the end every Promise that moved
+The script narrates each step. By the end every Voucher that moved
 sums to zero across all its accounts — the cryptographic version of
 "we're even." For a simple bilateral swap the balances look like this:
 
-| Holder | Promise | Bank | Balance |
+| Holder | Voucher | Bank | Balance |
 | --- | --- | --- | --- |
 | Alice | "1 logo" | bank-alice (issuer) | **-1** (she gave it) |
 | Bob   | "1 logo" | bank-alice | **+1** (he received) |
@@ -105,7 +105,7 @@ barter mint "1 logo" --amount 5 --integer
 
 # Offer a swap: prints a signed barter:// invite string for the counterparty
 # (accounts are implicit — no bank call to "open" anything)
-barter invite --give <my-promise>:1 --get <their-promise>:1
+barter invite --give <my-voucher>:1 --get <their-voucher>:1
 
 # Counterparty initiates from the invite: creates records on both banks,
 # lead-signs their own Tx, and prints a deal token back for you
@@ -132,7 +132,7 @@ The CLI is the protocol's truest surface; the web UI ships in v1.5.
 
 ## How the protocol works (one paragraph)
 
-Every user and every bank is an ed25519 keypair. Promise, Pocket,
+Every user and every bank is an ed25519 keypair. Voucher, Pocket,
 Account, Signature, and Order docs are canonicalized via RFC 8785 JSON,
 SHA-256-hashed, and content-addressed by that hash. Accounts are
 implicit — they come into existence when an Account doc is first
@@ -207,7 +207,7 @@ Honest list:
 - **No protocol-level rollback.** If a follow bank goes rogue after
   the lead settles, the lead is out. Recourse is social.
 - **No key recovery, no key rotation.** Forever-keys in v1.
-- **No NFT-like Promises.** Issued Promises are fungible.
+- **No NFT-like Vouchers.** Issued Vouchers are fungible.
 - **No guaranteed push delivery.** Subscription fan-out is
   fire-and-forget; a lost push stalls a deal until `barter nudge`
   relays the signatures by hand.
@@ -240,4 +240,4 @@ MIT (planned; license file lands with the v1 public release).
 
 This is early. The protocol is small enough to keep in your head. If you
 find a bug, mismatch between the spec and the code, or a place where
-the ETHOS got compromised — open an issue, and bring receipts.
+the ETHOS got comvoucherd — open an issue, and bring receipts.

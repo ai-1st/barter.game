@@ -23,7 +23,7 @@ type RecordSubscription = {
 
 type TransferRequest = {
   type: "transfer";
-  promise_hash: string;
+  voucher_hash: string;
   amount: number;
   debit_account_hash: string | Record<string, unknown>;
   credit_account_hash: string | Record<string, unknown>;
@@ -41,7 +41,7 @@ export const createRecords: Handler = async (params, ctx) => {
     throw new RpcError(RpcErrors.INVALID_PARAMS, "params.requests must be a non-empty array");
   }
 
-  // Implicit accounts: store any presented Promise/Account docs first so
+  // Implicit accounts: store any presented Voucher/Account docs first so
   // brand-new accounts can be referenced.
   await intakeDocs(p.docs, ctx);
 
@@ -69,16 +69,16 @@ export const createRecords: Handler = async (params, ctx) => {
     if (!toAcct) {
       throw new RpcError(RpcErrors.UNKNOWN_DOC, `credit_account ${creditAccountHash} not known to this bank (attach the Account doc)`);
     }
-    if (fromAcct.promise_hash !== toAcct.promise_hash) {
-      throw new RpcError(RpcErrors.VALIDATION, "a transfer moves one promise: both accounts must hold the same promise");
+    if (fromAcct.voucher_hash !== toAcct.voucher_hash) {
+      throw new RpcError(RpcErrors.VALIDATION, "a transfer moves one voucher: both accounts must hold the same voucher");
     }
-    if (typeof tr.promise_hash === "string" && fromAcct.promise_hash !== tr.promise_hash) {
-      throw new RpcError(RpcErrors.VALIDATION, "accounts do not reference the requested promise_hash");
+    if (typeof tr.voucher_hash === "string" && fromAcct.voucher_hash !== tr.voucher_hash) {
+      throw new RpcError(RpcErrors.VALIDATION, "accounts do not reference the requested voucher_hash");
     }
 
-    const promiseRow = await ctx.db.getDoc(fromAcct.promise_hash);
-    if (promiseRow && (promiseRow.body as { integer?: boolean }).integer === true && !Number.isInteger(tr.amount)) {
-      throw new RpcError(RpcErrors.VALIDATION, "promise.integer requires an integer amount");
+    const voucherRow = await ctx.db.getDoc(fromAcct.voucher_hash);
+    if (voucherRow && (voucherRow.body as { integer?: boolean }).integer === true && !Number.isInteger(tr.amount)) {
+      throw new RpcError(RpcErrors.VALIDATION, "voucher.integer requires an integer amount");
     }
 
     // Idempotency: an identical request from the same sender must not mint a

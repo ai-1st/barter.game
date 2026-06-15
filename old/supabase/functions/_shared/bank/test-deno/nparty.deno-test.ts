@@ -1,6 +1,6 @@
 // In-memory integration test for the direct-approval N-party flow.
 //
-// Drives the real bank handlers (mint_promise → create_records → submit_tx,
+// Drives the real bank handlers (mint_voucher → create_records → submit_tx,
 // with banks self-advancing through hold and settle via subscription
 // fan-out) across FOUR simulated banks, exercising the exact
 // branching/merging deal from PROTOCOL.md §2:
@@ -17,7 +17,7 @@
 
 import { hashDoc, newUlid, signDoc } from "../../protocol/crypto.ts";
 import { buildDeal, type TransferSpec } from "../../protocol/deal.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { createRecords } from "../handlers/create_records.ts";
 import { submitTx } from "../handlers/submit_tx.ts";
 import { subscribe } from "../handlers/subscribe.ts";
@@ -33,29 +33,29 @@ import {
   type Key,
 } from "./_harness.ts";
 
-function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
   const body: Record<string, unknown> = {
     type: "account",
     pubkey: holder.pub,
     ulid: newUlid(),
     pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
-    promise: promiseHash,
+    voucher: voucherHash,
   };
   return { body, hash: hashDoc(body) };
 }
 
 async function mint(store: Store, bank: Key, issuer: Key, name: string, amount: number) {
-  const promise: Record<string, unknown> = {
-    type: "promise", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
+  const voucher: Record<string, unknown> = {
+    type: "voucher", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
   };
-  const promiseHash = hashDoc(promise);
-  const issue = accountDoc(issuer, promiseHash, "issue");
-  const holding = accountDoc(issuer, promiseHash, "holding");
-  const res = await mintPromise(
-    { promise, debit_account: issue.body, credit_account: holding.body, amount },
+  const voucherHash = hashDoc(voucher);
+  const issue = accountDoc(issuer, voucherHash, "issue");
+  const holding = accountDoc(issuer, voucherHash, "holding");
+  const res = await mintVoucher(
+    { voucher, debit_account: issue.body, credit_account: holding.body, amount },
     ctx(store, bank, issuer.pub),
-  ) as { promise_hash: string; debit_account_hash: string; credit_account_hash: string };
-  return { promiseHash: res.promise_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
+  ) as { voucher_hash: string; debit_account_hash: string; credit_account_hash: string };
+  return { voucherHash: res.voucher_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
 }
 
 Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", async () => {
@@ -76,18 +76,18 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
 
     // Receiver accounts exist only as client-side docs; they reach each bank
     // implicitly via create_records docs[].
-    const accC_A = accountDoc(C, coinA.promiseHash, "main"); // C receives A-coin at bankA
-    const accC_B = accountDoc(C, coinB.promiseHash, "main");
-    const accD_C = accountDoc(D, coinC.promiseHash, "main");
-    const accA_D = accountDoc(A, coinD.promiseHash, "main");
-    const accB_D = accountDoc(B, coinD.promiseHash, "main");
+    const accC_A = accountDoc(C, coinA.voucherHash, "main"); // C receives A-coin at bankA
+    const accC_B = accountDoc(C, coinB.voucherHash, "main");
+    const accD_C = accountDoc(D, coinC.voucherHash, "main");
+    const accA_D = accountDoc(A, coinD.voucherHash, "main");
+    const accB_D = accountDoc(B, coinD.voucherHash, "main");
 
     const transfers: TransferSpec[] = [
-      { promise: coinA.promiseHash, issuerBank: bA.pub, amount: 1, from: { holder: A.pub, account: coinA.holding }, to: { holder: C.pub, account: accC_A.hash } },
-      { promise: coinB.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: B.pub, account: coinB.holding }, to: { holder: C.pub, account: accC_B.hash } },
-      { promise: coinC.promiseHash, issuerBank: bC.pub, amount: 2, from: { holder: C.pub, account: coinC.holding }, to: { holder: D.pub, account: accD_C.hash } },
-      { promise: coinD.promiseHash, issuerBank: bD.pub, amount: 1, from: { holder: D.pub, account: coinD.holding }, to: { holder: A.pub, account: accA_D.hash } },
-      { promise: coinD.promiseHash, issuerBank: bD.pub, amount: 1, from: { holder: D.pub, account: coinD.holding }, to: { holder: B.pub, account: accB_D.hash } },
+      { voucher: coinA.voucherHash, issuerBank: bA.pub, amount: 1, from: { holder: A.pub, account: coinA.holding }, to: { holder: C.pub, account: accC_A.hash } },
+      { voucher: coinB.voucherHash, issuerBank: bB.pub, amount: 1, from: { holder: B.pub, account: coinB.holding }, to: { holder: C.pub, account: accC_B.hash } },
+      { voucher: coinC.voucherHash, issuerBank: bC.pub, amount: 2, from: { holder: C.pub, account: coinC.holding }, to: { holder: D.pub, account: accD_C.hash } },
+      { voucher: coinD.voucherHash, issuerBank: bD.pub, amount: 1, from: { holder: D.pub, account: coinD.holding }, to: { holder: A.pub, account: accA_D.hash } },
+      { voucher: coinD.voucherHash, issuerBank: bD.pub, amount: 1, from: { holder: D.pub, account: coinD.holding }, to: { holder: B.pub, account: accB_D.hash } },
     ];
     const docsByBank = new Map<string, Array<Record<string, unknown>>>([
       [bA.pub, [accC_A.body]],
@@ -207,7 +207,7 @@ Deno.test("N-party deal: banks self-advance to settled, balances sum to zero", a
     eq(bal(bD, accA_D.hash), 1, "A's D-coin");
     eq(bal(bD, accB_D.hash), 1, "B's D-coin");
 
-    // sum invariant per promise = 0
+    // sum invariant per voucher = 0
     eq(bal(bA, coinA.issue) + bal(bA, coinA.holding) + bal(bA, accC_A.hash), 0, "A-coin sum");
     eq(bal(bB, coinB.issue) + bal(bB, coinB.holding) + bal(bB, accC_B.hash), 0, "B-coin sum");
     eq(bal(bC, coinC.issue) + bal(bC, coinC.holding) + bal(bC, accD_C.hash), 0, "C-coin sum");

@@ -11,7 +11,7 @@ This file defines the parts of the v1 contract that are not specific to banking 
 - Bank discovery and pubkey pinning
 - Standard vs custom API surface
 
-For Promise/Account/Record/Tx/Order/Offer/Subscription schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
+For Voucher/Account/Record/Tx/Order/Offer/Subscription schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
 
 ---
 
@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "promise" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -63,7 +63,7 @@ Encoded fields:
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
 - `DateString` — `YYYY-MM-DD`.
 
-The concrete types defined in this file are `Signature` and `Address`. Promise, Pocket, Account, Record, Tx, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
+The concrete types defined in this file are `Signature` and `Address`. Voucher, Pocket, Account, Record, Tx, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
 
 ### 3.1 Signature
 
@@ -185,7 +185,7 @@ Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have hear
 
 ### 5.2 Pubkey pinning (security)
 
-The discovery document is **not a trust anchor**. A compromised DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
+The discovery document is **not a trust anchor**. A comvoucherd DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
 
 - The client config map stores `{pubkey, url}` per bank.
 - Invite strings carry `<pubkey>@<bank-url>` syntax (see `README.md`).

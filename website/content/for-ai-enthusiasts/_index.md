@@ -12,11 +12,11 @@ This makes barter.game an unusually clean substrate for agent economies.
 
 ### AI as holder
 
-An agent holds promises in its "wallet" (a keypair + client logic) and trades them based on instructions. "Auto-accept any trade from Alice ≤ 5 logos." "Decline any trade where I'm asked to be lead on an amount > 10." The agent triages incoming deal tokens and drafts the follow-Tx signature for the ones that match policy. It's just a client with a policy loop.
+An agent holds vouchers in its "wallet" (a keypair + client logic) and trades them based on instructions. "Auto-accept any trade from Alice ≤ 5 logos." "Decline any trade where I'm asked to be lead on an amount > 10." The agent triages incoming deal tokens and drafts the follow-Tx signature for the ones that match policy. It's just a client with a policy loop.
 
 ### AI as emitter
 
-An agent mints its own promises. "1 GPT-5 response." "1 code review." "1 generated image." The agent runs its own bank (or uses a hosted one) and redeems promises via its API. Humans and other agents can hold and trade these promises.
+An agent mints its own vouchers. "1 GPT-5 response." "1 code review." "1 generated image." The agent runs its own bank (or uses a hosted one) and redeems vouchers via its API. Humans and other agents can hold and trade these vouchers.
 
 This is cleaner than "AI as holder" because the trust question is identical to the human case: do you trust the agent's bank? Redemption is just an API call.
 
@@ -36,8 +36,8 @@ Most agent-payment proposals assume:
 barter.game assumes none of these. It gives you:
 - **Federation:** Any agent can be a bank. No permission needed.
 - **Mutual credit:** No pre-funding, no gas, no token speculation.
-- **Signed promises:** Every deal is cryptographically verifiable. Agents can audit each other's history.
-- **Signed, verifiable docs:** Promise, Account, Tx, Signature, Subscription, and Order docs are content-addressed. Ledger records are bank-minted with ULIDs. All are cryptographically auditable.
+- **Signed vouchers:** Every deal is cryptographically verifiable. Agents can audit each other's history.
+- **Signed, verifiable docs:** Voucher, Account, Tx, Signature, Subscription, and Order docs are content-addressed. Ledger records are bank-minted with ULIDs. All are cryptographically auditable.
 
 ## Experiments to try
 
@@ -47,7 +47,7 @@ Spin up two agent processes. Give each a keypair and a bank. Have one mint "1 co
 
 ### 2. Agent portfolio manager
 
-An agent watches its inbox and maintains a "credit memo" on every emitter it holds promises from. It reads mint history, abandonment rates, and redemption track records from the public signed evidence. It advises its owner (human or another agent) on which promises to accept, hold, or liquidate.
+An agent watches its inbox and maintains a "credit memo" on every emitter it holds vouchers from. It reads mint history, abandonment rates, and redemption track records from the public signed evidence. It advises its owner (human or another agent) on which vouchers to accept, hold, or liquidate.
 
 ### 3. AI-to-AI ring trade
 
@@ -59,13 +59,13 @@ N agents collectively operate one bank via threshold ed25519 signatures (FROST).
 
 ### 5. The sin-eater
 
-An AI-operated bank that takes on the lead role for a fee, absorbing abandonment loss into its own pool. It underwrites risk by reading the signed history of counterparties. The pool's solvency is itself a Promise that others hold and trade.
+An AI-operated bank that takes on the lead role for a fee, absorbing abandonment loss into its own pool. It underwrites risk by reading the signed history of counterparties. The pool's solvency is itself a Voucher that others hold and trade.
 
 ## The trust question
 
-When an AI agent asks you to hold its promise, the question is the same as when a human does: **do you trust the emitter to deliver?** The protocol does not answer this. It just records your answer.
+When an AI agent asks you to hold its voucher, the question is the same as when a human does: **do you trust the emitter to deliver?** The protocol does not answer this. It just records your answer.
 
-For AI emitters, "delivery" means the agent's API is available and produces the promised output. An agent that mints "1 code review" and never responds is no different from a human who mints "1 logo" and never delivers. The social layer handles both.
+For AI emitters, "delivery" means the agent's API is available and produces the voucherd output. An agent that mints "1 code review" and never responds is no different from a human who mints "1 logo" and never delivers. The social layer handles both.
 
 ## Getting started
 

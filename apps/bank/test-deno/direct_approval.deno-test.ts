@@ -1,37 +1,37 @@
-// The bilateral walkthrough: Alice and Bob swap promises across two banks.
+// The bilateral walkthrough: Alice and Bob swap vouchers across two banks.
 //
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/direct_approval.deno-test.ts
 
 import { hashDoc, newUlid, signDoc } from "../../../packages/protocol/src/index.ts";
 import { buildDeal, type TransferSpec } from "../../../packages/protocol/src/deal.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { createRecords } from "../handlers/create_records.ts";
 import { submitTx } from "../handlers/submit_tx.ts";
 import { getRecordSignatures } from "../handlers/get_record_signatures.ts";
 import { notifySignatures } from "../handlers/notify_signatures.ts";
 import { assert, closeTestKv, ctx, eq, key, openTestKv, type Key } from "./helpers.ts";
 
-function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
   const body: Record<string, unknown> = {
     type: "account",
     holder: holder.pub,
     pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
-    promise: promiseHash,
+    voucher: voucherHash,
   };
   return { body, hash: hashDoc(body) };
 }
 
 async function mint(store: { kv: Deno.Kv }, bank: Key, issuer: Key, name: string, amount: number) {
-  const promise: Record<string, unknown> = {
-    type: "promise", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
+  const voucher: Record<string, unknown> = {
+    type: "voucher", pubkey: issuer.pub, ulid: newUlid(), bank: bank.pub, name,
   };
-  const issue = accountDoc(issuer, hashDoc(promise), "issue");
-  const holding = accountDoc(issuer, hashDoc(promise), "holding");
-  const res = await mintPromise(
-    { promise, debit_account: issue.body, credit_account: holding.body, amount },
+  const issue = accountDoc(issuer, hashDoc(voucher), "issue");
+  const holding = accountDoc(issuer, hashDoc(voucher), "holding");
+  const res = await mintVoucher(
+    { voucher, debit_account: issue.body, credit_account: holding.body, amount },
     ctx(store.kv, bank, issuer.pub),
-  ) as { promise_hash: string; debit_account_hash: string; credit_account_hash: string };
-  return { promiseHash: res.promise_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
+  ) as { voucher_hash: string; debit_account_hash: string; credit_account_hash: string };
+  return { voucherHash: res.voucher_hash, issue: res.debit_account_hash, holding: res.credit_account_hash };
 }
 
 function holderSig(holder: Key, txHash: string, action: "lead" | "follow") {
@@ -59,24 +59,24 @@ Deno.test("bilateral walkthrough: direct approval settles both banks", async () 
     const logo = await mint(tk, bA, alice, "1 logo", 1);
     const hour = await mint(tk, bB, bob, "1 hour", 1);
 
-    const bobLogo = accountDoc(bob, logo.promiseHash, "main");
-    const aliceHour = accountDoc(alice, hour.promiseHash, "main");
+    const bobLogo = accountDoc(bob, logo.voucherHash, "main");
+    const aliceHour = accountDoc(alice, hour.voucherHash, "main");
 
     const transfers: TransferSpec[] = [
-      { promise: logo.promiseHash, issuerBank: bA.pub, amount: 1, from: { holder: alice.pub, account: logo.holding }, to: { holder: bob.pub, account: bobLogo.hash } },
-      { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
+      { voucher: logo.voucherHash, issuerBank: bA.pub, amount: 1, from: { holder: alice.pub, account: logo.holding }, to: { holder: bob.pub, account: bobLogo.hash } },
+      { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
     ];
 
     const resA = await createRecords(
       {
-        requests: [{ type: "transfer", promise_hash: logo.promiseHash, amount: 1, debit_account_hash: logo.holding, credit_account_hash: bobLogo.hash }],
+        requests: [{ type: "transfer", voucher_hash: logo.voucherHash, amount: 1, debit_account_hash: logo.holding, credit_account_hash: bobLogo.hash }],
         docs: [bobLogo.body],
       },
       ctx(tk.kv, bA, alice.pub),
     ) as { records: Array<Record<string, unknown>> };
     const resB = await createRecords(
       {
-        requests: [{ type: "transfer", promise_hash: hour.promiseHash, amount: 1, debit_account_hash: hour.holding, credit_account_hash: aliceHour.hash }],
+        requests: [{ type: "transfer", voucher_hash: hour.voucherHash, amount: 1, debit_account_hash: hour.holding, credit_account_hash: aliceHour.hash }],
         docs: [aliceHour.body],
       },
       ctx(tk.kv, bB, alice.pub),
@@ -143,18 +143,18 @@ Deno.test("insufficient non-issuer balance draws a per-record reject", async () 
     const bB = key();
 
     const hour = await mint(tk, bB, bob, "1 hour", 1);
-    const aliceHour = accountDoc(alice, hour.promiseHash, "main");
+    const aliceHour = accountDoc(alice, hour.voucherHash, "main");
 
     const r1 = await createRecords(
       {
-        requests: [{ type: "transfer", promise_hash: hour.promiseHash, amount: 1, debit_account_hash: hour.holding, credit_account_hash: aliceHour.hash }],
+        requests: [{ type: "transfer", voucher_hash: hour.voucherHash, amount: 1, debit_account_hash: hour.holding, credit_account_hash: aliceHour.hash }],
         docs: [aliceHour.body],
       },
       ctx(tk.kv, bB, bob.pub),
     ) as { records: Array<Record<string, unknown>> };
     const built1 = buildDeal(
       { initiator: bob.pub, transfers: [
-        { promise: hour.promiseHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
+        { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 1, from: { holder: bob.pub, account: hour.holding }, to: { holder: alice.pub, account: aliceHour.hash } },
       ] },
       { [bB.pub]: r1.records as never },
     );
@@ -166,13 +166,13 @@ Deno.test("insufficient non-issuer balance draws a per-record reject", async () 
 
     const r2 = await createRecords(
       {
-        requests: [{ type: "transfer", promise_hash: hour.promiseHash, amount: 2, debit_account_hash: aliceHour.hash, credit_account_hash: hour.holding }],
+        requests: [{ type: "transfer", voucher_hash: hour.voucherHash, amount: 2, debit_account_hash: aliceHour.hash, credit_account_hash: hour.holding }],
       },
       ctx(tk.kv, bB, alice.pub),
     ) as { records: Array<Record<string, unknown>> };
     const built2 = buildDeal(
       { initiator: alice.pub, transfers: [
-        { promise: hour.promiseHash, issuerBank: bB.pub, amount: 2, from: { holder: alice.pub, account: aliceHour.hash }, to: { holder: bob.pub, account: hour.holding } },
+        { voucher: hour.voucherHash, issuerBank: bB.pub, amount: 2, from: { holder: alice.pub, account: aliceHour.hash }, to: { holder: bob.pub, account: hour.holding } },
       ] },
       { [bB.pub]: r2.records as never },
     );

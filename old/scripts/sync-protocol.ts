@@ -8,7 +8,7 @@
 // Run before any `supabase functions deploy` that needs the protocol code.
 // `npm run predeploy` hooks this up.
 
-import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/vouchers";
 import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 

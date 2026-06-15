@@ -95,15 +95,15 @@ This was chosen for operational simplicity (one project, one KV, one deploy). Tr
 | `advance.ts` | The advance engine — `advanceDeal()` self-advances a leg through hold and settle (see §4.4) |
 | `subscriptions.ts` | Signature fan-out: POST bank-signed `notify_signatures` envelopes to matching subscribers (fire-and-forget) |
 | `peer.ts` | HTTP client for signed bank-to-bank calls |
-| `handlers/intake.ts` | Shared doc intake — Promise/Account/Address docs attached to any mutating call; accounts come into existence here (Pocket bodies are rejected) |
-| `handlers/mint_promise.ts` | `mint` — the mint as the first record pair on two distinct pockets, settled immediately |
+| `handlers/intake.ts` | Shared doc intake — Voucher/Account/Address docs attached to any mutating call; accounts come into existence here (Pocket bodies are rejected) |
+| `handlers/mint_voucher.ts` | `mint` — the mint as the first record pair on two distinct pockets, settled immediately |
 | `handlers/create_records.ts` | `create_records` — bank mints debit/credit record pairs with ULIDs, stores its slice of the settle topology |
 | `handlers/submit_tx.ts` | `submit_tx` — verify a holder's lead/follow Tx signature, issue per-record `approve`/`reject`, advance the leg |
 | `handlers/subscribe.ts` | `subscribe` — store a Subscription doc + its watch keys |
 | `handlers/notify_signatures.ts` | `notify_signatures` — accept pushed/relayed signatures (from anyone), verify, store, re-advance touched deals |
 | `handlers/reject_deal.ts` | `reject_deal` — participant-initiated cancellation: release holds, mark `rejected`, fan out |
 | `handlers/get_deal.ts` | `get_deal` — leg state + record bodies + deal signatures (token verification, polling, relay) |
-| `handlers/get.ts` | `get_promise`, `get_account_balance`, `list_accounts`, address directory — read-only queries |
+| `handlers/get.ts` | `get_voucher`, `get_account_balance`, `list_accounts`, address directory — read-only queries |
 
 Removed from the old model: `open_account` (accounts are implicit — `intake.ts`), `propose_leg` and `confirm_receipt` (both subsumed by the holder's own Tx signature in `submit_tx`), and `hold_leg` / `settle_leg` as client RPCs (that logic moved into the advance engine).
 
@@ -143,9 +143,9 @@ The recovery path is client relay: `barter nudge` reads every bank's signatures 
 | Command | Purpose |
 |---|---|
 | `barter init --bank <url>` | Pin a bank URL+pubkey in `~/.barter/profile.json` |
-| `barter mint "<name>" --amount N [--integer] [--due YYYY-MM-DD] [--limit N]` | Mint a Promise: builds two Pocket/Account pairs locally, the bank settles the first record pair immediately |
-| `barter account <promise-hash> [--name <pocket>]` | Author a receiving Account locally — no bank call; accounts are implicit |
-| `barter invite --give <promise>:N --get <promise>:N` | Offer a swap: prints a signed `barter://` string with account hashes + bundled Account bodies |
+| `barter mint "<name>" --amount N [--integer] [--due YYYY-MM-DD] [--limit N]` | Mint a Voucher: builds two Pocket/Account pairs locally, the bank settles the first record pair immediately |
+| `barter account <voucher-hash> [--name <pocket>]` | Author a receiving Account locally — no bank call; accounts are implicit |
+| `barter invite --give <voucher>:N --get <voucher>:N` | Offer a swap: prints a signed `barter://` string with account hashes + bundled Account bodies |
 | `barter trade --invite "<barter://...>"` | Initiate a bilateral swap from an invite: records on both banks, cross-subscriptions, lead Tx, deal token |
 | `barter deal <deal-file.json>` | Initiate an N-party deal (any number of banks/holders); prints one deal token per other holder |
 | `barter accept "<barterdeal:...>"` | Verify a deal token against the banks (`get_deal`), follow-sign your own Tx, submit |
@@ -182,7 +182,7 @@ See `SCHEMA.md` for the full Deno KV key-space reference, value shapes, and atom
 - `base58 TEXT` for all hashes, pubkeys, and signatures. No binary types — easier to debug, portable across languages.
 - Balances stored as strings. Exact arithmetic; never floating point.
 - ISO 8601 strings for timestamps.
-- `docs` keys are append-only. Store content-addressed docs (Promise, Account, Tx, Signature, Order, Subscription, Address — never Pocket bodies). Idempotent inserts make retries safe.
+- `docs` keys are append-only. Store content-addressed docs (Voucher, Account, Tx, Signature, Order, Subscription, Address — never Pocket bodies). Idempotent inserts make retries safe.
 - `ledger_records` stores bank-minted records identified by ULID, not by content hash. `pair_ulid` (the peer record) and `deal_ulid` (the grouping key) are mandatory; `tx_ulid` is internal bookkeeping set at `submit_tx` — the doc body carries no Tx reference.
 - `accounts` is a materialized balance row per Account doc, created lazily on first intake.
 - `legs` holds per-bank leg state, keyed `(bankPubkey, "legs", dealUlid)`: role, predecessors, the full bank list (the lead needs it to await all holds), and state `created → approved → held → settled / rejected`. No bank sees the full graph.
@@ -229,7 +229,7 @@ Honest list of limitations in this implementation:
 - **No guaranteed push delivery.** Subscription fan-out is fire-and-forget with no retry; a lost push stalls the deal until any party relays the signatures (`barter nudge`).
 - **No automated follow-signature collection.** Deal tokens travel out of band; each follow holder must run `barter accept` themselves.
 - **No hold sweeper.** A hold orphaned by an abandoned deal stays until `reject_deal` releases it (see `TODOS.md`).
-- **No NFT-like unique Promises.** Issued Promises are fungible.
+- **No NFT-like unique Vouchers.** Issued Vouchers are fungible.
 - **No reputation, dispute resolution, or stakes.** Pure protocol; recourse is social.
 - **No key rotation or recovery.** Forever-key in v1.
 - **No rollback after a lead settles.** If a follow bank never settles, the lead is out — the lead/follow risk (protocol/README.md §2), resolved socially.

@@ -3,18 +3,18 @@
 // Run: deno test --allow-read --allow-write apps/bank/test-deno/subscription.deno-test.ts
 
 import { hashDoc, newUlid, signDoc, verifyDoc } from "../../../packages/protocol/src/index.ts";
-import { mintPromise } from "../handlers/mint_promise.ts";
+import { mintVoucher } from "../handlers/mint_voucher.ts";
 import { createRecords } from "../handlers/create_records.ts";
 import { submitTx } from "../handlers/submit_tx.ts";
 import { subscribe } from "../handlers/subscribe.ts";
 import { assert, closeTestKv, ctx, eq, installFetchRouter, key, openTestKv, type Key } from "./helpers.ts";
 
-function accountDoc(holder: Key, promiseHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
   return {
     type: "account",
     holder: holder.pub,
     pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
-    promise: promiseHash,
+    voucher: voucherHash,
   };
 }
 
@@ -26,22 +26,22 @@ Deno.test("fan-out pushes bank-signed notify envelopes to watchers; expiry and f
     const restoreFetch = installFetchRouter(tk.kv, new Map(), pushLog);
 
     try {
-      const promise: Record<string, unknown> = {
-        type: "promise", pubkey: alice.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
+      const voucher: Record<string, unknown> = {
+        type: "voucher", pubkey: alice.pub, ulid: newUlid(), bank: bank.pub, name: "1 logo",
       };
-      const promiseHash = hashDoc(promise);
+      const voucherHash = hashDoc(voucher);
 
-      const issue = accountDoc(alice, promiseHash, "issue");
-      const holding = accountDoc(alice, promiseHash, "holding");
-      const bobAccount = accountDoc(bob, promiseHash, "main");
-      await mintPromise(
-        { promise, debit_account: issue, credit_account: holding, amount: 1 },
+      const issue = accountDoc(alice, voucherHash, "issue");
+      const holding = accountDoc(alice, voucherHash, "holding");
+      const bobAccount = accountDoc(bob, voucherHash, "main");
+      await mintVoucher(
+        { voucher, debit_account: issue, credit_account: holding, amount: 1 },
         ctx(tk.kv, bank, alice.pub),
       );
 
       const createRes = await createRecords(
         {
-          requests: [{ type: "transfer", promise_hash: promiseHash, amount: 1, debit_account_hash: hashDoc(holding), credit_account_hash: hashDoc(bobAccount) }],
+          requests: [{ type: "transfer", voucher_hash: voucherHash, amount: 1, debit_account_hash: hashDoc(holding), credit_account_hash: hashDoc(bobAccount) }],
           docs: [bobAccount],
         },
         ctx(tk.kv, bank, alice.pub),

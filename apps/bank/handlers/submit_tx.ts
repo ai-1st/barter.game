@@ -159,16 +159,16 @@ async function checkRecord(row: RecordRow, ctx: RpcContext): Promise<string | nu
 
   const acct = await ctx.db.getAccount(row.account);
   if (!acct) return `account ${row.account} unknown`;
-  const promiseRow = await ctx.db.getDoc(acct.promise_hash);
-  const promise = promiseRow?.body as { pubkey?: string; limit?: number } | undefined;
-  const isIssuer = promise?.pubkey === acct.holder_pubkey;
+  const voucherRow = await ctx.db.getDoc(acct.voucher_hash);
+  const voucher = voucherRow?.body as { pubkey?: string; limit?: number } | undefined;
+  const isIssuer = voucher?.pubkey === acct.holder_pubkey;
   const balance = Number(acct.balance);
   const amount = Number(row.amount);
 
   if (isIssuer) {
-    // Issuer accounts may go negative up to -promise.limit (if set).
-    if (typeof promise?.limit === "number" && -(balance - amount) > promise.limit) {
-      return `debit would exceed promise.limit ${promise.limit}`;
+    // Issuer accounts may go negative up to -voucher.limit (if set).
+    if (typeof voucher?.limit === "number" && -(balance - amount) > voucher.limit) {
+      return `debit would exceed voucher.limit ${voucher.limit}`;
     }
     return null;
   }
