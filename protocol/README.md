@@ -10,7 +10,7 @@
 >
 > `MASTER-INPUT.md` is the source-of-truth design narrative from the product owner; `scenarios/*.md` are step-by-step interaction traces. `IMPLEMENTATION.md` explains how the reference team built it.
 
-A federated mutual-credit ledger enabling mupli-party barter deals. A deal is a chain of paired credit/debit transfers — one or more holders moving tokens ("vouchers") among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
+A federated mutual-credit ledger enabling multi-party barter deals where parties issue Vouchers for their goods and services and exchange them with others. A deal is a chain of paired credit/debit transfers — one or more holders moving Vouchers among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
 The simplest non-trivial deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, each holder authorizes their own view of it by signing **their own Tx**, and one or more **lead** banks settle first while everyone else follows.
 
@@ -33,22 +33,22 @@ A **transfer** moves a Voucher from one holder to another. The debit holder's ba
 barter.game v1 is built on three behavioral assumptions. They are not enforced by cryptography; they are the social substrate that makes the protocol's risk posture coherent.
 
 1. **Users already know the issuers of the Vouchers they hold.**
-   Discovery is out of band — DM, in-person, group chat. The protocol does not search for trading partners, rate issuers, or verify delivery.
+   Discovery is out of band — DM, in-person, group chat. The protocol does not search for trading partners, rate issuers, or verify goods/service delivery.
 
 2. **Trust is socially enforced.**
    If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate. Recourse is human, not algorithmic.
 
-3. **Bank operators are accountable to their issuers.**
-   Anyone can run a bank, but the issuers who route their Vouchers through it have a real relationship with the operator. An operator can erase its ledger or abort transactions — there is no cryptographic prevention — but it cannot forge a plausible alternative history alone, because every deal requires interlinked signatures from multiple independent parties.
+3. **Bank operators are accountable to their issuers and holders.**
+   Anyone can run a bank, but the issuers who route their Vouchers through it and holders have to trust the operator. An operator can erase its ledger or abort transactions — there is no cryptographic prevention — but it cannot forge a plausible alternative history alone, because every deal requires holder signatures.
 
-### 1.1 v0 openness
+### 1.1 v1 openness
 
 Banks are open by default. The v1 reference posture:
 
 - Banks allow minting **any** voucher that references them.
 - Banks accept new ledger records for new accounts and new vouchers; they only check that the voucher references the bank.
 - Banks accept and store any docs/signatures linked to vouchers that reference this bank, **from anyone** — the sender of a request need not be the doc's owner (counterparties legitimately carry each other's Account docs and relay each other's signatures).
-- All calls to bank APIs are signed by the sender's key. Moderation is **key-blocking**, not gatekeeping: banks MAY refuse service to spammers and abusers based on their pubkey.
+- All calls to bank APIs are signed by the sender's key. Moderation is **key-blocking**, not gatekeeping: banks MAY refuse or rate-limit service to spammers and abusers based on their pubkey.
 
 > **Extensibility:** Implementers MAY add additional trust, reputation, KYC, or audit mechanisms on top of the protocol. Such extensions MUST be backward-compatible: they must not prevent a client and bank from interacting using only the base v1 wire format.
 
@@ -56,27 +56,27 @@ Banks are open by default. The v1 reference posture:
 
 ## 2. Settlement model — direct approval, three waves, lead/follow
 
-A deal executes in three waves: **ready → hold → settle**. Wave 1 (*direct approval*) is driven by the holders; waves 2 and 3 are driven by the **banks themselves** — banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
+A deal executes in three waves: **ready → hold → settle** sanctioned by the holders. Banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
 
 ### 2.0 Three-wave execution model: ready → hold → settle
 
-**1. Ready** — every holder whose accounts are touched by the deal must authorize their part of the deal by signing their own **Tx or Order**. Authorization is independent: Alice can authorize without waiting for Bob. A bank then validates those authorizations and issues a record-level `ready` signature on each of its own Records when it is prepared to proceed. Authorization can come from:
+**1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has authorization from the Holder. Authorization is independent: Alice can authorize without waiting for Bob. Authorization can come from:
 
 - A direct holder `lead` or `follow` signature on the holder's own **Tx**.
 - A matching `Order` doc (see `bank-schema.md`). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance.
 - A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The holder still signs the Tx that references the Offer.
 - An invoice or cheque specialization of an Order or Offer (one side omitted, see `bank-schema.md`).
 
-If a bank sees both a direct Tx signature and a matching Order/Offer for the same Records, either one satisfies the ready gate. For a `lead` Order/Offer, the holder signature may be omitted entirely; the bank executes on the Order/Offer alone.
+If a bank sees both a direct Tx signature and a matching Order/Offer for the same Records, either one satisfies the ready gate. 
 
-A bank's records become **approved** once every Record it owns is bound to a valid authorization and carries the bank's per-record `ready`.
-
-**2. Hold** — once all of a bank's records are `ready`, the bank locks the debit accounts among those records, issues record-level `hold` Signatures, and fans them out. A bank holds when:
+**2. Hold** — once all of a bank's records are `ready`, the bank locks the amount in the debit accounts among those records, issues record-level `hold` Signatures, and fans them out. A bank holds when:
 
 - any holder Tx touching its records is `lead`, **or**
 - every holder Tx touching its records is `follow` AND every predecessor bank whose output those holders depend on has already issued `hold` signatures on its own records.
 
-Holds are per-account and per-bank. A `-32003` conflict means some account is already locked by another in-flight deal; the bank retries on the next event. A client may call `reject` on individual records to abort them.
+The amount being held MUST be either already available in the account or be expected to arrive through a credit record that already has received a "hold" signature. Bank's job is to make sure no overspending occurs. If multiple debits are competing for the same account, preference SHOULD be given to debits that have this account credit in the same Tx.
+
+The bank may call `reject` on individual records and invoke a cascading abortion of the whole deal.
 
 **3. Settle** — settlement is an ordered cascade of record-level signatures, not a single atomic flip:
 
