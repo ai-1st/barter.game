@@ -1,0 +1,112 @@
+[
+  {
+    "name": "empty object",
+    "input": {},
+    "canonical": "{}"
+  },
+  {
+    "name": "single key",
+    "input": {
+      "a": 1
+    },
+    "canonical": "{\"a\":1}"
+  },
+  {
+    "name": "keys sort lexicographically (utf-16 code units)",
+    "input": {
+      "b": 2,
+      "a": 1,
+      "c": 3
+    },
+    "canonical": "{\"a\":1,\"b\":2,\"c\":3}"
+  },
+  {
+    "name": "rfc 8785 keys with non-ascii sort by code unit",
+    "input": {
+      "é": 1,
+      "a": 2,
+      "z": 3
+    },
+    "canonical": "{\"a\":2,\"z\":3,\"é\":1}"
+  },
+  {
+    "name": "nested object keys sort independently",
+    "input": {
+      "outer": {
+        "z": 1,
+        "a": 2
+      }
+    },
+    "canonical": "{\"outer\":{\"a\":2,\"z\":1}}"
+  },
+  {
+    "name": "negative zero collapses to zero",
+    "input": {
+      "n": 0
+    },
+    "canonical": "{\"n\":0}"
+  },
+  {
+    "name": "integer numbers serialize without decimal point",
+    "input": {
+      "n": 42
+    },
+    "canonical": "{\"n\":42}"
+  },
+  {
+    "name": "floats use ecmascript number-to-string",
+    "input": {
+      "n": 1.5
+    },
+    "canonical": "{\"n\":1.5}"
+  },
+  {
+    "name": "true / false / null",
+    "input": {
+      "t": true,
+      "f": false,
+      "n": null
+    },
+    "canonical": "{\"f\":false,\"n\":null,\"t\":true}"
+  },
+  {
+    "name": "string escapes per rfc 8785",
+    "input": {
+      "s": "line1\nline2\ttab\"quote\\back"
+    },
+    "canonical": "{\"s\":\"line1\\nline2\\ttab\\\"quote\\\\back\"}"
+  },
+  {
+    "name": "control chars hex-escaped",
+    "input": {
+      "s": "\u0001\u0002"
+    },
+    "canonical": "{\"s\":\"\\u0001\\u0002\"}"
+  },
+  {
+    "name": "arrays preserve order; nested objects sort",
+    "input": {
+      "list": [
+        3,
+        {
+          "b": 2,
+          "a": 1
+        },
+        1
+      ]
+    },
+    "canonical": "{\"list\":[3,{\"a\":1,\"b\":2},1]}"
+  },
+  {
+    "name": "barter voucher doc shape",
+    "input": {
+      "type": "voucher",
+      "pubkey": "CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza",
+      "ulid": "01J84XCEPZ8B7K3NJ60ZBQX4K3",
+      "bank": "8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N",
+      "name": "1 logo",
+      "integer": true
+    },
+    "canonical": "{\"bank\":\"8QGcXKZj7w9N6yj2HCkXyJZj7w9N6yj2HCkXyJZj7w9N\",\"integer\":true,\"name\":\"1 logo\",\"pubkey\":\"CqPmMncin5kkUJpLgUmy78mfp1GQiaxvDpjwihgnmiza\",\"type\":\"voucher\",\"ulid\":\"01J84XCEPZ8B7K3NJ60ZBQX4K3\"}"
+  }
+]

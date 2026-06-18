@@ -1,0 +1,28 @@
+{
+  "name": "@barter.game/protocol",
+  "version": "0.0.1",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./canonical": "./src/canonical.ts",
+    "./crypto": "./src/crypto.ts",
+    "./schemas": "./src/schemas.ts",
+    "./invite": "./src/invite.ts",
+    "./deal": "./src/deal.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.1.0",
+    "@noble/hashes": "^2.2.0",
+    "@scure/base": "^2.2.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
