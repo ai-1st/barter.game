@@ -2,17 +2,18 @@
 
 Alice runs a consulting business and publishes an invoice so anyone can pay her in Bvoucher. Bob decides to pay the invoice.
 
-An invoice is an **Order with `debit` omitted** — it authorizes an unconditional credit to the holder.
+In the Order-only model, an invoice is a **credit-only Offer**. To execute it, a matchmaker pairs it with a matching **debit-only Offer** (a cheque) from the payer.
 
 ## Setup
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
+- Matchmaker: user keypair `M.pub`.
 - Bbank: bank keypair `Bbank.pub`, issues Bvoucher.
 - Alice has a Bvoucher Account at Bbank.
 - Bob has a Bvoucher Account at Bbank.
 
-## Step 1 — Alice creates and publishes the invoice
+## Step 1 — Alice publishes the invoice Offer
 
 Alice builds an Order with `debit` omitted:
 
@@ -21,7 +22,7 @@ Alice builds an Order with `debit` omitted:
   type: "order",
   pubkey: A.pub,
   ulid: <new>,
-  rate: 1,                       // not strictly needed for a one-sided invoice, but present
+  rate: 1,
   credit: {
     account: <alice-bvoucher-account>,
     voucher: <bvoucher-hash>,
@@ -29,7 +30,7 @@ Alice builds an Order with `debit` omitted:
     max: 1000
   },
   credit_account_limit: 10000,
-  lead: false                    // payer must sign follow; Alice does not lead
+  lead: false                    // payer's debit Offer will lead
 }
 ```
 
@@ -45,70 +46,100 @@ Alice signs the Order and calls `submit_order` on Bbank with `publish_offer: tru
   "pubkey": A.pub, "to": Bbank.pub }
 ```
 
-Bbank stores the Order, verifies Alice's account, derives an Offer hiding Alice's identity and account hash, signs the Offer with Bbank's key, and returns the Offer hash.
+Bbank stores the Order, derives and signs an Offer hiding Alice's identity and account hash, and returns the Offer hash.
 
-## Step 2 — Bob discovers the invoice and pays
+## Step 2 — Bob publishes a cheque Offer
 
-Bob obtains the invoice Offer hash out-of-band (QR code, link, etc.). He wants to pay `10` Bvoucher.
+Bob authorizes Bbank to debit his account to pay the invoice. He builds an Order with `credit` omitted:
 
-Bob calls `create_records` on Bbank with an `offer_match` request:
+```ts
+{
+  type: "order",
+  pubkey: B.pub,
+  ulid: <new>,
+  rate: 1,
+  debit: {
+    account: <bob-bvoucher-account>,
+    voucher: <bvoucher-hash>,
+    min: 1,
+    max: 1000
+  },
+  lead: true                     // payer authorizes debit unconditionally
+}
+```
+
+Bob signs the Order and calls `submit_order` on Bbank with `publish_offer: true`.
+
+Bbank stores the Order, derives and signs a cheque Offer hiding Bob's account hash, and returns the Offer hash.
+
+## Step 3 — Matchmaker pairs the invoice and cheque
+
+The matchmaker discovers both Offers on Bbank's public offer stream.
+
+The matchmaker calls `create_records` with an `offer_pair`:
 
 ```json
 { "method": "create_records",
   "params": {
     "requests": [
-      { "type": "offer_match",
-        "offer_hash": <invoice-offer-hash>,
+      { "type": "offer_pair",
+        "offer1": <invoice-offer-hash>,
+        "offer2": <bob-cheque-offer-hash>,
         "amount": 10,
-        "account_hash": <bob-bvoucher-account> }
+        "deal_id": <deal-id> }
     ]
   },
-  "pubkey": B.pub, "to": Bbank.pub }
+  "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank resolves the Offer to Alice's invoice Order, validates that Bob's account is a valid counterparty (payer) for `10` Bvoucher, and creates:
+Bbank resolves both Offers to Alice's and Bob's Orders, validates the amount against both limits, and creates:
 
 - Debit record: Bob's account, amount `10`.
 - Credit record: Alice's account, amount `10`.
 
-Bbank returns both record bodies.
+Both records are tagged with `deal_id` and `pair`. Bbank returns the record bodies.
 
-## Step 3 — Bob authorizes the payment
+## Step 4 — Matchmaker sends Confirm
 
-Bob builds a Tx referencing the invoice Offer:
+The matchmaker builds a per-bank `Confirm`:
 
 ```ts
 {
-  type: "tx",
-  pubkey: B.pub,
+  type: "confirm",
+  pubkey: M.pub,
   ulid: <new>,
-  records: [<bob-debit-hash>, <alice-credit-hash>],
-  offer: <invoice-offer-hash>
+  deal_id: <deal-id>,
+  bank: Bbank.pub,
+  records: [<bob-debit-hash>, <alice-credit-hash>]
 }
 ```
 
-Bob signs the Tx with `action="follow"` (paying an invoice is a follow action) and submits it to Bbank:
+The matchmaker signs it and submits:
 
 ```json
-{ "method": "submit_tx",
-  "params": {
-    "tx": <bob-tx>,
-    "holder_signature": <bob-follow-sig>
-  },
-  "pubkey": B.pub, "to": Bbank.pub }
+{ "method": "submit_confirm",
+  "params": { "confirm": <confirm> },
+  "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank verifies:
+## Step 5 — Bbank advances
 
-- Bob's signature on the Tx.
-- The Offer is valid, bank-signed, and matches the records.
-- Bob has enough free balance.
+Bbank now has:
 
-Bbank issues per-record `ready` Signatures. Because Bbank is the only bank in the deal, its advance engine then acquires the hold and applies settle automatically.
+- A `Confirm` for this deal.
+- Alice's invoice Order and Bob's cheque Order.
+- Records matching both Orders.
+
+Because Bob's cheque Order is `lead=true`, Bbank issues `ready`, holds Bob's debit account, and issues `hold` Signatures. Since Bbank is the only bank in the deal, it then applies `settle` immediately:
+
+- Bob: `-10` Bvoucher.
+- Alice: `+10` Bvoucher.
 
 ## Result
 
 - Bob's Bvoucher balance decreases by `10`.
 - Alice's Bvoucher balance increases by `10`.
-- Alice never had to sign; the invoice Offer authorized the credit.
+- Alice never had to sign a payment-specific doc; her invoice Offer authorized the credit.
+- Bob authorized the debit via his cheque Offer.
+- The matchmaker never saw Alice's or Bob's account hashes.
 - Bbank has issued verifiable `settle` Signatures on both records.

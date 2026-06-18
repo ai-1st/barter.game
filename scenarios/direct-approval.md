@@ -1,158 +1,233 @@
-# Scenario: Direct Approval Bilateral Swap
+# Scenario: Bilateral Swap via Matchmaker
 
-Alice and Bob swap vouchers directly. Alice gives 1 Avoucher (issued by Abank) and receives 1 Bvoucher (issued by Bbank). Bob gives 1 Bvoucher and receives 1 Avoucher. Alice acts as lead; Bob follows.
+Alice and Bob swap vouchers. Alice gives 1 Avoucher (issued by Abank) and receives 1 Bvoucher (issued by Bbank). Bob gives 1 Bvoucher and receives 1 Avoucher. A matchmaker discovers their public Offers and asks each bank to create the connecting records.
 
 ## Setup
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
+- Matchmaker: user keypair `M.pub`.
 - Abank: bank keypair `Abank.pub`, issues Avoucher.
 - Bbank: bank keypair `Bbank.pub`, issues Bvoucher.
-- All parties already have Accounts for the vouchers they will receive, created via `submit_account`.
+- Alice and Bob already have Accounts at both banks for the vouchers they will receive.
 
-## Phase 0 — Create records
+## Phase 0 — Holders publish intent
 
-Alice (the coordinator) builds two explicit transfers:
+### Alice's Order
 
-1. At Abank: debit Alice's Avoucher account, credit Bob's Avoucher account, amount `1`.
-2. At Bbank: debit Bob's Bvoucher account, credit Alice's Bvoucher account, amount `1`.
+Alice wants to give 1 Avoucher and get 1 Bvoucher.
 
-Alice calls `create_records` on each bank:
-
-```json
-// to Abank
-{ "method": "create_records",
-  "params": {
-    "requests": [
-      { "type": "transfer",
-        "voucher_hash": <avoucher-hash>,
-        "amount": 1,
-        "debit_account_hash": <alice-avoucher-account>,
-        "credit_account_hash": <bob-avoucher-account> }
-    ],
-    "record_subscriptions": [
-      { "record": <alice-avoucher-debit-hash>, "url": <bbank-notify-url> },
-      { "record": <bob-avoucher-credit-hash>, "url": <bbank-notify-url> }
-    ]
-  },
-  "pubkey": A.pub, "to": Abank.pub }
-
-// to Bbank
-{ "method": "create_records",
-  "params": {
-    "requests": [
-      { "type": "transfer",
-        "voucher_hash": <bvoucher-hash>,
-        "amount": 1,
-        "debit_account_hash": <bob-bvoucher-account>,
-        "credit_account_hash": <alice-bvoucher-account> }
-    ],
-    "record_subscriptions": [
-      { "record": <bob-bvoucher-debit-hash>, "url": <abank-notify-url> },
-      { "record": <alice-bvoucher-credit-hash>, "url": <abank-notify-url> }
-    ]
-  },
-  "pubkey": A.pub, "to": Bbank.pub }
-```
-
-Each bank mints a debit/credit record pair, stores them, and returns the record bodies including hashes and `pair` values.
-
-## Phase 1 — Build and submit holder Txs
-
-Alice and Bob each build their own Tx containing the record hashes that touch their accounts.
-
-**Alice's Tx (ATx):**
 ```ts
 {
-  type: "tx",
+  type: "order",
   pubkey: A.pub,
   ulid: <new>,
-  records: [<alice-avoucher-debit-hash>, <alice-bvoucher-credit-hash>]
+  rate: 1,                       // 1 Avoucher / 1 Bvoucher
+  debit: {
+    account: <alice-avoucher-account>,
+    voucher: <avoucher-hash>,
+    min: 1,
+    max: 1
+  },
+  credit: {
+    account: <alice-bvoucher-account>,
+    voucher: <bvoucher-hash>,
+    min: 1,
+    max: 1
+  },
+  lead: true                     // Alice is willing to move first
 }
 ```
 
-**Bob's Tx (BTx):**
+Alice signs the Order and submits it to **both** Abank and Bbank via `submit_order`, including the referenced Account bodies.
+
+Abank derives and publishes an Offer from Alice's Order for the Avoucher side. Bbank derives and publishes an Offer for the Bvoucher side.
+
+### Bob's Order
+
+Bob wants to give 1 Bvoucher and get 1 Avoucher.
+
 ```ts
 {
-  type: "tx",
+  type: "order",
   pubkey: B.pub,
   ulid: <new>,
-  records: [<bob-bvoucher-debit-hash>, <bob-avoucher-credit-hash>]
+  rate: 1,
+  debit: {
+    account: <bob-bvoucher-account>,
+    voucher: <bvoucher-hash>,
+    min: 1,
+    max: 1
+  },
+  credit: {
+    account: <bob-avoucher-account>,
+    voucher: <avoucher-hash>,
+    min: 1,
+    max: 1
+  },
+  lead: false                    // Bob waits for Abank to hold before moving
 }
 ```
 
-Alice signs ATx with `action="lead"`. Bob signs BTx with `action="follow"`.
+Bob signs and submits the Order to both banks. Abank derives a buy-Avoucher Offer; Bbank derives a sell-Bvoucher Offer.
 
-Alice submits ATx to Abank and Bbank:
+## Phase 1 — Matchmaker discovers Offers
 
-```json
-// to Abank
-{ "method": "submit_tx",
-  "params": {
-    "tx": <ATx>,
-    "holder_signature": <alice-lead-sig>
-  },
-  "pubkey": A.pub, "to": Abank.pub }
-
-// to Bbank
-{ "method": "submit_tx",
-  "params": {
-    "tx": <ATx>,
-    "holder_signature": <alice-lead-sig>
-  },
-  "pubkey": A.pub, "to": Bbank.pub }
-```
-
-Abank sees Alice's `lead` signature and that the debit account has enough balance. It issues `ready` on both of its records.
-
-Bbank sees Alice's `lead` signature and that the credit account is within limits. It issues `ready` on both of its records.
-
-Bob submits BTx to Abank and Bbank:
+The matchmaker subscribes to Offer streams from both banks:
 
 ```json
-// to Abank
-{ "method": "submit_tx",
+{ "method": "subscribe",
   "params": {
-    "tx": <BTx>,
-    "holder_signature": <bob-follow-sig>
+    "subscription": {
+      type: "subscription",
+      pubkey: M.pub,
+      ulid: <new>,
+      voucher: <avoucher-hash>,
+      url: <matchmaker-url>
+    }
   },
-  "pubkey": B.pub, "to": Abank.pub }
+  "pubkey": M.pub, "to": Abank.pub }
 
-// to Bbank
-{ "method": "submit_tx",
+{ "method": "subscribe",
   "params": {
-    "tx": <BTx>,
-    "holder_signature": <bob-follow-sig>
+    "subscription": {
+      type: "subscription",
+      pubkey: M.pub,
+      ulid: <new>,
+      voucher: <bvoucher-hash>,
+      url: <matchmaker-url>
+    }
   },
-  "pubkey": B.pub, "to": Bbank.pub }
+  "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Abank and Bbank now have valid holder authorization for every record they own.
+The matchmaker sees:
 
-## Phase 2 — Hold
+- At Abank: Alice's sell-Avoucher Offer and Bob's buy-Avoucher Offer.
+- At Bbank: Bob's sell-Bvoucher Offer and Alice's buy-Bvoucher Offer.
 
-Abank's records are touched by Alice's `lead` Tx. Once all its records are `ready`, Abank's advance engine acquires the hold on Alice's debit account and issues record-level `hold` Signatures.
+## Phase 2 — Matchmaker creates records
 
-Bbank's records are touched only by `follow` Txs. Bbank's advance engine holds only after it sees that Abank has issued `hold` on its own records. Abank's `hold` Signatures reach Bbank via subscription fan-out (or client relay with `notify_signatures` if a push is lost). Bbank then acquires its hold on Bob's debit account and issues its own record-level `hold` Signatures.
+The matchmaker picks a `deal_id` ULID shared across all banks.
 
-## Phase 3 — Settle
+### At Abank
 
-Abank is lead and has no predecessor dependency. Once Abank has observed record-level `hold` Signatures from Bbank on the corresponding records, its advance engine applies the balances:
+```json
+{ "method": "create_records",
+  "params": {
+    "requests": [
+      { "type": "offer_pair",
+        "offer1": <alice-sell-avoucher-offer-hash>,
+        "offer2": <bob-buy-avoucher-offer-hash>,
+        "amount": 1,
+        "deal_id": <deal-id> }
+    ],
+    "record_subscriptions": [
+      { "record": <alice-avoucher-debit-hash>, "url": <abank-notify-url> },
+      { "record": <bob-avoucher-credit-hash>, "url": <abank-notify-url> }
+    ]
+  },
+  "pubkey": M.pub, "to": Abank.pub }
+```
 
-- Alice's Avoucher account: `-1`.
-- Bob's Avoucher account: `+1`.
+Abank resolves both Offers to Alice's and Bob's Orders, verifies the amounts and limits, and mints:
 
-Abank releases holds and issues record-level `settle` Signatures, citing Bbank's `hold` as appropriate in `Signature.seen`.
+- Debit record: Alice's Avoucher account, amount `1`.
+- Credit record: Bob's Avoucher account, amount `1`.
 
-Bbank is follower. Once it has verified Abank's record-level `settle` Signatures (received via fan-out or client relay from `get_record_signatures` → `notify_signatures`), its advance engine applies balances:
+Both records are tagged with `deal_id` and `pair`. Abank returns the record bodies.
 
-- Bob's Bvoucher account: `-1`.
-- Alice's Bvoucher account: `+1`.
+### At Bbank
 
-Bbank releases holds and issues its own `settle` Signatures, citing Abank's settle in `Signature.seen`.
+```json
+{ "method": "create_records",
+  "params": {
+    "requests": [
+      { "type": "offer_pair",
+        "offer1": <bob-sell-bvoucher-offer-hash>,
+        "offer2": <alice-buy-bvoucher-offer-hash>,
+        "amount": 1,
+        "deal_id": <deal-id> }
+    ],
+    "record_subscriptions": [
+      { "record": <bob-bvoucher-debit-hash>, "url": <bbank-notify-url> },
+      { "record": <alice-bvoucher-credit-hash>, "url": <bbank-notify-url> }
+    ]
+  },
+  "pubkey": M.pub, "to": Bbank.pub }
+```
+
+Bbank mints:
+
+- Debit record: Bob's Bvoucher account, amount `1`.
+- Credit record: Alice's Bvoucher account, amount `1`.
+
+## Phase 3 — Matchmaker sends Confirm
+
+The matchmaker builds a per-bank `Confirm` listing the records that bank created:
+
+```ts
+// Confirm to Abank
+{
+  type: "confirm",
+  pubkey: M.pub,
+  ulid: <new>,
+  deal_id: <deal-id>,
+  bank: Abank.pub,
+  records: [<alice-avoucher-debit-hash>, <bob-avoucher-credit-hash>]
+}
+
+// Confirm to Bbank
+{
+  type: "confirm",
+  pubkey: M.pub,
+  ulid: <new>,
+  deal_id: <deal-id>,
+  bank: Bbank.pub,
+  records: [<bob-bvoucher-debit-hash>, <alice-bvoucher-credit-hash>]
+}
+```
+
+The matchmaker signs each Confirm and sends it to the corresponding bank:
+
+```json
+{ "method": "submit_confirm",
+  "params": { "confirm": <abank-confirm> },
+  "pubkey": M.pub, "to": Abank.pub }
+
+{ "method": "submit_confirm",
+  "params": { "confirm": <bbank-confirm> },
+  "pubkey": M.pub, "to": Bbank.pub }
+```
+
+## Phase 4 — Banks advance
+
+Abank now has:
+
+- A `Confirm` for this deal.
+- Alice's and Bob's Orders (submitted earlier).
+- Records matching both Orders.
+
+Because Alice's Order is `lead=true`, Abank issues `ready` on both records, acquires the hold on Alice's debit account, and issues `hold` Signatures.
+
+Bbank also has its `Confirm` and Orders. Because Bob's Order is `lead=false`, Bbank waits until it sees Abank's `hold` Signatures via subscription fan-out (or relay). Once seen, Bbank issues `ready`, holds Bob's debit account, and issues `hold` Signatures.
+
+Abank observes Bbank's `hold` Signatures and settles first, applying the Avoucher deltas:
+
+- Alice: `-1` Avoucher.
+- Bob: `+1` Avoucher.
+
+Abank issues `settle` Signatures.
+
+Bbank observes Abank's `settle` Signatures, cites them in `Signature.seen`, and settles the Bvoucher deltas:
+
+- Bob: `-1` Bvoucher.
+- Alice: `+1` Bvoucher.
 
 ## Result
 
 - Alice owns `+1` Bvoucher at Bbank and owes `-1` Avoucher at Abank.
 - Bob owns `+1` Avoucher at Abank and owes `-1` Bvoucher at Bbank.
-- Both banks have issued verifiable `settle` Signatures, with Bbank's settle proving it saw Abank's settle first.
+- Alice authorized via her signed Order; Bob authorized via his signed Order.
+- The matchmaker never saw Alice's or Bob's account hashes; it only handled Offer hashes and record bodies.
+- Abank settled first; Bbank settled after verifying Abank's settle signature.

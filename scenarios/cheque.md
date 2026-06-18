@@ -2,17 +2,18 @@
 
 Alice writes a cheque authorizing anyone to debit her Avoucher account. Bob presents the cheque to Abank and receives `5` Avoucher.
 
-A cheque is an **Order with `credit` omitted** — it authorizes an unconditional debit from the holder.
+In the Order-only model, a cheque is a **debit-only Offer**. To execute it, a matchmaker pairs it with a matching **credit-only Offer** (an invoice-style claim) from the recipient.
 
 ## Setup
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
+- Matchmaker: user keypair `M.pub`.
 - Abank: bank keypair `Abank.pub`, issues Avoucher.
 - Alice has an Avoucher Account at Abank.
 - Bob has an Avoucher Account at Abank.
 
-## Step 1 — Alice creates and publishes the cheque
+## Step 1 — Alice publishes the cheque Offer
 
 Alice builds an Order with `credit` omitted:
 
@@ -29,7 +30,7 @@ Alice builds an Order with `credit` omitted:
     max: 100
   },
   credit_order_limit: 1000,
-  lead: true                     // cheque authorizes unconditional debit; holder leads
+  lead: true                     // cheque authorizes unconditional debit
 }
 ```
 
@@ -45,67 +46,100 @@ Alice signs the Order and calls `submit_order` on Abank with `publish_offer: tru
   "pubkey": A.pub, "to": Abank.pub }
 ```
 
-Abank stores the Order, derives and signs an Offer, and returns the Offer hash.
+Abank stores the Order, derives and signs a cheque Offer hiding Alice's account hash, and returns the Offer hash.
 
-## Step 2 — Bob discovers and cashes the cheque
+## Step 2 — Bob publishes a receiving Offer
 
-Bob obtains the cheque Offer hash. He wants to cash `5` Avoucher into his account.
+Bob authorizes Abank to credit his account if someone matches his Offer. He builds an Order with `debit` omitted:
 
-Bob calls `create_records` on Abank:
+```ts
+{
+  type: "order",
+  pubkey: B.pub,
+  ulid: <new>,
+  rate: 1,
+  credit: {
+    account: <bob-avoucher-account>,
+    voucher: <avoucher-hash>,
+    min: 1,
+    max: 100
+  },
+  credit_account_limit: 10000,
+  lead: false                    // Alice's cheque Offer leads
+}
+```
+
+Bob signs the Order and calls `submit_order` on Abank with `publish_offer: true`.
+
+Abank stores the Order, derives and signs a credit-only Offer hiding Bob's account hash, and returns the Offer hash.
+
+## Step 3 — Matchmaker pairs the cheque and receiving Offer
+
+The matchmaker discovers both Offers on Abank's public offer stream.
+
+The matchmaker calls `create_records` with an `offer_pair`:
 
 ```json
 { "method": "create_records",
   "params": {
     "requests": [
-      { "type": "offer_match",
-        "offer_hash": <cheque-offer-hash>,
+      { "type": "offer_pair",
+        "offer1": <alice-cheque-offer-hash>,
+        "offer2": <bob-receiving-offer-hash>,
         "amount": 5,
-        "account_hash": <bob-avoucher-account> }
+        "deal_id": <deal-id> }
     ]
   },
-  "pubkey": B.pub, "to": Abank.pub }
+  "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank resolves the Offer to Alice's cheque Order, validates Bob's account as the credit counterparty, and creates:
+Abank resolves both Offers to Alice's and Bob's Orders, validates the amount against both limits, and creates:
 
 - Debit record: Alice's account, amount `5`.
 - Credit record: Bob's account, amount `5`.
 
-## Step 3 — Bob submits the cheque Tx
+Both records are tagged with `deal_id` and `pair`. Abank returns the record bodies.
 
-Bob builds a Tx referencing the cheque Offer:
+## Step 4 — Matchmaker sends Confirm
+
+The matchmaker builds a per-bank `Confirm`:
 
 ```ts
 {
-  type: "tx",
-  pubkey: B.pub,
+  type: "confirm",
+  pubkey: M.pub,
   ulid: <new>,
-  records: [<alice-debit-hash>, <bob-credit-hash>],
-  offer: <cheque-offer-hash>
+  deal_id: <deal-id>,
+  bank: Abank.pub,
+  records: [<alice-debit-hash>, <bob-credit-hash>]
 }
 ```
 
-Because the cheque Offer is `lead=true`, Bob does **not** need to provide a holder signature for Alice. Bob signs the envelope as the caller and submits:
+The matchmaker signs it and submits:
 
 ```json
-{ "method": "submit_tx",
-  "params": {
-    "tx": <bob-tx>
-  },
-  "pubkey": B.pub, "to": Abank.pub }
+{ "method": "submit_confirm",
+  "params": { "confirm": <confirm> },
+  "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank verifies:
+## Step 5 — Abank advances
 
-- The Offer is valid, bank-signed, and `lead=true`.
-- The records match the cheque terms.
-- Alice has enough free balance.
+Abank now has:
 
-Abank issues per-record `ready` Signatures. Because Abank is the only bank in the deal, its advance engine then acquires the hold and applies settle automatically.
+- A `Confirm` for this deal.
+- Alice's cheque Order and Bob's receiving Order.
+- Records matching both Orders.
+
+Because Alice's cheque Order is `lead=true`, Abank issues `ready`, holds Alice's debit account, and issues `hold` Signatures. Since Abank is the only bank in the deal, it then applies `settle` immediately:
+
+- Alice: `-5` Avoucher.
+- Bob: `+5` Avoucher.
 
 ## Result
 
 - Alice's Avoucher balance decreases by `5`.
 - Bob's Avoucher balance increases by `5`.
-- Bob cashed the cheque without Alice's live involvement; the signed cheque Offer was the authorization.
+- Bob cashed the cheque without Alice's live involvement; her signed cheque Offer authorized the debit.
+- The matchmaker never saw Alice's or Bob's account hashes.
 - Abank has issued verifiable `settle` Signatures.
