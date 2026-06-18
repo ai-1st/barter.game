@@ -112,7 +112,27 @@ The matchmaker polls `list_offers` (or uses an off-band offer stream) at both ba
   - Matchmaker's buy-Bvoucher Offer (`lead: true`, credit-only, max `10`).
   - Alice's buy-Bvoucher Offer (`lead: true`, credit side of her Order).
 
-## Phase 2 — Matchmaker creates records
+## Phase 2 — Matchmaker shares Address docs
+
+Before Abank and Bbank can exchange signatures directly, each must store the
+other's signed `Address` doc. The matchmaker fetches each bank's Address with
+`get_address` and submits it to the other bank via `submit_docs`:
+
+```json
+// Fetch Bbank's Address
+{ "method": "get_address",
+  "params": { "pubkey": Bbank.pub },
+  "pubkey": M.pub, "to": Bbank.pub }
+
+// Submit it to Abank
+{ "method": "submit_docs",
+  "params": { "docs": [<bbank-address-doc>] },
+  "pubkey": M.pub, "to": Abank.pub }
+```
+
+Then symmetrically for Abank's Address to Bbank.
+
+## Phase 3 — Matchmaker creates records
 
 The matchmaker chooses a `deal_id` ULID shared across all calls. Each
 `create_records` call creates one debit/credit record pair.
@@ -222,7 +242,7 @@ Bbank creates:
 > only. The aggregate `total_debit / total_credit <= rate` check for Alice's
 > and Bob's two-sided Orders happens later, during the `ready` phase.
 
-## Phase 3 — Matchmaker sends per-bank Confirm
+## Phase 4 — Matchmaker sends per-bank Confirm
 
 The matchmaker builds two `Confirm` docs, one for each bank, listing only the
 records that bank created:
@@ -254,7 +274,7 @@ records that bank created:
 The matchmaker signs each Confirm and submits it to the corresponding bank via
 `submit_confirm`.
 
-## Phase 4 — Three-phase settlement
+## Phase 5 — Three-phase settlement
 
 Banks discover each other via the `bank` fields in the Orders. Alice's Order
 tells Abank that the credit voucher is issued by Bbank; Bob's Order tells Bbank

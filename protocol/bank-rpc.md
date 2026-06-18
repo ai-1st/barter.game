@@ -91,6 +91,7 @@ The bank rejects the request if any of these checks fail.
 | Method | Caller | Side effect |
 |---|---|---|
 | `get_record_signatures(record_hash)` | any → bank | Return the record body and every signature anchored to this record hash. Used by follow parties verifying a deal, by watchers, and by relaying clients. |
+| `get_address(pubkey)` | any → bank | Return the newest signed `Address` doc for the given pubkey, or an error if none is known. Equivalent to `GET /address/<pubkey>`. |
 | `get_voucher(voucher_hash)` | any → bank | Return the Voucher doc body. |
 | `get_account_balance(account_hash)` | holder → issuer bank | Return current and pending balance. |
 | `list_accounts()` | holder → bank | Return all accounts owned by the sender at this bank, with Voucher bodies. |
@@ -133,10 +134,11 @@ The matchmaker builds the deal by discovering compatible Offers and asking each 
 
 1. **Holders publish intent.** Each holder calls `submit_docs` with their Voucher, Account, and Order docs, optionally requesting Offer publication (`publish_offers: [<order-hash>]`). The same Order is submitted to every bank that issues a Voucher on either side of it.
 2. **Matchmaker discovers Offers.** The matchmaker scans `list_offers` (or an off-band offer stream) and picks, for each bank, two Offers on opposite sides of the same Voucher that form a mutually acceptable trade.
-3. **create_records** on every participating bank with the same `offer1` / `offer2` object shape and shared `deal_id`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
-4. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
-5. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
-6. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`). Subscriptions are optional and only useful for watchers or clients that want push delivery.
+3. **Share Address docs.** Before banks can call each other directly, each bank must have a signed `Address` doc for every peer bank. The matchmaker fetches each bank's current Address (`get_address`) and submits it to the other participating banks via `submit_docs`. Banks also accept newer Address docs at any time.
+4. **create_records** on every participating bank with the same `offer1` / `offer2` object shape and shared `deal_id`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
+5. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
+6. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
+7. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`). Subscriptions are optional and only useful for watchers or clients that want push delivery.
 
 Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Offer resolution, per-record ready, hold preconditions, settle proofs, Confirm clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 

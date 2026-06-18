@@ -104,7 +104,27 @@ The matchmaker sees:
 - At Abank: Alice's sell-Avoucher Offer and Bob's buy-Avoucher Offer.
 - At Bbank: Bob's sell-Bvoucher Offer and Alice's buy-Bvoucher Offer.
 
-## Phase 2 — Matchmaker creates records
+## Phase 2 — Matchmaker shares Address docs
+
+Before Abank and Bbank can call each other directly, each must have the
+other's signed `Address` doc. The matchmaker fetches each bank's Address and
+submits it to the other bank via `submit_docs`:
+
+```json
+// Fetch Bbank's Address
+{ "method": "get_address",
+  "params": { "pubkey": Bbank.pub },
+  "pubkey": M.pub, "to": Bbank.pub }
+
+// Submit it to Abank
+{ "method": "submit_docs",
+  "params": { "docs": [<bbank-address-doc>] },
+  "pubkey": M.pub, "to": Abank.pub }
+```
+
+Then symmetrically for Abank's Address to Bbank.
+
+## Phase 3 — Matchmaker creates records
 
 The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_records` at **both** banks with the same nested Offer objects:
 
@@ -161,7 +181,7 @@ Bbank uses `offer1.credit_amount` and `offer2.debit_amount` to create the Bvouch
 - Debit record: Bob's Bvoucher account, amount `1`.
 - Credit record: Alice's Bvoucher account, amount `1`.
 
-## Phase 3 — Matchmaker sends Confirm
+## Phase 4 — Matchmaker sends Confirm
 
 The matchmaker builds a per-bank `Confirm` listing the records that bank created:
 
@@ -199,7 +219,7 @@ The matchmaker signs each Confirm and sends it to the corresponding bank:
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-## Phase 4 — Banks advance
+## Phase 5 — Banks advance
 
 Abank now has:
 

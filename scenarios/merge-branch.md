@@ -89,7 +89,31 @@ OrangeBank derives and publishes two Offers.
 
 BananaBank derives and publishes three Offers.
 
-## Phase 2 — Matchmaker creates records
+## Phase 2 — Matchmaker shares Address docs
+
+Each bank needs the signed `Address` docs of every other bank it may call
+directly. The matchmaker fetches each bank's current Address with
+`get_address` and submits it to the other two banks via `submit_docs`:
+
+```json
+// Fetch AppleBank's Address
+{ "method": "get_address",
+  "params": { "pubkey": AppleBank.pub },
+  "pubkey": M.pub, "to": AppleBank.pub }
+
+// Submit it to OrangeBank and BananaBank
+{ "method": "submit_docs",
+  "params": { "docs": [<applebank-address-doc>] },
+  "pubkey": M.pub, "to": OrangeBank.pub }
+
+{ "method": "submit_docs",
+  "params": { "docs": [<applebank-address-doc>] },
+  "pubkey": M.pub, "to": BananaBank.pub }
+```
+
+The matchmaker repeats this for OrangeBank's Address and BananaBank's Address.
+
+## Phase 3 — Matchmaker creates records
 
 The matchmaker picks a shared `deal_id` ULID. At each bank it makes one
 `create_records` call per debit/credit pair.
@@ -177,7 +201,7 @@ OrangeBank creates one debit record (Anna -1 orange) and one credit record
 BananaBank creates two debit records (Bob -1, -1) and two credit records
 (Alice +1, Carol +1). Bob's `debit_order_limit: 2` allows the cumulative 2.
 
-## Phase 3 — Matchmaker sends Confirm
+## Phase 4 — Matchmaker sends Confirm
 
 The matchmaker builds one `Confirm` per bank listing every record that bank
 created for `deal_id`:
@@ -186,7 +210,7 @@ created for `deal_id`:
 - **OrangeBank Confirm**: `[<anna-debit>, <bob-credit>]`
 - **BananaBank Confirm**: `[<bob-debit-1>, <bob-debit-2>, <alice-credit>, <carol-credit>]`
 
-## Phase 4 — Banks advance
+## Phase 5 — Banks advance
 
 Banks discover peer banks via the `bank` field on each Order side and use the
 Address registry to call each other directly with `notify_signatures` when a
