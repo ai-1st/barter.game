@@ -104,7 +104,7 @@ Address: BaseDoc & {
 }
 ```
 
-Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by submitting a signed Address doc with a newer ULID via `submit_docs`. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (see §5.1); Address docs allow an entity to announce URL changes in a verifiable, self-signed form.
+Banks maintain public directories of Address docs and use them to call each other directly. When a bank learns a peer bank's pubkey (e.g. from the `bank` field in an Order), it looks up the peer's newest `Address` doc to obtain the peer's RPC URL. Anyone MAY update an Address for a pubkey by submitting a signed Address doc with a newer ULID via `submit_docs`. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (see §5.1); Address docs allow an entity to announce URL changes in a verifiable, self-signed form.
 
 > **Invariant:** Address docs are signed by the pubkey they describe (a bank or a user). A newer ULID overrides an older one for the same pubkey.
 
@@ -129,7 +129,7 @@ All RPCs are `POST` to `<bank-url>/rpc` with this body shape:
 - `id` is a ULID claimed in the recipient's replay window.
 - `to` binds the request to this specific recipient. A peer bank with a different pubkey rejects the request even if the URL routes correctly.
 - `sig` is `ed25519(sha256(canonical(envelope minus sig)))`, signed by the private key corresponding to `pubkey`.
-- For holder-facing methods, `pubkey` is the holder's user pubkey. The trade path has no bank-to-bank JSON-RPC calls; Address-directory endpoints are plain HTTP (see `bank-rpc.md`).
+- For holder-facing methods, `pubkey` is the holder's user pubkey. Banks also use the same JSON-RPC envelope when calling each other directly (e.g. `notify_signatures`), using the peer bank's Address doc to discover the URL.
 
 ### 4.1 Replay protection
 

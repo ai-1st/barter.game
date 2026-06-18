@@ -26,6 +26,7 @@ Alice builds an Order with `debit` omitted:
   credit: {
     account: <alice-bvoucher-account>,
     voucher: <bvoucher-hash>,
+    bank: Bbank.pub,
     min: 1,
     max: 1000
   },
@@ -60,6 +61,7 @@ Bob authorizes Bbank to debit his account to pay the invoice. He builds an Order
   debit: {
     account: <bob-bvoucher-account>,
     voucher: <bvoucher-hash>,
+    bank: Bbank.pub,
     min: 1,
     max: 1000
   },
@@ -82,7 +84,7 @@ Bbank stores the Order, derives and signs a cheque Offer hiding Bob's account ha
 
 ## Step 3 — Matchmaker pairs the invoice and cheque
 
-The matchmaker discovers both Offers on Bbank's public offer stream.
+The matchmaker discovers both Offers via `list_offers` (or an off-band offer stream).
 
 The matchmaker calls `create_records`. The invoice Offer has no debit side, so `offer1.debit_amount` is `0`; Bob's cheque Offer has no credit side, so `offer2.credit_amount` is `0`:
 

@@ -73,10 +73,10 @@ Authorization is independent per holder: Alice can submit her Order without wait
 - A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The underlying Order still provides the authorization.
 - An invoice or cheque specialization of an Order or Offer (one side omitted, see `bank-schema.md`).
 
-**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records are approved. A bank holds its own records in a deal when all of its records are `ready` and:
+**2. Hold** — `ready` signatures are sent directly to peer banks (or relayed by any party), so every bank can see which records are approved. A bank holds its own records in a deal when all of its records are `ready` and:
 
 - the authorizing Order has `lead=true`, **or**
-- the authorizing Order has `lead=false` and every credit record from other banks that this Order depends on has a `hold` signature already.
+- the authorizing Order has `lead=false` and the lead bank's `hold` signatures on the corresponding records have been verified.
 
 A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
@@ -134,14 +134,15 @@ The **initiating client** is the one party that legitimately knows the whole dea
 
 > **Invariant:** This visibility boundary is load-bearing. Any implementation that lets a bank see another bank's record bodies violates the protocol.
 
-### 2.4 Signature fan-out — Subscriptions, push, and relay
+### 2.4 Signature fan-out — Bank-to-bank direct, relay, and optional subscriptions
 
-Banks advance on **signatures**, wherever they come from. The delivery topology is the initiator's choice, expressed as **Subscription docs** (see `bank-schema.md`) sent to the banks:
+Banks advance on **signatures**, wherever they come from. In the reference flow, banks discover each other via the `bank` fields in Orders and call each other directly using the Address registry:
 
-- **Bank-to-bank push** (the reference default): the initiator cross-subscribes the participating banks to each other's record signatures. When a bank creates a Signature matching a watched hash, it POSTs a bank-signed `notify_signatures` envelope to the subscription's URL, fire-and-forget.
-- **Client relay** (the floor): signatures carry their own authority — signer pubkey plus an ed25519 signature over the doc — so *anyone* may deliver them. A client can read one bank's signatures (`get_record_signatures`) and hand them to another (`notify_signatures`). A lost push is recovered by relay.
+- **Bank-to-bank direct** (the reference default): a follow bank looks up the lead bank's `Address` doc, then calls its `notify_signatures` endpoint with the signed `hold` / `settle` signatures it needs. The receiver verifies the signatures independently and advances its own records.
+- **Client relay** (the floor): signatures carry their own authority — signer pubkey plus an ed25519 signature over the doc — so *anyone* may deliver them. A client can read one bank's signatures (`get_record_signatures`) and hand them to another (`notify_signatures`). A lost direct call is recovered by relay.
+- **Subscriptions** (optional): clients or watchers MAY create `Subscription` docs to receive push notifications of new signatures. Banks do **not** rely on subscriptions for settlement.
 
-Every received-and-verified signature re-evaluates the bank's advance engine for the records it touches. Banks never *depend* on calling each other; push is an optimization over relay.
+Every received-and-verified signature re-evaluates the bank's advance engine for the records it touches.
 
 ---
 
@@ -181,7 +182,7 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
 | Coordinator pattern | **Matchmaker-orchestrated**: a matchmaker calls `create_records` on each bank, then sends a per-bank `Confirm`; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders/Offers + the per-bank `Confirm` + predecessor bank pubkeys; no bank sees the full deal | **Yes** |
+| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders/Offers + the per-bank `Confirm` + peer bank pubkeys from `Order.bank`; no bank sees the full deal | **Yes** |
 | Record creation | Only the matchmaker may create records, and only via `offer_pair` requests | **Yes** |
 | Advance gate | A bank advances records only after receiving a `Confirm` addressed to it and valid Orders for its records | **Yes** |
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |

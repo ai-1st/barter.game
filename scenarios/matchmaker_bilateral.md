@@ -42,8 +42,8 @@ banks via `submit_docs`, requesting Offer publication.
   pubkey: A.pub,
   ulid: <new>,
   rate: 100 / 90,                 // 100 Avoucher = 90 Bvoucher
-  debit:  { account: <alice-avoucher-account>, voucher: <avoucher-hash>, min: 1, max: 100 },
-  credit: { account: <alice-bvoucher-account>, voucher: <bvoucher-hash>, min: 90, max: 90 },
+  debit:  { account: <alice-avoucher-account>, voucher: <avoucher-hash>, bank: Abank.pub, min: 1, max: 100 },
+  credit: { account: <alice-bvoucher-account>, voucher: <bvoucher-hash>, bank: Bbank.pub, min: 90, max: 90 },
   lead: true
 }
 ```
@@ -56,8 +56,8 @@ banks via `submit_docs`, requesting Offer publication.
   pubkey: B.pub,
   ulid: <new>,
   rate: 100 / 90,                 // 100 Bvoucher = 90 Avoucher
-  debit:  { account: <bob-bvoucher-account>, voucher: <bvoucher-hash>, min: 1, max: 100 },
-  credit: { account: <bob-avoucher-account>, voucher: <avoucher-hash>, min: 90, max: 90 },
+  debit:  { account: <bob-bvoucher-account>, voucher: <bvoucher-hash>, bank: Bbank.pub, min: 1, max: 100 },
+  credit: { account: <bob-avoucher-account>, voucher: <avoucher-hash>, bank: Abank.pub, min: 90, max: 90 },
   lead: false
 }
 ```
@@ -71,7 +71,7 @@ banks via `submit_docs`, requesting Offer publication.
   pubkey: M.pub,
   ulid: <new>,
   rate: 1,                        // informational for a one-sided order
-  credit: { account: <matchmaker-avoucher-account>, voucher: <avoucher-hash>, min: 1, max: 10 },
+  credit: { account: <matchmaker-avoucher-account>, voucher: <avoucher-hash>, bank: Abank.pub, min: 1, max: 10 },
   credit_order_limit: 10,
   lead: true
 }
@@ -82,7 +82,7 @@ banks via `submit_docs`, requesting Offer publication.
   pubkey: M.pub,
   ulid: <new>,
   rate: 1,
-  credit: { account: <matchmaker-bvoucher-account>, voucher: <bvoucher-hash>, min: 1, max: 10 },
+  credit: { account: <matchmaker-bvoucher-account>, voucher: <bvoucher-hash>, bank: Bbank.pub, min: 1, max: 10 },
   credit_order_limit: 10,
   lead: true
 }
@@ -101,7 +101,7 @@ Each submission includes the referenced Account docs:
 
 ## Phase 1 — Matchmaker discovers Offers
 
-The matchmaker subscribes to Offer streams from both banks and sees:
+The matchmaker polls `list_offers` (or uses an off-band offer stream) at both banks and sees:
 
 - At Abank:
   - Alice's sell-Avoucher Offer (`lead: true`, debit `100`, credit `90` Bvoucher implied).
@@ -256,8 +256,11 @@ The matchmaker signs each Confirm and submits it to the corresponding bank via
 
 ## Phase 4 — Three-phase settlement
 
-The matchmaker also sets up cross-bank subscriptions so each bank receives the
-other bank's signatures:
+Banks discover each other via the `bank` fields in the Orders. Alice's Order
+tells Abank that the credit voucher is issued by Bbank; Bob's Order tells Bbank
+that the credit voucher is issued by Abank. Each bank looks up the peer's
+`Address` doc in the registry and calls the peer's `notify_signatures` endpoint
+directly.
 
 - Abank pushes its `ready`, `hold`, and `settle` signatures to Bbank's
   `notify_signatures` endpoint.
@@ -371,13 +374,14 @@ would reciprocate. The protocol records the choice; it does not enforce it.
 
 ### 3. Matchmaker withholds or forges signatures
 
-If the matchmaker does not relay Abank's `hold`/`settle` signatures to Bbank,
-Bbank cannot advance. Because signatures are self-verifying, anyone can relay
-them, but in practice Bbank's notify URL may only be known to the matchmaker.
-A malicious matchmaker can stall the deal indefinitely after record creation.
+Banks call each other directly using the Address registry, so the matchmaker is
+not needed to relay signatures. If direct bank-to-bank delivery fails, any
+party can still relay signatures by hand (`get_record_signatures` →
+`notify_signatures`). A malicious matchmaker can no longer stall the deal by
+withholding signatures, because Bbank can look up Abank's Address itself from
+`credit.bank` on Bob's Order.
 
-A matchmaker cannot forge Abank's signatures (it lacks Abank's private key),
-but it can censor them.
+A matchmaker cannot forge Abank's signatures (it lacks Abank's private key).
 
 ### 4. Foreign Offer replay across multiple deals
 

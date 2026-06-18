@@ -43,14 +43,14 @@ them to every bank that issues a Voucher the Order touches, using
 
 - **Alice** submits a sell-apple cheque Order:
   ```ts
-  { type: "order", debit: { account: <alice-apple>, voucher: <apple>, min: 1, max: 1 } }
+  { type: "order", debit: { account: <alice-apple>, voucher: <apple>, bank: AppleBank.pub, min: 1, max: 1 } }
   ```
 - **Carol** submits an identical sell-apple cheque Order.
 - **Anna** submits a buy-apple invoice Order:
   ```ts
   {
     type: "order",
-    credit: { account: <anna-apple>, voucher: <apple>, min: 1, max: 1 },
+    credit: { account: <anna-apple>, voucher: <apple>, bank: AppleBank.pub, min: 1, max: 1 },
     credit_order_limit: 2,
     credit_account_limit: 2
   }
@@ -62,11 +62,11 @@ AppleBank derives and publishes three Offers.
 
 - **Anna** submits a sell-orange cheque Order:
   ```ts
-  { type: "order", debit: { account: <anna-orange>, voucher: <orange>, min: 1, max: 1 }, debit_order_limit: 1 }
+  { type: "order", debit: { account: <anna-orange>, voucher: <orange>, bank: OrangeBank.pub, min: 1, max: 1 }, debit_order_limit: 1 }
   ```
 - **Bob** submits a buy-orange invoice Order:
   ```ts
-  { type: "order", credit: { account: <bob-orange>, voucher: <orange>, min: 1, max: 1 }, credit_order_limit: 1 }
+  { type: "order", credit: { account: <bob-orange>, voucher: <orange>, bank: OrangeBank.pub, min: 1, max: 1 }, credit_order_limit: 1 }
   ```
 
 OrangeBank derives and publishes two Offers.
@@ -77,13 +77,13 @@ OrangeBank derives and publishes two Offers.
   ```ts
   {
     type: "order",
-    debit: { account: <bob-banana>, voucher: <banana>, min: 1, max: 1 },
+    debit: { account: <bob-banana>, voucher: <banana>, bank: BananaBank.pub, min: 1, max: 1 },
     debit_order_limit: 2
   }
   ```
 - **Alice** submits a buy-banana invoice Order:
   ```ts
-  { type: "order", credit: { account: <alice-banana>, voucher: <banana>, min: 1, max: 1 }, credit_order_limit: 1 }
+  { type: "order", credit: { account: <alice-banana>, voucher: <banana>, bank: BananaBank.pub, min: 1, max: 1 }, credit_order_limit: 1 }
   ```
 - **Carol** submits an identical buy-banana invoice Order.
 
@@ -188,15 +188,20 @@ created for `deal_id`:
 
 ## Phase 4 — Banks advance
 
-Once each bank has the `Confirm` and the Orders bound to its records, the
-advance engine runs:
+Banks discover peer banks via the `bank` field on each Order side and use the
+Address registry to call each other directly with `notify_signatures` when a
+lead/follow chain exists. In this merge/branch scenario the three banks have
+no inter-bank dependencies, so each bank settles independently once its own
+records are ready.
 
-1. **Ready**: every record is covered by a valid Order.
+1. **Ready**: every record is covered by a valid Order. For two-sided Orders,
+   the bank checks the aggregate `total_debit / total_credit <= rate` across
+   all deal records matched to that Order.
 2. **Hold**: debit accounts are locked. Because Bob has **two** banana debit
    records in the same deal, BananaBank aggregates them into a single hold of
    2 bananas on Bob's account. Alice and Carol each have one apple debit
    record, so AppleBank locks each of their accounts for 1 apple.
-3. **Settle**: all preconditions are local, so each bank applies its deltas
+3. **Settle**: all local preconditions are met, so each bank applies its deltas
    and releases the holds.
 
 ## Why the protocol handles this naturally

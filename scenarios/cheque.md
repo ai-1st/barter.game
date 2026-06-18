@@ -26,6 +26,7 @@ Alice builds an Order with `credit` omitted:
   debit: {
     account: <alice-avoucher-account>,
     voucher: <avoucher-hash>,
+    bank: Abank.pub,
     min: 1,
     max: 100
   },
@@ -60,6 +61,7 @@ Bob authorizes Abank to credit his account if someone matches his Offer. He buil
   credit: {
     account: <bob-avoucher-account>,
     voucher: <avoucher-hash>,
+    bank: Abank.pub,
     min: 1,
     max: 100
   },
@@ -83,7 +85,7 @@ Abank stores the Order, derives and signs a credit-only Offer hiding Bob's accou
 
 ## Step 3 — Matchmaker pairs the cheque and receiving Offer
 
-The matchmaker discovers both Offers on Abank's public offer stream.
+The matchmaker discovers both Offers via `list_offers` (or an off-band offer stream).
 
 The matchmaker calls `create_records`. Alice's cheque Offer has no credit side, so `offer1.credit_amount` is `0`; Bob's receiving Offer has no debit side, so `offer2.debit_amount` is `0`:
 

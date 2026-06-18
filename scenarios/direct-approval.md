@@ -26,12 +26,14 @@ Alice wants to give 1 Avoucher and get 1 Bvoucher.
   debit: {
     account: <alice-avoucher-account>,
     voucher: <avoucher-hash>,
+    bank: Abank.pub,
     min: 1,
     max: 1
   },
   credit: {
     account: <alice-bvoucher-account>,
     voucher: <bvoucher-hash>,
+    bank: Bbank.pub,
     min: 1,
     max: 1
   },
@@ -65,12 +67,14 @@ Bob wants to give 1 Bvoucher and get 1 Avoucher.
   debit: {
     account: <bob-bvoucher-account>,
     voucher: <bvoucher-hash>,
+    bank: Bbank.pub,
     min: 1,
     max: 1
   },
   credit: {
     account: <bob-avoucher-account>,
     voucher: <avoucher-hash>,
+    bank: Abank.pub,
     min: 1,
     max: 1
   },
@@ -93,33 +97,7 @@ Abank derives a buy-Avoucher Offer; Bbank derives a sell-Bvoucher Offer.
 
 ## Phase 1 — Matchmaker discovers Offers
 
-The matchmaker subscribes to Offer streams from both banks:
-
-```json
-{ "method": "subscribe",
-  "params": {
-    "subscription": {
-      type: "subscription",
-      pubkey: M.pub,
-      ulid: <new>,
-      voucher: <avoucher-hash>,
-      url: <matchmaker-url>
-    }
-  },
-  "pubkey": M.pub, "to": Abank.pub }
-
-{ "method": "subscribe",
-  "params": {
-    "subscription": {
-      type: "subscription",
-      pubkey: M.pub,
-      ulid: <new>,
-      voucher: <bvoucher-hash>,
-      url: <matchmaker-url>
-    }
-  },
-  "pubkey": M.pub, "to": Bbank.pub }
-```
+The matchmaker polls `list_offers` (or uses an off-band offer stream) at both banks. Subscriptions to Offer streams are optional and not required for settlement.
 
 The matchmaker sees:
 
@@ -146,11 +124,7 @@ The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_
       "debit_amount": 1,
       "credit_amount": 1
     },
-    "deal_id": <deal-id>,
-    "record_subscriptions": [
-      { "record": <alice-avoucher-debit-hash>, "url": <abank-notify-url> },
-      { "record": <bob-avoucher-credit-hash>, "url": <abank-notify-url> }
-    ]
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
 ```
@@ -177,11 +151,7 @@ The matchmaker makes the same call at Bbank:
       "debit_amount": 1,
       "credit_amount": 1
     },
-    "deal_id": <deal-id>,
-    "record_subscriptions": [
-      { "record": <bob-bvoucher-debit-hash>, "url": <bbank-notify-url> },
-      { "record": <alice-bvoucher-credit-hash>, "url": <bbank-notify-url> }
-    ]
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
 ```
@@ -239,9 +209,9 @@ Abank now has:
 
 Because Alice's Order is `lead=true`, Abank issues `ready` on both records, acquires the hold on Alice's debit account, and issues `hold` Signatures.
 
-Bbank also has its `Confirm` and Orders. Because Bob's Order is `lead=false`, Bbank waits until it sees Abank's `hold` Signatures via subscription fan-out (or relay). Once seen, Bbank issues `ready`, holds Bob's debit account, and issues `hold` Signatures.
+Bbank also has its `Confirm` and Orders. Bob's Order includes `credit.bank = Abank.pub`, so Bbank looks up Abank's `Address` doc and calls Abank's `notify_signatures` endpoint directly. Because Bob's Order is `lead=false`, Bbank waits until it has verified Abank's `hold` Signatures. Once seen, Bbank issues `ready`, holds Bob's debit account, and issues `hold` Signatures.
 
-Abank observes Bbank's `hold` Signatures and settles first, applying the Avoucher deltas:
+Abank learns Bbank's URL from `debit.bank = Bbank.pub` on Alice's Order (or from Bob's Order) and calls Bbank's `notify_signatures` directly. Abank observes Bbank's `hold` Signatures and settles first, applying the Avoucher deltas:
 
 - Alice: `-1` Avoucher.
 - Bob: `+1` Avoucher.

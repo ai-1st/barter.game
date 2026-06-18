@@ -4,7 +4,7 @@ This file defines the banking entities and the ledger invariants that operate on
 
 - `Voucher`, `Account`
 - `Record`, `Order`, `Offer`, `Confirm`
-- `Subscription`, `RecordSubscription`
+- `Subscription` (optional)
 - Per-record, per-bank state machine
 - Concurrency and balance semantics
 
@@ -99,12 +99,14 @@ Order: BaseDoc & {
   debit?: {
     account: Base58SHA256;  // account to debit
     voucher: Base58SHA256;  // voucher being given
+    bank: Base58PubKey;     // the bank of the voucher
     min: number;            // minimum amount to debit per match; prevents fragmentation
     max: number;            // maximum amount to debit per match
   };
   credit?: {
     account: Base58SHA256;  // account to credit
     voucher: Base58SHA256;  // voucher being received
+    bank: Base58PubKey;     // the bank of the voucher
     min: number;            // minimum amount to credit per match; prevents fragmentation
     max: number;            // maximum amount to credit per match
   };
@@ -124,9 +126,9 @@ When a bank receives an Order, it MUST validate the `rate`:
 - `rate` is the **maximum acceptable ratio of debit voucher to credit voucher** for the whole deal. Before issuing `ready` on any record tied to a two-sided Order, the bank aggregates **all records of the deal** matched to that Order and verifies that `total_debit / total_credit <= rate` (within the bank's rounding policy). It does not enforce the rate on individual record pairs or on one-sided Orders.
 - If the Order is one-sided (invoice or cheque), `rate` is informational and MUST still be positive.
 
-An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. For example, an Order that says "give Alice-coin, get Bob-coin" is submitted to both Alice's bank and Bob's bank.
+An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. The `bank` field on each side tells a bank which bank issues the other voucher, so it can discover the counterparty's Address in the registry and validate that bank's signatures without seeing the foreign Voucher doc.
 
-**`lead` flag.** `lead: true` means the holder authorizes their bank to act as the **lead party** in any deal where this Order is matched: the lead bank may hold and settle its records before peer banks have locked or settled. `lead: false` means the holder's bank is a **follower**: it must wait for the lead bank's `hold` signature before locking its own debit accounts, and for the lead bank's `settle` signature before settling. A bank learns which peer bank is lead by inspecting the `lead` flag on the Orders it has stored; in a two-bank swap, the bank whose holder's Order is `lead=true` is the lead bank.
+**`lead` flag.** `lead: true` means the holder authorizes their bank to act as the **lead party** in any deal where this Order is matched: the lead bank may hold and settle its records before peer banks have locked or settled. `lead: false` means the holder's bank is a **follower**: it must wait for the lead bank's `hold` signature before locking its own debit accounts, and for the lead bank's `settle` signature before settling. A bank learns which peer bank is lead by inspecting the `lead` flag and the side `bank` fields on the Orders it has stored; in a two-bank swap, the bank whose holder's Order is `lead=true` is the lead bank.
 
 **Specializations.** Omitting one side produces the two authorization shortcuts. These are not separate doc types — they are Orders with a missing side:
 
@@ -169,11 +171,13 @@ Offer: BaseDoc & {
   rate: number;             // debit_amount / credit_amount
   debit?: {
     voucher: Base58SHA256;  // voucher being given
+    bank: Base58PubKey;     // bank that issues the debit voucher
     min: number;            // minimum amount to debit per match
     max: number;            // maximum amount to debit per match
   };
   credit?: {
     voucher: Base58SHA256;  // voucher being received
+    bank: Base58PubKey;     // bank that issues the credit voucher
     min: number;            // minimum amount to credit per match
     max: number;            // maximum amount to credit per match
   };
@@ -215,7 +219,7 @@ The matchmaker sends a different `Confirm` to each participating bank. A bank ne
 
 ### 1.7 Subscription
 
-A persistent request for a bank to push signatures that match a filter to a given URL.
+An optional, persistent request for a bank to push signatures that match a filter to a given URL. Subscriptions are **not required for settlement**; banks discover each other via `Order.bank` and the Address registry and call each other directly.
 
 ```ts
 Subscription: BaseDoc & {
@@ -229,20 +233,7 @@ Subscription: BaseDoc & {
 
 When the bank issues or receives a Signature that matches a Subscription, it POSTs a bank-signed `notify_signatures` envelope to `url` fire-and-forget. The receiver verifies the bank signature and the contained Signatures independently.
 
-### 1.8 RecordSubscription
 
-When creating records, the proposing client MAY supply a list of lightweight **RecordSubscription** objects so the bank can immediately fan out signatures on the freshly minted records. A RecordSubscription is not a content-addressed doc; it is a one-off routing hint used only at record-creation time.
-
-```ts
-RecordSubscription: {
-  record: Base58SHA256;  // hash of the Record to watch
-  url: string;            // URL where new signatures on the record should be published
-}
-```
-
-On receiving a `create_records` call, the bank MAY turn each `RecordSubscription` into a persistent `Subscription` doc (§1.7) for the requested record. Either way, signatures issued for that record are pushed to the URL. For broader or longer-lived fan-out, clients SHOULD use the `subscribe` method directly.
-
----
 
 ## 2. State machine (per-record, per-bank)
 

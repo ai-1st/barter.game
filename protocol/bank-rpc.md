@@ -21,7 +21,7 @@ All RPCs are `POST` to `<bank-url>/rpc` with the envelope shape defined in [`bas
 
 The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to subscribers.
 
-The API surface below is intentionally small. Wave 1 (ready) is driven by matchmaker calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and matchmaker `submit_confirm`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied, either because a new signature arrived via push/relay or because a client re-called `submit_docs`, `submit_confirm`, or `notify_signatures`.
+The API surface below is intentionally small. Wave 1 (ready) is driven by matchmaker calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and matchmaker `submit_confirm`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied. Banks learn each other's URLs from the Address registry and call each other directly; subscriptions are optional and not required for settlement.
 
 ### 2.1 Doc submission
 
@@ -34,14 +34,13 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by matchm
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `create_records({ offer1, offer2, deal_id, record_subscriptions? })` | matchmaker → each bank | Resolve the two Offers; mint the single debit/credit record pair this bank is responsible for; tag it with `deal_id`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
+| `create_records({ offer1, offer2, deal_id })` | matchmaker → each bank | Resolve the two Offers; mint the single debit/credit record pair this bank is responsible for; tag it with `deal_id`; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
 
 ```ts
 create_records(params: {
   offer1: { hash, debit_amount, credit_amount };
   offer2: { hash, debit_amount, credit_amount };
   deal_id: ULID;
-  record_subscriptions?: RecordSubscription[];
 })
 ```
 
@@ -84,8 +83,8 @@ The bank rejects the request if any of these checks fail.
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `subscribe(subscription)` | creator → bank | Validate (see `bank-schema.md` §1.7; `subscription.pubkey` = sender); store the doc and its watch keys. |
-| `notify_signatures(signatures)` | peer bank or any relayer → bank | Verify each signature against its signer pubkey; store the valid ones; re-run the advance engine for every deal they touch. Invalid entries are skipped, not fatal. |
+| `subscribe(subscription)` | creator → bank | Optional. Validate (see `bank-schema.md` §1.7; `subscription.pubkey` = sender); store the doc and its watch keys. Useful for clients/watchers that want push delivery, but banks do not rely on subscriptions to settle. |
+| `notify_signatures(signatures)` | peer bank (direct) or any relayer → bank | Verify each signature against its signer pubkey; store the valid ones; re-run the advance engine for every deal they touch. Invalid entries are skipped, not fatal. |
 
 ### 2.4 Read
 
@@ -134,10 +133,10 @@ The matchmaker builds the deal by discovering compatible Offers and asking each 
 
 1. **Holders publish intent.** Each holder calls `submit_docs` with their Voucher, Account, and Order docs, optionally requesting Offer publication (`publish_offers: [<order-hash>]`). The same Order is submitted to every bank that issues a Voucher on either side of it.
 2. **Matchmaker discovers Offers.** The matchmaker scans `list_offers` (or an off-band offer stream) and picks, for each bank, two Offers on opposite sides of the same Voucher that form a mutually acceptable trade.
-3. **create_records** on every participating bank with the same `offer1` / `offer2` object shape and shared `deal_id`, plus optional `record_subscriptions`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
+3. **create_records** on every participating bank with the same `offer1` / `offer2` object shape and shared `deal_id`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
 4. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
-5. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met.
-6. **Watch and relay.** Follow banks subscribe to predecessor bank signatures. If a push is lost, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`).
+5. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
+6. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`). Subscriptions are optional and only useful for watchers or clients that want push delivery.
 
 Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Offer resolution, per-record ready, hold preconditions, settle proofs, Confirm clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 
