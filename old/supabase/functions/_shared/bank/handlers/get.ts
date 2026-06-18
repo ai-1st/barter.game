@@ -29,7 +29,7 @@ export const getAccountBalance: Handler = async (params, ctx) => {
   return {
     account_hash: accountRow.account_hash,
     voucher_hash: accountRow.voucher_hash,
-    pocket_hash: accountRow.pocket_hash,
+    account_hash: accountRow.account_hash,
     holder_pubkey: accountRow.holder_pubkey,
     balance: accountRow.balance,
   };

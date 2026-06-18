@@ -69,10 +69,10 @@ A deal executes in three waves: **ready → hold → settle** sanctioned by the 
 
 If a bank sees both a direct Tx signature and a matching Order/Offer for the same Records, either one satisfies the ready gate. 
 
-**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Tx have been approved. A bank holds its own records in a Tx when all of its own records in that Tx are `ready` and:
+**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Tx have been approved. A bank holds its own records in a Tx when all of the records in that Tx are `ready` and:
 
 - the Tx is authorized as `lead`, **or**
-- the Tx is authorized as `follow` and every predecessor bank whose output this Tx depends on has already issued `hold` signatures for its own records.
+- the Tx is authorized as `follow` and every credit record in this Tx from other banks has a `hold` signature already
 
 A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
@@ -81,7 +81,7 @@ A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
 The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Tx.
 
-If a record cannot be held — because its debit is uncovered, the account is unknown, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
+If a record cannot be held — because its debit is uncovered, the account is unknown, `reject` received for any record in the Tx, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
 
 **3. Settle** — settlement is an ordered cascade of record-level signatures, not a single atomic flip:
 

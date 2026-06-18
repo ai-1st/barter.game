@@ -24,7 +24,7 @@ The schema lives in code (`apps/bank/db.ts`). Per the v1 policy, demo banks are 
 
 ### `docs` — content-addressed signed-doc archive
 
-Every signed doc the bank has ever seen, keyed by its content hash. This is the bank's eternal append-only history for content-addressed docs: Voucher, Account, Tx, Signature, Order, Subscription, and Address. Ledger records are NOT stored here (they live under `ledger_records`), and **Pocket bodies never reach a bank** — accounts reference pockets by opaque hash.
+Every signed doc the bank has ever seen, keyed by its content hash. This is the bank's eternal append-only history for content-addressed docs: Voucher, Account, Tx, Signature, Order, Subscription, and Address. Ledger records are NOT stored here (they live under `ledger_records`), and **Account bodies never reach a bank** — accounts reference accounts by opaque hash.
 
 | Key | Value shape |
 |---|---|
@@ -49,7 +49,7 @@ Rows are created **lazily** — accounts are implicit; the row appears (at balan
 
 | Key | Value shape |
 |---|---|
-| `[bankPubkey, "accounts", accountHash]` | `{ account_hash, bank_pubkey, voucher_hash, pocket_hash, holder_pubkey, balance }` |
+| `[bankPubkey, "accounts", accountHash]` | `{ account_hash, bank_pubkey, voucher_hash, account_hash, holder_pubkey, balance }` |
 
 - `balance` can go negative. That is the mutual-credit lifeblood: issuers go negative when they mint (the mint debits their issue account), holders are positive. Sum across every account for a given Voucher equals zero.
 - The old `pending` / `acknowledged` columns are gone: there is no account-acknowledgement step in the direct-approval model — a holder signing a Tx containing a credit IS their acceptance.
@@ -216,7 +216,7 @@ These are not enforced by KV alone; they live in the bank handlers and the advan
 - **Bank-minted records**: `mint_voucher` and `create_records` are the only paths that create `ledger_records` rows. The bank assigns ULIDs and the mandatory `pair_ulid`. Clients never create record bodies.
 - **Sum invariant per Voucher**: for any `voucher_hash`, the sum of `balance` across all accounts at the issuing bank equals zero. Value only moves in debit/credit pairs (the mint included), so the invariant holds structurally.
 - **Issuer-only Vouchers**: a Voucher's `bank` field equals the pubkey of the bank that stored it; no bank stores Vouchers issued by another bank.
-- **No Pocket bodies**: doc intake rejects `type: "pocket"` outright.
+- **No Account bodies**: doc intake rejects `type: "account"` outright.
 - **One active hold per account**: the single-key atomic check-and-set on `[bankPubkey, "holds", accountHash]` enforces this.
 - **`submit_tx` preconditions**: every record the bank owns in `tx.records` must sit on an account whose holder is `tx.pubkey`, belong to a single deal, and not be bound to a different Tx. The per-record approve policy: credits always approve; non-issuer debits require `balance − active holds − amount ≥ 0`; issuer debits are bounded only by `Voucher.limit`.
 - **Settle preconditions** (advance engine): leg is `held`; a lead has observed `hold` signatures from every other bank in `banks`; a follower has verified `settle` signatures from every predecessor and cites them in `seen`. Settling is idempotent-by-state — a leg's deltas are never applied twice.

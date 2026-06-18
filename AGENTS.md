@@ -69,7 +69,7 @@ barter.game/
 │       │   ├── index.ts      # CLI entrypoint (command router)
 │       │   ├── client.ts     # HTTP RPC client
 │       │   ├── profile.ts    # ~/.barter/profile.json read/write
-│       │   ├── docstore.ts   # ~/.barter/docs/ — client-held docs; Pocket bodies never leave
+│       │   ├── docstore.ts   # ~/.barter/docs/ — client-held docs; Account bodies never leave
 │       │   ├── dealstate.ts  # ~/.barter/deals/ — initiator's deal state, keyed by deal ULID
 │       │   ├── orchestrate.ts # createRecordsAndLead / submitFollow / relayAll
 │       │   └── commands/     # init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
@@ -177,10 +177,10 @@ cd website && hugo mod get && hugo --gc --minify
 
 - **Private keys**: User keys are stored plaintext in `~/.barter/profile.json`. This is intentional for v1 but unacceptable for production. Do not add real value to these keys.
 - **Bank keys**: Loaded from `Deno.env.get("BANK_<NAME>_PRIV_KEY")`. Never log them, never return them in RPC responses.
-- **Signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs are NOT signed; their authority comes from being referenced by signed Txs/Orders/mint records.
+- **Signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Account docs are NOT signed; their authority comes from being referenced by signed Txs/Orders/mint records.
 - **Replay protection / idempotency**: Every RPC envelope carries a ULID `id` bound to `(sender_pubkey, recipient_pubkey)`. The recipient stores seen triples in KV and rejects exact duplicates with `-32002`. In addition, state-changing handlers are idempotent where it matters: `create_records` checks the existing leg state before minting a duplicate record pair, and `mint` is bounded by `Voucher.limit` and the envelope replay window. A fresh signed envelope cannot be used to double-apply a mint or re-create records for the same deal leg.
 - **Signature verification**: Every inbound request is verified against its `pubkey` before any handler runs. The `to` field must match the recipient bank's pubkey.
-- **Pocket privacy**: Banks must NEVER accept or store Pocket bodies — `account.pocket` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Pocket docs; do not add a server-side code path that receives one.
+- **Account privacy**: Banks must NEVER accept or store Account bodies — `account.account` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Account docs; do not add a server-side code path that receives one.
 - **Double-spend gate**: An atomic KV check-and-set on the active-hold key enforces at most one active hold per account. Concurrent hold attempts surface as `-32003` or, inside the advance engine, a quiet back-off retried on the next event.
 - **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Voucher sum to zero (or the agreed limit).
 - **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `<bank-url>/barter-bank.json` is fetched and compared against the pin; divergence fails closed.
@@ -234,7 +234,7 @@ cd website && hugo mod get && hugo --gc --minify
 
 ## Development conventions
 
-- **Doc signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Pocket docs have no `sig`. Do not add signatures to Account or Pocket.
+- **Doc signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Account docs have no `sig`. Do not add signatures to Account or Account.
 - **Content-addressed docs**: Every doc (Voucher, Account, Tx, Signature, etc.) is canonicalized, SHA-256-hashed, and stored/addressed by its base58 hash. References between docs use hashes, not surrogate IDs.
 - **Bank scoping**: Every KV key is prefixed with the bank pubkey so one Deno KV database can serve multiple banks. Every query must include the prefix. Missing it is a bug.
 - **Base58 everywhere**: Hashes, pubkeys, and signatures are stored as base58 strings. No binary types.

@@ -13,11 +13,11 @@ Alice and Bob already know each other. They agree to trade 1 logo for 1 hour.
 
 ## Step 1: Mint
 
-A mint is just the first ledger record pair. Alice presents her signed Voucher plus two Account docs — on two **distinct Pocket hashes** — to bank-alice. The bank creates a debit on her issue account (it goes negative) and a credit on her holding account (it goes positive). There is no special mint logic: the same mechanism that moves value in trades creates it at mint. One signer, one bank, so the bank settles it immediately.
+A mint is just the first ledger record pair. Alice presents her signed Voucher plus two Account docs — on two **distinct Account hashes** — to bank-alice. The bank creates a debit on her issue account (it goes negative) and a credit on her holding account (it goes positive). There is no special mint logic: the same mechanism that moves value in trades creates it at mint. One signer, one bank, so the bank settles it immediately.
 
 Bob does the same on bank-bob.
 
-There is no "open account" call anywhere in the protocol. Accounts are implicit — they come into existence the first time an Account doc is presented to a bank. And Pocket bodies never leave the holder; banks only ever see Pocket hashes.
+There is no "open account" call anywhere in the protocol. Accounts are implicit — they come into existence the first time an Account doc is presented to a bank. And Account bodies never leave the holder; banks only ever see Account hashes.
 
 ## Step 2: The invite
 

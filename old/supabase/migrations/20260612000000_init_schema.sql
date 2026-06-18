@@ -21,8 +21,8 @@
 -- The `body` JSONB is the doc as received over the wire (canonicalize-able
 -- back to the same hash). The `bank_pubkey` is which bank this doc lives at
 -- — multi-tenancy column. Banks store the docs presented to them; the only
--- artifacts a bank creates are ledger records and signatures. Pocket bodies
--- never reach a bank — accounts reference pockets by opaque hash.
+-- artifacts a bank creates are ledger records and signatures. Account bodies
+-- never reach a bank — accounts reference accounts by opaque hash.
 
 CREATE TABLE docs (
   hash         TEXT NOT NULL,            -- base58(SHA-256(canonical(doc)))
@@ -40,7 +40,7 @@ CREATE INDEX docs_by_created_at  ON docs (bank_pubkey, created_at DESC);
 COMMENT ON TABLE docs IS 'Content-addressed signed doc archive. PK is (hash, bank_pubkey) so the same hash can in principle live at multiple banks (separate observers), though in v1 each voucher has a single issuing bank.';
 
 -- ─────────────────────────────────────────────────────────────────────────
--- accounts: per-(voucher, holder, pocket) balance row at the issuing bank
+-- accounts: per-(voucher, holder, account) balance row at the issuing bank
 -- ─────────────────────────────────────────────────────────────────────────
 --
 -- The issuing bank is the sole authority for balances of its Vouchers.
@@ -53,7 +53,7 @@ CREATE TABLE accounts (
   account_hash    TEXT PRIMARY KEY,        -- hash of the Account doc
   bank_pubkey     TEXT NOT NULL,           -- issuing bank (sole authority for this row)
   voucher_hash    TEXT NOT NULL,           -- which Voucher this account holds
-  pocket_hash     TEXT NOT NULL,           -- holder's Pocket doc hash (opaque to the bank)
+  account_hash     TEXT NOT NULL,           -- holder's Account doc hash (opaque to the bank)
   holder_pubkey   TEXT NOT NULL,           -- holder's pubkey (account owner)
   balance         NUMERIC NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

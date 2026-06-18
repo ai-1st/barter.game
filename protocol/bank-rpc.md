@@ -27,8 +27,8 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `mint(voucher, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `voucher` references this bank, that both Accounts belong to the issuer, reference the voucher, and use distinct Pocket hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
-| `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Pocket bodies stay on the holder's machine. |
+| `mint(voucher, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `voucher` references this bank, that both Accounts belong to the issuer, reference the voucher, and use distinct Account hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
+| `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Account bodies stay on the holder's machine. |
 | `submit_order(order, accounts[], publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash and, if published, the Offer hash and bank signature. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
 

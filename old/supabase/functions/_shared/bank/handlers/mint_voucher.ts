@@ -2,7 +2,7 @@
 //
 // Minting IS the first ledger record pair. The issuer presents:
 //   - the Voucher doc (signed request envelope claims authorship)
-//   - two Account docs on two DISTINCT Pocket hashes: the issue account
+//   - two Account docs on two DISTINCT Account hashes: the issue account
 //     (goes negative) and the holding account (goes positive)
 //   - the amount to mint
 //
@@ -13,7 +13,7 @@
 // mechanism that moves value in trades creates it here.
 //
 // There is no open_account call; these two Account rows come into existence
-// right here. Pocket bodies never reach the bank — only the hashes inside
+// right here. Account bodies never reach the bank — only the hashes inside
 // the Account docs.
 
 import { hashDoc, newUlid, signDoc } from "../../protocol/crypto.ts";
@@ -62,8 +62,8 @@ export const mintVoucher: Handler = async (params, ctx) => {
       throw new RpcError(RpcErrors.VALIDATION, `${label}.voucher must reference the minted voucher`);
     }
   }
-  if (p.debit_account.pocket === p.credit_account.pocket) {
-    throw new RpcError(RpcErrors.VALIDATION, "the two accounts must use two distinct Pocket hashes");
+  if (p.debit_account.account === p.credit_account.account) {
+    throw new RpcError(RpcErrors.VALIDATION, "the two accounts must use two distinct Account hashes");
   }
 
   if (voucher.integer === true && !Number.isInteger(p.amount)) {
@@ -92,7 +92,7 @@ export const mintVoucher: Handler = async (params, ctx) => {
     await ctx.db.upsertAccount({
       accountHash: hash,
       voucherHash,
-      pocketHash: acct.pocket as string,
+      accountHash: acct.account as string,
       holderPubkey: ctx.senderPubkey,
     });
   }

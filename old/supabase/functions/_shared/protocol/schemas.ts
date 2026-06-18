@@ -29,7 +29,7 @@ export type BaseDoc = {
 
 export type DocType =
   | "voucher"
-  | "pocket"
+  | "account"
   | "account"
   | "tx"
   | "credit"
@@ -48,16 +48,16 @@ export type Voucher = BaseDoc & {
   integer?: boolean;
 };
 
-/** Pocket: holder's local grouping of Accounts. */
-export type Pocket = BaseDoc & {
-  type: "pocket";
+/** Account: holder's local grouping of Accounts. */
+export type Account = BaseDoc & {
+  type: "account";
   name: string;
 };
 
 /** Account: issuer-bank-owned record of a holder's balance for a Voucher. */
 export type Account = BaseDoc & {
   type: "account";
-  pocket: Base58SHA256;
+  account: Base58SHA256;
   voucher: Base58SHA256;
 };
 
@@ -145,7 +145,7 @@ export type Subscription = BaseDoc & {
 
 export type AnyDoc =
   | Voucher
-  | Pocket
+  | Account
   | Account
   | LedgerRecord
   | Tx
@@ -157,7 +157,7 @@ export type AnyDoc =
 // LedgerRecords are bank-minted by ULID and are NOT content-addressed.
 
 export const hashVoucher = (p: Voucher): Base58SHA256 => hashDoc(p);
-export const hashPocket = (p: Pocket): Base58SHA256 => hashDoc(p);
+export const hashAccount = (p: Account): Base58SHA256 => hashDoc(p);
 export const hashAccount = (a: Account): Base58SHA256 => hashDoc(a);
 export const hashTx = (t: Tx): Base58SHA256 => hashDoc(t);
 export const hashOrder = (o: Order): Base58SHA256 => hashDoc(o);
@@ -210,19 +210,19 @@ export function validateVoucher(d: unknown): asserts d is Voucher {
   }
 }
 
-export function validatePocket(d: unknown): asserts d is Pocket {
-  assertBaseDoc(d, "pocket");
+export function validateAccount(d: unknown): asserts d is Account {
+  assertBaseDoc(d, "account");
   const p = d as Record<string, unknown>;
   if (typeof p.name !== "string") {
-    throw new TypeError("pocket.name must be a string");
+    throw new TypeError("account.name must be a string");
   }
 }
 
 export function validateAccount(d: unknown): asserts d is Account {
   assertBaseDoc(d, "account");
   const a = d as Record<string, unknown>;
-  if (typeof a.pocket !== "string" || !BASE58_RE.test(a.pocket)) {
-    throw new TypeError("account.pocket must be a base58 hash");
+  if (typeof a.account !== "string" || !BASE58_RE.test(a.account)) {
+    throw new TypeError("account.account must be a base58 hash");
   }
   if (typeof a.voucher !== "string" || !BASE58_RE.test(a.voucher)) {
     throw new TypeError("account.voucher must be a base58 hash");
@@ -407,7 +407,7 @@ export function validateDoc(d: unknown): asserts d is AnyDoc {
   const t = (d as Record<string, unknown>).type;
   switch (t) {
     case "voucher": return validateVoucher(d);
-    case "pocket": return validatePocket(d);
+    case "account": return validateAccount(d);
     case "account": return validateAccount(d);
     case "credit":
     case "debit": return validateRecord(d);

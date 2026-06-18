@@ -53,7 +53,7 @@ layout: hextra-home
 
 ## How it works in one paragraph
 
-Every user and every bank is an **ed25519 keypair**. Voucher, Pocket, Account, Tx, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the initiator creates the record pairs (`create_records`), then each holder signs their own Tx (`submit_tx`) — `lead` for the initiator, `follow` for everyone else. From there the banks self-advance: per-record approvals, holds, then settlement — lead bank first, followers after observing upstream proof, with signatures pushed between banks via subscription fan-out. No bank ever sees the full transaction. The math binds everyone together.
+Every user and every bank is an **ed25519 keypair**. Voucher, Account, Account, Tx, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the initiator creates the record pairs (`create_records`), then each holder signs their own Tx (`submit_tx`) — `lead` for the initiator, `follow` for everyone else. From there the banks self-advance: per-record approvals, holds, then settlement — lead bank first, followers after observing upstream proof, with signatures pushed between banks via subscription fan-out. No bank ever sees the full transaction. The math binds everyone together.
 
 [Read the full docs →](docs)
 

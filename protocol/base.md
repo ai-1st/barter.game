@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "account" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -63,7 +63,7 @@ Encoded fields:
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
 - `DateString` — `YYYY-MM-DD`.
 
-The concrete types defined in this file are `Signature` and `Address`. Voucher, Pocket, Account, Record, Tx, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
+The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Account, Record, Tx, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
 
 ### 3.1 Signature
 

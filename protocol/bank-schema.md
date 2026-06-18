@@ -2,7 +2,7 @@
 
 This file defines the banking entities and the ledger invariants that operate on them:
 
-- `Voucher`, `Pocket`, `Account`
+- `Voucher`, `Account`
 - `Record`, `Tx`
 - `Order`, `Offer`
 - `Subscription`, `RecordSubscription`
@@ -19,7 +19,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "pocket" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "account" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -48,40 +48,18 @@ Voucher: BaseDoc & {
 
 > **Invariant:** The Voucher schema fields and their types are fixed in v1.
 
-### 1.2 Pocket
+### 1.2 Account
 
-A holder's logical grouping of accounts. **Pocket bodies never leave the holder's machine** — banks reference pockets only by hash; the name is private.
+A holder's named bucket. **Account bodies never leave the holder's machine** — banks reference accounts only by hash; the name is private.
 
 ```ts
-Pocket: BaseDoc & {
-  type: "pocket";
+Account: BaseDoc & {
+  type: "account";
   name: string;           // local label, typically not public
 }
 ```
 
-> **Invariant:** A bank MUST NOT accept or store Pocket bodies. `Account.pocket` is an opaque hash to the bank.
-
-### 1.3 Account
-
-The issuer bank's record of a holder's stake in a given Voucher.
-
-```ts
-Account: {
-  type: "account";
-  holder: Base58PubKey;   // pubkey of the account owner
-  pocket: Base58SHA256;   // hash of holder's Pocket doc
-  voucher: Base58SHA256;  // hash of the Voucher this account holds
-}
-```
-
-Account hash = `base58(sha256(canonical(account_doc)))`.
-
-Because the Account doc has no `ulid`, its hash is deterministic from the triple `(holder, pocket, voucher)`. Re-presenting the same Account is idempotent.
-
-There is no separate protocol operation to "open" an account. A user presents an Account doc to the issuing bank, and the bank stores it. The same is true for a user who wants to receive a Voucher issued by another bank: they create an Account object for that bank and present it. Account and Pocket docs are NOT signed by the holder; their authority comes from being referenced by holder-signed Txs, Orders, or (for Accounts) by mint records at the issuing bank.
-
-> **Invariant:** The issuer of a Voucher is the sole source of truth for balances of that Voucher. No other bank may issue or mutate accounts for a Voucher it does not own.
-> **Invariant:** Account and Pocket docs have no `sig` field. Users sign Voucher, Order, Tx, and Address docs; banks sign Record and Offer docs.
+> **Invariant:** A bank MUST NOT accept or store Account bodies. `Record.account` is an opaque hash to the bank.
 
 ### 1.4 Record
 
@@ -91,8 +69,14 @@ One half of a paired credit/debit entry in the double-entry ledger.
 Record: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
-  account: Base58SHA256;  // hash of the Account doc (still content-addressed)
+  order: Base58SHA256;  // hash of the Order this record matches
+  details: Base58SHA256;  
+}
+
+RecordDetails {
   pair: ULID;             // ULID of the peer record (set by the bank at creation)
+  holder: Base58PubKey;   // pubkey of the holder
+  account: Base58SHA256;   // hash of holder's Account doc
 }
 ```
 
@@ -111,9 +95,16 @@ For example, if Alice and Bob exchange vouchers X (Alice's, at Xbank) and Y (Bob
 - Xbank sees only that some X moved from one holder to another; it learns nothing about the Y side. Ybank sees the reverse.
 
 ```ts
+
+TxRecord: {
+  bank: Base58PubKey;
+  record: Base58SHA256;
+}
+
 Tx: BaseDoc & {
   type: "tx";
-  records: Base58SHA256[];   // ordered list of record hashes touching this holder
+  credits: TxRecord[];       // ordered list of record hashes touching this holder
+  debits: TxRecord[];
   order?: Base58SHA256;      // optional originating Order doc
   offer?: Base58SHA256;      // optional bank-issued derived Offer doc
 }
@@ -211,25 +202,6 @@ Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **inv
 
 > **Invariant:** Offers are bank-issued derived documents. They are not holder signatures, but they MUST be signed by the bank's pubkey and they MUST accurately reflect the terms of the referenced Order.
 
-### 1.8 Subscription
-
-The initiating party's instruction to a bank: *push the Signature docs you create concerning these items to this URL.* This is how the initiator chooses the deal's delivery topology (see `README.md` §2.4).
-
-```ts
-Subscription: BaseDoc & {
-  type: "subscription";
-  hashes?: Base58SHA256[]; // watch keys matching Signature.hash
-  url: string;             // http(s) endpoint to POST bank-signed notify envelopes to
-  to?: Base58PubKey;       // delivery target behind url (defaults to the creator)
-  until?: DateString;      // optional expiry; banks default one (reference: 7 days)
-}
-```
-
-`pubkey` is the **creator** (who signs the request); `to` is the **delivery target** behind `url` — a peer bank or another party. At least one `hashes` list must be non-empty. When the bank creates a Signature whose `hash` matches a watch key, it POSTs a bank-signed `notify_signatures` JSON-RPC envelope (addressed `to` the target) to `url`.
-
-Fan-out is **fire-and-forget**: no retry, no delivery guarantee, and a failed push never fails the originating request. Client relay (see `README.md` §2.4) is the recovery path.
-
-> **Invariant:** The Subscription doc shape and the fire-and-forget semantics are protocol. Push timeout, SSRF hardening (https-only, no redirects), and per-subscriber caps are implementation details — but a bank MUST NOT let fan-out failures affect ledger state.
 
 ### 1.9 RecordSubscription
 

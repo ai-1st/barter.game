@@ -132,11 +132,11 @@ The CLI is the protocol's truest surface; the web UI ships in v1.5.
 
 ## How the protocol works (one paragraph)
 
-Every user and every bank is an ed25519 keypair. Voucher, Pocket,
+Every user and every bank is an ed25519 keypair. Voucher, Account,
 Account, Signature, and Order docs are canonicalized via RFC 8785 JSON,
 SHA-256-hashed, and content-addressed by that hash. Accounts are
 implicit — they come into existence when an Account doc is first
-presented, and Pocket bodies never leave the holder (banks only ever
+presented, and Account bodies never leave the holder (banks only ever
 see the hash). Ledger records are bank-minted in mandatory debit/credit
 pairs; the mint itself is just the first such pair. Each holder signs
 their OWN `Tx` — the record hashes on their own accounts — with action

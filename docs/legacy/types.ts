@@ -55,7 +55,7 @@ export type Seconds = number; // example: 600
  * Document ulid property contains an encoded timestamp, eliminating the need for a separate creation date property.
  */
 export type BaseDoc = {
-    type: "profile" | "balance" | "trade" | "order" | "address" | "voucher" | "pocket" | "account" | "debit" | "credit" | "signature" | "request";
+    type: "profile" | "balance" | "trade" | "order" | "address" | "voucher" | "account" | "account" | "debit" | "credit" | "signature" | "request";
     pubkey: Base58PubKey;
     ulid: ULID;
 }
@@ -111,30 +111,30 @@ export type Voucher = BaseDoc & {
 }
 
 /**
- * Pocket is named set of accounts owned by a Holder. Typically holders will have multiple pockets serving different purposes.
+ * Account is named set of accounts owned by a Holder. Typically holders will have multiple accounts serving different purposes.
  * 
- * - pubkey: pocket owner
+ * - pubkey: account owner
  * - name: assigned by the owner; typically not visible to the public and even to the Bank because 
- * pockets are referenced by hash.
+ * accounts are referenced by hash.
  */
-export type Pocket = BaseDoc & {
-    type: "pocket";
+export type Account = BaseDoc & {
+    type: "account";
     name: string;
 }
 
 /**
- * Accounts are maintained by the Bank. Technically the Bank doesn't need pocket and voucher details to be able to 
+ * Accounts are maintained by the Bank. Technically the Bank doesn't need account and voucher details to be able to 
  * process transactions. Knowing just the hashes of these objects is enough. Disclosure requirements are defined 
  * on a case-by-case basis by each Bank's policy.
  * 
  * - pubkey: account holder
- * - pocket: may or may not belong to the account holder; there could be standard "public" pockets; also the Bank may define 
- * public pockets for special purposes
+ * - account: may or may not belong to the account holder; there could be standard "public" accounts; also the Bank may define 
+ * public accounts for special purposes
  * - 
  */
 export type Account = BaseDoc & {
     type: "account";
-    pocket: Base58SHA256;
+    account: Base58SHA256;
     voucher: Base58SHA256;
 }
 

@@ -59,12 +59,12 @@ Before dispatching to a method handler:
 
 Start with read-only methods (`get_voucher`, `get_account_balance`, `list_accounts`, `get_deal`) — they're simple and let you test your envelope.
 
-One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Voucher and Account docs, and the bank stores them on first sight (a Voucher must reference this bank; an Account's voucher must be issued here). **Never accept a Pocket body** — `account.pocket` is an opaque hash; Pocket bodies stay with the holder.
+One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Voucher and Account docs, and the bank stores them on first sight (a Voucher must reference this bank; an Account's voucher must be issued here). **Never accept a Account body** — `account.account` is an opaque hash; Account bodies stay with the holder.
 
 Then implement the trade path in order:
 
 ### `mint`
-- Validate: the Voucher references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Voucher, and sit on **distinct Pocket hashes**.
+- Validate: the Voucher references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Voucher, and sit on **distinct Account hashes**.
 - The mint is the first ledger record pair: a debit on the issue account (goes negative) and a credit on the holding account (goes positive). Set `pair` on each record.
 - Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Voucher hash.
 
@@ -138,7 +138,7 @@ Address docs map a pubkey to a human-readable name and a push-receipt URL. They 
 ## 9. Write a client and test end-to-end
 
 You need a client that can:
-1. Mint (`mint`: Voucher + two Accounts on distinct Pocket hashes).
+1. Mint (`mint`: Voucher + two Accounts on distinct Account hashes).
 2. Produce and consume `barter://` invite strings.
 3. Initiate a trade: call `create_records` on each bank, build one Tx per holder, sign yours as `lead`, `submit_tx`, register Subscriptions, and print a `barterdeal:` token per counterparty.
 4. Accept: verify a deal token against the banks via `get_deal`, sign your Tx as `follow`, `submit_tx`.

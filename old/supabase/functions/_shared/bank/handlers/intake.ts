@@ -7,8 +7,8 @@
 // — the sender need not be the doc's pubkey (counterparties carry each
 // other's Account docs).
 //
-// Pocket docs are NEVER accepted: accounts reference pockets by opaque hash
-// and pocket bodies stay on the holder's machine.
+// Account docs are NEVER accepted: accounts reference accounts by opaque hash
+// and account bodies stay on the holder's machine.
 
 import { hashDoc } from "../../protocol/crypto.ts";
 import { validateAccount, validateVoucher } from "../../protocol/schemas.ts";
@@ -29,8 +29,8 @@ export async function intakeDocs(
     const t = d === null || typeof d !== "object" ? undefined : (d as Record<string, unknown>).type;
     if (t === "voucher") vouchers.push(d as Record<string, unknown>);
     else if (t === "account") accounts.push(d as Record<string, unknown>);
-    else if (t === "pocket") {
-      throw new RpcError(RpcErrors.VALIDATION, "banks do not accept Pocket bodies — present the pocket hash only");
+    else if (t === "account") {
+      throw new RpcError(RpcErrors.VALIDATION, "banks do not accept Account bodies — present the account hash only");
     } else {
       throw new RpcError(RpcErrors.INVALID_PARAMS, `docs[] may carry voucher or account docs, got ${String(t)}`);
     }
@@ -85,7 +85,7 @@ export async function intakeDocs(
     await ctx.db.upsertAccount({
       accountHash: hash,
       voucherHash,
-      pocketHash: account.pocket as string,
+      accountHash: account.account as string,
       holderPubkey: account.pubkey as string,
     });
     accountHashes.push(hash);

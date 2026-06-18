@@ -1,18 +1,18 @@
 Alice and Bob are users of the system. Abank and Bbank are their respective banks.
 
-Alice and Bob each mint vouchers into some accounts in their banks. As a result of minting they have two accounts for each voucher - one with negative amount, one with positive amount. Voucher minting is an API request to the bank signed by the issuer key. To have two distinct accounts for the same voucher the user needs to provide two distinct Pocket hashes.
+Alice and Bob each mint vouchers into some accounts in their banks. As a result of minting they have two accounts for each voucher - one with negative amount, one with positive amount. Voucher minting is an API request to the bank signed by the issuer key. To have two distinct accounts for the same voucher the user needs to provide two distinct Account hashes.
 
-There is no separate call to open an account; the user just provides the Pocket hashes and Account and Voucher objects.
+There is no separate call to open an account; the user just provides the Account hashes and Account and Voucher objects.
 Banks store the docs and signatures presented to them. The only thing they create is records and signatures.
 
 Account: {
   holder: Base58PubKey;   // pubkey of the holder
-  pocket: Base58SHA256;   // hash of holder's Pocket doc
+  account: Base58SHA256;   // hash of holder's Account doc
   voucher: Base58SHA256;  // hash of the Voucher this account holds
 }
 
-Pocket: BaseDoc & {
-  type: "pocket";
+Account: BaseDoc & {
+  type: "account";
   name: string;           // a local label, typically not public
 }
 
@@ -29,9 +29,9 @@ Voucher: BaseDoc & {
 
 Alice and Bob meet and Alice becomes interested in Bob's voucher. She receives a copy of the Voucher object describing the Voucher. To own this voucher, she needs to have an account in the Bbank. Somehow outside of the protocol she registers with the Bbank. Bbank may have some KYC or none at all - at the discrepancy of the operator. The easiest is if the bank has open API and accepts any calls that are related to vouchers that use the bank.
 
-Alice creates Pocket and Account objects for Bbank. With Bbank she may use the same Pocket hash as with Abank or a different hash.
+Alice creates Account and Account objects for Bbank. With Bbank she may use the same Account hash as with Abank or a different hash.
 
-Bob also creates Pocket and Account objects for Abank.
+Bob also creates Account and Account objects for Abank.
 
 # Direct approval
 
@@ -49,7 +49,8 @@ Once having the record hashes, Alice creates two Tx objects: ATx and BTx
 
 Tx: BaseDoc & {
   type: "tx";
-  records: Base58SHA256[];           // ordered list of record hashes touching this holder
+  credits: Base58SHA256[];           // ordered list of record hashes touching this holder
+  debits: Base58SHA256[];
   order?: Base58SHA256;      // holder-issued authorization document (see below)
   offer?: Base58SHA256;    // bank-issued derived authorization document (See below)
 }
@@ -160,7 +161,7 @@ So Alice sends her Order and Accounts to both banks with publish_offer = TRUE pa
 Bob happens to also publish an Offer for exchange up to 100 Bvouchers for 90 Avouchers.
 
 A matchmaker discovers this arbritrage opportunity by listening to new offer streams from the banks and creates a Transaction - 
-Alice trades 100 Avouchers for 90 Bvouchers; Bob trades 100 BVouchers for 90 Avouchers, and matchmaker pockets 10 Avouchers and 10 Bvouchers. Matchmaker creates records, Tx docs linked to the Order hashes (it can't see full Order docs, just the Order hash from the Offer). 
+Alice trades 100 Avouchers for 90 Bvouchers; Bob trades 100 BVouchers for 90 Avouchers, and matchmaker accounts 10 Avouchers and 10 Bvouchers. Matchmaker creates records, Tx docs linked to the Order hashes (it can't see full Order docs, just the Order hash from the Offer). 
 
 If any of the Orders has lead: TRUE - banks perform the operation without the need for explicit approval from Alice or Bob.
 If matchmaker happens to have 90 Avoucher or 90 Bvoucher it may inject itself as a lead party into the deal initiate the transaction without Alice or Bob approval.
@@ -248,11 +249,11 @@ Signature: BaseDoc & {
 }
 ```
 - do not use .well-known notation; there could be many banks using different paths on a common domain
-- users do not sign Account, Pocket
+- users do not sign Account, Account
 - users sign Voucher, Order, Tx, Address
 - banks sign Record, Offer (instead of "LedgerRecord" just use "Record"), Address
 - all bank requests are signed by the caller and are idempotent, so we are not worried about 3-rd party replay of the requests (or do we? are there any cases when request replay could hurt us?)
-- mint call does not need to pass "pocket" docs - banks do not need to know the properties of pockets, they only need to get account objects to check the voucher hash
+- mint call does not need to pass "account" docs - banks do not need to know the properties of accounts, they only need to get account objects to check the voucher hash
 - mint call should take "amount" and the bank should immediately create records with the given amount and issue "settle" sig (no need for "ready" and "hold" since this is the same bank)
 - account balances start showing -X and X in the respective accounts
 - there is no "shared `deal` ULID". Every party has their own view of the deal as a Tx object which describes what this party gets and what it gives. Only the matchmaker sees the whole deal structure, but they use internal identification and don't need to share it externally
@@ -260,3 +261,11 @@ Signature: BaseDoc & {
 - Tx MUST reference records by hash
 - RecordSubscription and OfferSubscription are not derived from BaseDoc, do not have ulid/pubkey and do not need to be signed
 - 
+
+
+# Bank "ready" validation
+
+- start with an offer (give Avoucher, receive Bvoucher) and mirrored in Bbabk
+- matchmaker has to create records in Abank and in Bbank. Doesn't know the account and the holder
+- the matchmaker doesn't know the who are the holders, but it knows the hashes of the promises being traded
+- the records must contain just enough information for the banks to check offer validity; that is (pubkey, promise, amount), but not (account, holder)

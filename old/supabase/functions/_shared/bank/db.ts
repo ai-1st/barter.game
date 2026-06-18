@@ -19,7 +19,7 @@ export type AccountRow = {
   account_hash: string;
   bank_pubkey: string;
   voucher_hash: string;
-  pocket_hash: string;
+  account_hash: string;
   holder_pubkey: string;
   balance: string;
 };
@@ -93,7 +93,7 @@ export class BankDB {
   async upsertAccount(input: {
     accountHash: string;
     voucherHash: string;
-    pocketHash: string;
+    accountHash: string;
     holderPubkey: string;
   }): Promise<void> {
     const { error } = await this.sb.from("accounts").upsert(
@@ -101,7 +101,7 @@ export class BankDB {
         account_hash: input.accountHash,
         bank_pubkey: this.bankPubkey,
         voucher_hash: input.voucherHash,
-        pocket_hash: input.pocketHash,
+        account_hash: input.accountHash,
         holder_pubkey: input.holderPubkey,
         balance: 0,
       },

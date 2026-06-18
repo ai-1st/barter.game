@@ -10,7 +10,7 @@ The barter.game protocol is intentionally small. You can read the full contract 
 
 **Read [`PROTOCOL.md`](https://github.com/ai-1st/barter.game/blob/main/PROTOCOL.md) first.** It defines:
 
-- The document types: Voucher, Pocket, Account, Tx, Signature, Subscription, Order, Address — plus bank-minted LedgerRecords identified by ULID
+- The document types: Voucher, Account, Account, Tx, Signature, Subscription, Order, Address — plus bank-minted LedgerRecords identified by ULID
 - RFC 8785 canonical JSON (cross-runtime parity is load-bearing)
 - ed25519 signatures over SHA-256 hashes
 - The JSON-RPC envelope and replay protection

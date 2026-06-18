@@ -1,6 +1,6 @@
 # Scenario: Matchmaker Bilateral Arbitrage
 
-Alice wants to sell Avoucher for Bvoucher. Bob wants to sell Bvoucher for Avoucher. A matchmaker discovers both Offers, matches them, and pockets a spread.
+Alice wants to sell Avoucher for Bvoucher. Bob wants to sell Bvoucher for Avoucher. A matchmaker discovers both Offers, matches them, and accounts a spread.
 
 ## Parties and terms
 
@@ -216,7 +216,7 @@ Bbank issues `settle` Signatures citing Abank's settle in `Signature.seen`.
 
 - Alice gave `100` Avoucher, got `90` Bvoucher.
 - Bob gave `100` Bvoucher, got `90` Avoucher.
-- Matchmaker pocketed `10` Avoucher and `10` Bvoucher.
+- Matchmaker accounted `10` Avoucher and `10` Bvoucher.
 - Neither Alice nor Bob signed anything; their `lead` Offers authorized execution.
 - Abank settled first; Bbank settled after verifying Abank's settle signature.
 - Every bank's Avoucher and Bvoucher balances still sum to zero (or the agreed limit).

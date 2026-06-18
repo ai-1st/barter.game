@@ -19,12 +19,12 @@ import { getDeal } from "../handlers/get_deal.ts";
 import { rejectDeal } from "../handlers/reject_deal.ts";
 import { assert, ctx, eq, k, key, Store, type Key } from "./_harness.ts";
 
-function accountDoc(holder: Key, voucherHash: string, pocketName: string) {
+function accountDoc(holder: Key, voucherHash: string, accountName: string) {
   const body: Record<string, unknown> = {
     type: "account",
     pubkey: holder.pub,
     ulid: newUlid(),
-    pocket: hashDoc({ type: "pocket", pubkey: holder.pub, ulid: newUlid(), name: pocketName }),
+    account: hashDoc({ type: "account", pubkey: holder.pub, ulid: newUlid(), name: accountName }),
     voucher: voucherHash,
   };
   return { body, hash: hashDoc(body) };

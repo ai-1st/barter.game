@@ -105,7 +105,7 @@ have built the wrong thing.
 
 ## 7. Content-addressed docs — almost all the way down
 
-Voucher, Pocket, Account, Order, and Signature docs are hashed by their
+Voucher, Account, Account, Order, and Signature docs are hashed by their
 canonical JSON form. References between these docs use those hashes.
 Nothing has an ID assigned by a server. Two banks that store the same
 Voucher doc store it under the same hash. Audit means walking the hash

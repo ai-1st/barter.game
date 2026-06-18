@@ -6,7 +6,7 @@ Alice wants to issue a new Voucher: "1 hour of consulting", backed by her bank A
 
 - Alice: user keypair `A.pub` / `A.priv`.
 - Abank: bank keypair `Abank.pub` / `Abank.priv`.
-- Alice has not yet created any Pockets or Accounts for this Voucher.
+- Alice has not yet created any Accounts or Accounts for this Voucher.
 
 ## Step 1 — Alice builds the docs
 
@@ -22,18 +22,18 @@ Alice creates:
      name: "1 hour of consulting"
    }
    ```
-2. **Pocket** docs — two distinct Pockets, one for the issuer's negative-balance row and one for the issuer's positive-balance row. Pocket bodies stay on Alice's machine; banks see only the pocket hashes inside Account docs.
+2. **Account** docs — two distinct Accounts, one for the issuer's negative-balance row and one for the issuer's positive-balance row. Account bodies stay on Alice's machine; banks see only the account hashes inside Account docs.
    ```ts
-   { type: "pocket", pubkey: A.pub, ulid: <new>, name: "issuance" }
-   { type: "pocket", pubkey: A.pub, ulid: <new>, name: "inventory" }
+   { type: "account", pubkey: A.pub, ulid: <new>, name: "issuance" }
+   { type: "account", pubkey: A.pub, ulid: <new>, name: "inventory" }
    ```
 3. **Account** docs. Accounts are NOT signed.
    ```ts
-   { type: "account", holder: A.pub, pocket: <issuance-pocket-hash>, voucher: <voucher-hash> }
-   { type: "account", holder: A.pub, pocket: <inventory-pocket-hash>, voucher: <voucher-hash> }
+   { type: "account", holder: A.pub, account: <issuance-account-hash>, voucher: <voucher-hash> }
+   { type: "account", holder: A.pub, account: <inventory-account-hash>, voucher: <voucher-hash> }
    ```
 
-Alice signs only the Voucher doc. Account and Pocket docs are not signed.
+Alice signs only the Voucher doc. Account and Account docs are not signed.
 
 ## Step 2 — Alice calls `mint`
 
@@ -61,14 +61,14 @@ Abank checks:
 
 - `voucher.pubkey == A.pub`.
 - `voucher.bank == Abank.pub`.
-- Both Accounts reference `voucher` and use distinct Pocket hashes.
+- Both Accounts reference `voucher` and use distinct Account hashes.
 - Alice's signature on the Voucher is valid.
 
 Abank stores:
 
 - Voucher doc.
 - Two Account docs.
-- (Pocket bodies are never stored by the bank.)
+- (Account bodies are never stored by the bank.)
 
 Abank mints a debit/credit record pair for the requested `amount` and applies the deltas immediately:
 
