@@ -70,10 +70,11 @@ The bank verifies:
 
 - Both Offers are valid and bank-signed. At least one of them was issued by this bank; the other may be foreign.
 - The local amount pair (the two amounts that apply to this bank's Voucher) are equal.
-- The local amount satisfies the local Offer's `min`/`max` constraints.
-- For each Offer, the ratio of the matched debit amount to the matched credit amount is `<=` the Offer's `rate` (within rounding policy).
+- The matched amounts fall within each Offer's `min`/`max` constraints. For one-sided Offers the missing side is `0`.
 - Both Offers resolve to stored Orders (or the bank already has the Orders).
 - The resulting records would not violate `Voucher.limit` or any Order limit.
+
+The bank does **not** check `Order.rate` or `Offer.rate` at this stage. The aggregate rate across all records of the deal matched to a two-sided Order is checked before the bank issues `ready` (see `bank-schema.md`).
 
 The bank rejects the request if any of these checks fail.
 

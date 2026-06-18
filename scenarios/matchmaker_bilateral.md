@@ -27,7 +27,7 @@ The matchmaker arranges:
 - Bob receives `90` Avoucher.
 - Matchmaker receives `10` Avoucher and `10` Bvoucher as spread.
 
-> **Rate semantics.** `Order.rate` is a **maximum acceptable debit/credit ratio**, not an exact price. Alice's rate of `100/90` means she will accept any trade where `Avoucher_given / Bvoucher_received <= 100/90`. Bob's rate of `100/90` means `Bvoucher_given / Avoucher_received <= 100/90`. The matchmaker crosses them so each holder is at or inside their limit, and keeps the residual.
+> **Rate semantics.** `Order.rate` is a **maximum acceptable debit/credit ratio** checked across **all records of the deal** matched to that Order, not per pair. Alice's rate of `100/90` means `total_Avoucher_given / total_Bvoucher_received <= 100/90`. Bob's rate of `100/90` means `total_Bvoucher_given / total_Avoucher_received <= 100/90`. The bank defers the rate check to the `ready` phase, when every record for the deal is known.
 
 ## Phase 0 — Holders and matchmaker publish Offers
 
@@ -130,11 +130,11 @@ The matchmaker makes two calls:
     "offer1": {
       "hash": <alice-sell-avoucher-offer-hash>,
       "debit_amount": 90,
-      "credit_amount": 81
+      "credit_amount": 90
     },
     "offer2": {
       "hash": <bob-buy-avoucher-offer-hash>,
-      "debit_amount": 81,
+      "debit_amount": 90,
       "credit_amount": 90
     },
     "deal_id": <deal-id>
@@ -142,7 +142,7 @@ The matchmaker makes two calls:
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-**Call 2 — Alice → Matchmaker (`10` Avoucher):**
+**Call 2 — Alice → Matchmaker (`10` Avoucher spread):**
 
 ```json
 { "method": "create_records",
@@ -150,11 +150,11 @@ The matchmaker makes two calls:
     "offer1": {
       "hash": <alice-sell-avoucher-offer-hash>,
       "debit_amount": 10,
-      "credit_amount": 9
+      "credit_amount": 0
     },
     "offer2": {
       "hash": <matchmaker-buy-avoucher-offer-hash>,
-      "debit_amount": 9,
+      "debit_amount": 0,
       "credit_amount": 10
     },
     "deal_id": <deal-id>
@@ -179,11 +179,11 @@ Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
     "offer1": {
       "hash": <bob-sell-bvoucher-offer-hash>,
       "debit_amount": 90,
-      "credit_amount": 81
+      "credit_amount": 90
     },
     "offer2": {
       "hash": <alice-buy-bvoucher-offer-hash>,
-      "debit_amount": 81,
+      "debit_amount": 90,
       "credit_amount": 90
     },
     "deal_id": <deal-id>
@@ -191,7 +191,7 @@ Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-**Call 2 — Bob → Matchmaker (`10` Bvoucher):**
+**Call 2 — Bob → Matchmaker (`10` Bvoucher spread):**
 
 ```json
 { "method": "create_records",
@@ -199,11 +199,11 @@ Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
     "offer1": {
       "hash": <bob-sell-bvoucher-offer-hash>,
       "debit_amount": 10,
-      "credit_amount": 9
+      "credit_amount": 0
     },
     "offer2": {
       "hash": <matchmaker-buy-bvoucher-offer-hash>,
-      "debit_amount": 9,
+      "debit_amount": 0,
       "credit_amount": 10
     },
     "deal_id": <deal-id>
@@ -215,6 +215,12 @@ Bbank creates:
 
 - Pair 1: debit Bob `90` Bvoucher, credit Alice `90` Bvoucher.
 - Pair 2: debit Bob `10` Bvoucher, credit Matchmaker `10` Bvoucher.
+
+> **No rate check at record creation.** The spread legs use one-sided
+> (credit-only) Offers, so `credit_amount` or `debit_amount` is `0` on those
+> sides. The banks check `min`/`max` and amount equality for their own Voucher
+> only. The aggregate `total_debit / total_credit <= rate` check for Alice's
+> and Bob's two-sided Orders happens later, during the `ready` phase.
 
 ## Phase 3 — Matchmaker sends per-bank Confirm
 
@@ -266,7 +272,7 @@ Each bank independently validates its own records. A record is `ready` when:
 2. `Record.order` resolves to a valid, stored Order or Offer.
 3. The Order/Offer signature is valid and its `pubkey` matches the record's
    holder.
-4. The record amount satisfies the Order/Offer `min`/`max`; the matched debit/credit ratio is `<=` the Order/Offer `rate`.
+4. The record amount satisfies the Order/Offer `min`/`max`. For two-sided Orders, the bank waits until every record of the deal matched to that Order is known, then checks that `total_debit / total_credit <= rate`.
 5. For paired records, the debit and credit amounts are equal for this bank's
    Voucher.
 6. `Voucher.limit` and the Order's `debit_order_limit` / `credit_order_limit`

@@ -121,7 +121,7 @@ Order: BaseDoc & {
 When a bank receives an Order, it MUST validate the `rate`:
 
 - `rate` MUST be a positive number.
-- `rate` is the **maximum acceptable ratio of debit voucher to credit voucher**. For any matched pair of amounts, `debit_amount / credit_amount` MUST be `<= rate` (within the bank's rounding policy).
+- `rate` is the **maximum acceptable ratio of debit voucher to credit voucher** for the whole deal. Before issuing `ready` on any record tied to a two-sided Order, the bank aggregates **all records of the deal** matched to that Order and verifies that `total_debit / total_credit <= rate` (within the bank's rounding policy). It does not enforce the rate on individual record pairs or on one-sided Orders.
 - If the Order is one-sided (invoice or cheque), `rate` is informational and MUST still be positive.
 
 An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. For example, an Order that says "give Alice-coin, get Bob-coin" is submitted to both Alice's bank and Bob's bank.
@@ -143,7 +143,7 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 4. If `R` is a debit, `R.details.account` equals `O.debit.account`.
 5. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. If `O` is two-sided and the paired record's amount is known, the ratio of the debit amount to the credit amount in the matched pair is `<= O.rate` (within the bank's rounding policy). This is the same ratio whether `O` is on the debit side or the credit side of the pair.
+7. If `O` is two-sided, the bank waits until all records of the deal matched to `O` are known, then verifies `total_debit / total_credit <= O.rate` (within the bank's rounding policy).
 8. The cumulative debit amount across all Records already matched to `O` does not exceed `O.debit_order_limit` (if set).
 9. The cumulative credit amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
 10. The resulting balance of the debit account does not fall below `O.debit_account_limit` (if set).
@@ -151,7 +151,7 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 
 If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the ready/hold/settle waves. Specifically:
 
-- During **ready**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit, unless the holder is the issuer authorizing a debit from the issuer account. If yes, the bank issues a `ready` signature on the matched **Record** on behalf of the Order; if no, the bank rejects.
+- During **ready**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit, unless the holder is the issuer authorizing a debit from the issuer account. For two-sided Orders, the bank also checks the aggregate rate (`total_debit / total_credit <= rate`) and cumulative limits across all deal records matched to the Order. If all checks pass, the bank issues a `ready` signature on the matched **Record** on behalf of the Order; if not, it rejects.
 - During **hold**, the bank locks the debit amount as it would for any authorized record.
 - During **settle**, the bank applies the balance change and releases the hold.
 
