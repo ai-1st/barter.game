@@ -121,10 +121,12 @@ Order: BaseDoc & {
 When a bank receives an Order, it MUST validate the `rate`:
 
 - `rate` MUST be a positive number.
-- If both `debit` and `credit` are present, `rate` MUST equal `debit.max / credit.max` (within the bank's rounding policy). More generally, for any matched amounts the ratio of debit to credit MUST equal `rate`.
+- `rate` is the **maximum acceptable ratio of debit voucher to credit voucher**. For any matched pair of amounts, `debit_amount / credit_amount` MUST be `<= rate` (within the bank's rounding policy).
 - If the Order is one-sided (invoice or cheque), `rate` is informational and MUST still be positive.
 
 An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. For example, an Order that says "give Alice-coin, get Bob-coin" is submitted to both Alice's bank and Bob's bank.
+
+**`lead` flag.** `lead: true` means the holder authorizes their bank to act as the **lead party** in any deal where this Order is matched: the lead bank may hold and settle its records before peer banks have locked or settled. `lead: false` means the holder's bank is a **follower**: it must wait for the lead bank's `hold` signature before locking its own debit accounts, and for the lead bank's `settle` signature before settling. A bank learns which peer bank is lead by inspecting the `lead` flag on the Orders it has stored; in a two-bank swap, the bank whose holder's Order is `lead=true` is the lead bank.
 
 **Specializations.** Omitting one side produces the two authorization shortcuts. These are not separate doc types — they are Orders with a missing side:
 
@@ -141,7 +143,7 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 4. If `R` is a debit, `R.details.account` equals `O.debit.account`.
 5. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. If `O` is two-sided and the paired record's amount is known, the ratio of the debit amount to the credit amount equals `O.rate` (within the bank's rounding policy).
+7. If `O` is two-sided and the paired record's amount is known, the ratio of the debit amount to the credit amount in the matched pair is `<= O.rate` (within the bank's rounding policy). This is the same ratio whether `O` is on the debit side or the credit side of the pair.
 8. The cumulative debit amount across all Records already matched to `O` does not exceed `O.debit_order_limit` (if set).
 9. The cumulative credit amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
 10. The resulting balance of the debit account does not fall below `O.debit_account_limit` (if set).
@@ -175,13 +177,13 @@ Offer: BaseDoc & {
     min: number;            // minimum amount to credit per match
     max: number;            // maximum amount to credit per match
   };
-  lead: boolean;            // if true, the order can be executed without explicit credit-holder confirmation
+  lead: boolean;            // copied from the original Order: true if the represented Order is lead
 }
 ```
 
 Banks MAY publish Offers through their public API. Matchmakers discover compatible Offers and ask banks to create record pairs by referencing the Offer hashes.
 
-A Record's `order` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. If the referenced Order/Offer has `lead=true`, the bank executes without requiring a separate holder-signed Order.
+A Record's `order` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. The `lead` flag on the resolved Order/Offer tells the bank whether its records are in the lead set for the deal.
 
 Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **invoice offer**, and an Offer with `credit` omitted is a **cheque offer**.
 

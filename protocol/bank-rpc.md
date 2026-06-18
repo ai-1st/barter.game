@@ -71,7 +71,7 @@ The bank verifies:
 - Both Offers are valid and bank-signed. At least one of them was issued by this bank; the other may be foreign.
 - The local amount pair (the two amounts that apply to this bank's Voucher) are equal.
 - The local amount satisfies the local Offer's `min`/`max` constraints.
-- The amounts are consistent with each Offer's `rate` (within rounding policy).
+- For each Offer, the ratio of the matched debit amount to the matched credit amount is `<=` the Offer's `rate` (within rounding policy).
 - Both Offers resolve to stored Orders (or the bank already has the Orders).
 - The resulting records would not violate `Voucher.limit` or any Order limit.
 
