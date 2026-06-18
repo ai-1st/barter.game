@@ -3,8 +3,8 @@
 This file defines the banking entities and the ledger invariants that operate on them:
 
 - `Voucher`, `Account`
-- `Record`, `Order`
-- `Offer`, `Subscription`, `RecordSubscription`
+- `Record`, `Order`, `Offer`, `Confirm`
+- `Subscription`, `RecordSubscription`
 - Per-record, per-bank state machine
 - Concurrency and balance semantics
 
@@ -18,7 +18,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "confirm" | "subscription" | "address";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -77,8 +77,9 @@ Record: BaseDoc & {
 
 RecordDetails {
   pair: ULID;             // ULID of the peer record (set by the bank at creation)
+  deal_id: ULID;          // deal-wide identifier supplied by the matchmaker
   holder: Base58PubKey;   // pubkey of the holder
-  account: Base58SHA256;   // hash of holder's Account doc
+  account: Base58SHA256;  // hash of holder's Account doc
 }
 ```
 
@@ -90,7 +91,7 @@ For a normal transfer, the debit record lists the giver's Order and the credit r
 
 ### 1.4 Order
 
-A **signed instruction that authorizes a bank to process specific records on the holder's behalf**. Orders are the only holder authorization primitive in v1: there is no separate "Tx" doc. A holder creates an Order describing what they are willing to give and/or receive, signs it, and presents it to the banks that own the records it touches.
+A **signed instruction that authorizes a bank to process specific records on the holder's behalf**. Orders are the only holder authorization primitive in v1. A holder creates an Order describing what they are willing to give and/or receive, signs it, and presents it to every bank that issues a Voucher referenced by the Order.
 
 ```ts
 Order: BaseDoc & {
@@ -116,6 +117,8 @@ Order: BaseDoc & {
 
 `Order.pubkey` MUST equal the `holder` field of each referenced Account.
 
+An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. For example, an Order that says "give Alice-coin, get Bob-coin" is submitted to both Alice's bank and Bob's bank.
+
 **Specializations.** Omitting one side produces the two authorization shortcuts. These are not separate doc types — they are Orders with a missing side:
 
 - **Invoice** — an Order with `debit` omitted. It authorizes an unconditional credit to the holder; anyone may attach it to a transfer to move funds to the invoice holder.
@@ -131,13 +134,12 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 4. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 5. The Voucher referenced by the record (via the account) equals the Voucher in the corresponding `O.debit`/`O.credit` side.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. For a pair of Records (credit + debit) matched by two Orders, the debit amount divided by the credit amount equals both Orders' `rate` (within the bank's rounding policy).
-8. The cumulative amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
-9. The resulting balance of the credit account does not exceed `O.credit_account_limit` (if set).
+7. The cumulative amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
+8. The resulting balance of the credit account does not exceed `O.credit_account_limit` (if set).
 
 If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the ready/hold/settle waves. Specifically:
 
-- During **ready**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit. If yes, the bank issues a `ready` signature on the matched **Record** on behalf of the Order; if no, the bank rejects.
+- During **ready**, the holder's bank checks that the `debit` account has enough **free balance** (current balance minus any existing holds) to cover the proposed debit, unless the holder is the issuer authorizing a debit from the issuer account. If yes, the bank issues a `ready` signature on the matched **Record** on behalf of the Order; if no, the bank rejects.
 - During **hold**, the bank locks the debit amount as it would for any authorized record.
 - During **settle**, the bank applies the balance change and releases the hold.
 
@@ -167,7 +169,7 @@ Offer: BaseDoc & {
 }
 ```
 
-Banks MAY publish Offers through their public API. Matchmakers and other clients may subscribe to offer streams for particular vouchers and assemble deals by calling `create_records` with `offer_match` requests. The bank resolves the Offer to the underlying Order, creates records using the Order holder's hidden account and the matchmaker's provided counterparty account, and returns the record bodies. The matchmaker then stitches record hashes from multiple banks into Orders that authorize the transfer.
+Banks MAY publish Offers through their public API. Matchmakers discover compatible Offers and ask banks to create record pairs by referencing the Offer hashes.
 
 A Record's `orders[]` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. If the referenced Order/Offer has `lead=true`, the bank executes without requiring a separate holder-signed Order.
 
@@ -175,7 +177,31 @@ Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **inv
 
 > **Invariant:** Offers are bank-issued derived documents. They are not holder signatures, but they MUST be signed by the bank's pubkey and they MUST accurately reflect the terms of the referenced Order.
 
-### 1.6 Subscription
+### 1.6 Confirm
+
+A matchmaker-signed clearance that tells one bank: "record creation for this deal is complete, and the listed records are the ones you should act on." Banks do not advance records until they receive a `Confirm` that covers them.
+
+```ts
+Confirm: BaseDoc & {
+  type: "confirm";
+  deal_id: ULID;            // deal-wide id supplied by the matchmaker
+  bank: Base58PubKey;       // the bank this Confirm is addressed to
+  records: Base58SHA256[];  // all record hashes this bank created for the deal
+}
+```
+
+`Confirm.pubkey` is the matchmaker. `Confirm.sig` is the matchmaker's signature over the canonical unsigned doc.
+
+When a bank receives a `Confirm`:
+
+1. Verify the matchmaker's signature.
+2. Verify `Confirm.bank` equals the bank's own pubkey.
+3. Verify that every Record it created for `Confirm.deal_id` appears in `Confirm.records`.
+4. Only then may the bank advance those records out of `created`, and only once valid Orders are also bound.
+
+The matchmaker sends a different `Confirm` to each participating bank. A bank never needs the full chain's records — only its own slice.
+
+### 1.7 Subscription
 
 A persistent request for a bank to push signatures that match a filter to a given URL.
 
@@ -191,7 +217,7 @@ Subscription: BaseDoc & {
 
 When the bank issues or receives a Signature that matches a Subscription, it POSTs a bank-signed `notify_signatures` envelope to `url` fire-and-forget. The receiver verifies the bank signature and the contained Signatures independently.
 
-### 1.7 RecordSubscription
+### 1.8 RecordSubscription
 
 When creating records, the proposing client MAY supply a list of lightweight **RecordSubscription** objects so the bank can immediately fan out signatures on the freshly minted records. A RecordSubscription is not a content-addressed doc; it is a one-off routing hint used only at record-creation time.
 
@@ -202,25 +228,26 @@ RecordSubscription: {
 }
 ```
 
-On receiving a `create_records` call, the bank MAY turn each `RecordSubscription` into a persistent `Subscription` doc (§1.6) for the requested record. Either way, signatures issued for that record are pushed to the URL. For broader or longer-lived fan-out, clients SHOULD use the `subscribe` method directly.
+On receiving a `create_records` call, the bank MAY turn each `RecordSubscription` into a persistent `Subscription` doc (§1.7) for the requested record. Either way, signatures issued for that record are pushed to the URL. For broader or longer-lived fan-out, clients SHOULD use the `subscribe` method directly.
 
 ---
 
 ## 2. State machine (per-record, per-bank)
 
-Each bank runs its own state machine over each record it owns. Wave 1 transitions happen on client calls; from `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_order` binding an Order, a verified signature arriving via `notify_signatures`).
+Each bank runs its own state machine over each record it owns. Records are created by the matchmaker via `create_records`; they stay in `created` until both (a) valid Orders are bound and (b) a per-bank `Confirm` arrives. From `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_order` binding an Order, a verified signature arriving via `notify_signatures`).
 
 ```
    per-record state (per bank)
 
    created ── create_records ──▶ all records minted
 
-   submit_order (by each holder → bank, this bank's records only)
+   submit_order + submit_confirm (by matchmaker/holders → bank)
         │
         ▼
    ┌──────────┐
-   │ approved │  every owned Record has a valid Order bound and is `ready`
-   └────┬─────┘   (if `lead` or no predecessors, advance engine runs immediately)
+   │ approved │  every owned Record has a valid Order bound,
+   └────┬─────┘  the per-bank Confirm is received, and records are `ready`
+        │        (if `lead` or no predecessors, advance engine runs immediately)
         │ advance engine
         │ all records ready, no lock conflict
         ▼
@@ -238,7 +265,7 @@ Each bank runs its own state machine over each record it owns. Wave 1 transition
    Any pre-settled state can transition to rejected via a bank-issued `reject` signature on the record.
 ```
 
-The client is no longer required to call `submit_order` in topological order; it only needs every holder to authorize every bank's records with a signed Order. Once all Orders for a bank's records are in, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The client **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
+The matchmaker is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders / published Offers). The matchmaker then sends a `Confirm` to each bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The matchmaker **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
 
 > **Invariant:** These states, their transitions, and their preconditions are protocol. The storage representation and the event loop that drives self-advancement are implementation details — but a bank MUST NOT settle without its lead/follow precondition met, and MUST NOT apply a record's delta twice.
 
@@ -256,8 +283,8 @@ The approve-time balance check is computed net of active holds, so a deal cannot
 
 ### 3.2 Mutual-credit balance semantics
 
-- **Issuers go negative only through minting.** When an issuer mints a Voucher, the bank creates the issuer's negative-balance row as part of `mint`. This is the only protocol path that creates a negative balance. The network owes the negative-balance side nothing; the holder owes the network nothing. Each side is accountable for their own ledger position.
-- **No negative balance on holder-authorized transfers.** A transfer authorized by a holder-signed Order or by a holder Order/Offer MUST NOT drive the debit account negative. The bank rejects any Record that would overdraw the account. The `Voucher.limit` field is honored if set; otherwise issuance is unbounded.
+- **Issuers may start trading without a mint step.** An issuer's own Order can debit the issuer account, driving it negative. This negative balance represents vouchers the issuer owes the network. The first trade creates the issuer's negative row and a corresponding positive row in the buyer's account in one debit/credit pair.
+- **No negative balance on non-issuer holder-authorized transfers.** A transfer authorized by a non-issuer holder Order or by a holder Order/Offer MUST NOT drive the debit account negative. The bank rejects any Record that would overdraw the account. The `Voucher.limit` field is honored if set; otherwise issuance is unbounded.
 - **Sum invariant**: across all accounts for a given Voucher, balances always sum to zero (or the agreed limit). The bank enforces this on every `settle`.
 
 > **Invariant:** The sum invariant is the load-bearing correctness guarantee of the ledger. Every implementation MUST preserve it on every settle.

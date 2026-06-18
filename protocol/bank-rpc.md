@@ -2,7 +2,7 @@
 
 This file defines the bank's public interface:
 
-- JSON-RPC methods for minting, record creation, authorization, signature fan-out, and reads
+- JSON-RPC methods for voucher/account/order submission, record creation, authorization clearance, signature fan-out, and reads
 - REST address-directory endpoints
 - Orchestration recipe
 - Bank discovery
@@ -21,44 +21,52 @@ All RPCs are `POST` to `<bank-url>/rpc` with the envelope shape defined in [`bas
 
 The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to subscribers.
 
-The API surface below is intentionally small. Wave 1 (ready) is driven by holder calls to `submit_order`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied, either because a new signature arrived via push/relay or because a client re-called `submit_order` or `notify_signatures`.
+The API surface below is intentionally small. Wave 1 (ready) is driven by matchmaker calls to `create_records` followed by holder `submit_order` and matchmaker `submit_confirm`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied, either because a new signature arrived via push/relay or because a client re-called `submit_order`, `submit_confirm`, or `notify_signatures`.
 
 ### 2.1 Doc submission
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `mint(voucher, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `voucher` references this bank, that both Accounts belong to the issuer, reference the voucher, and use distinct Account hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
+| `submit_voucher(voucher)` | issuer → issuer bank | Store a Voucher doc. The bank validates that `voucher.pubkey == voucher.bank` (only the issuer may register a Voucher at this bank) and that the Voucher fields are valid. |
 | `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Account bodies stay on the holder's machine. |
-| `submit_order(order, accounts[], records?, publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `records` are supplied, bind the Order to any of this bank's records it matches and issue per-record `ready`/`reject`. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash, ready/reject results, and, if published, the Offer hash and bank signature. |
+| `submit_order(order, accounts[])` | holder → each bank that issues a Voucher referenced by the Order | Store the Order and the referenced Accounts this bank can verify. Return the Order hash. The same Order is submitted to every bank that issues a Voucher on either side of the Order. |
+| `submit_confirm(confirm)` | matchmaker → each participating bank | Verify the matchmaker's signature, that `confirm.bank` is this bank, and that every Record this bank created for `confirm.deal_id` is listed. Once verified, the bank may advance those records out of `created` as soon as valid Orders are bound. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
 
 ### 2.2 Record creation
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `create_records(requests, docs?, record_subscriptions?)` | client → each bank | Intake `docs`; validate each request; mint the debit/credit pairs with mandatory `pair`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `draft` records; the bank copies them into active storage when they are authorized. |
+| `create_records(requests, docs?, record_subscriptions?)` | matchmaker → each bank | Intake `docs`; validate each request; mint the debit/credit pairs with mandatory `pair` and `deal_id`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
 
-A `request` is either:
+The only `request` type in v1 is:
 
-- `{ type: "transfer", voucher_hash, amount, debit_account_hash, credit_account_hash }` — explicit transfer between two known accounts.
-- `{ type: "offer_match", offer_hash, amount, account_hash }` — match against a published Offer. The bank resolves the underlying Order, validates that `account_hash` is a valid counterparty account for the requested amount and side, and creates the paired records using the Order holder's account (hidden from the matchmaker) and the provided counterparty account.
+```ts
+{ type: "offer_pair", offer1, offer2, amount, deal_id }
+```
 
-The bank validates that all accounts exist, reference the correct Voucher, and satisfy the Offer terms (rate, min/max, limits) before minting records.
+- `offer1` and `offer2` are hashes of **Offers issued by this bank**. They MUST be on opposite sides of the same Voucher: one debits the Voucher, the other credits it. The bank resolves each Offer to its underlying Order, creates a debit record for the seller and a credit record for the buyer, and tags both with the supplied `deal_id`.
+- `amount` is the amount of this bank's Voucher to transfer from the seller to the buyer. The bank verifies it satisfies both Offers' `min`/`max` constraints.
+- `deal_id` is a ULID chosen by the matchmaker. All records created by all banks for the same deal share this id.
 
-### 2.3 Authorization
+The bank rejects the request if:
+
+- either Offer is unknown or was not issued by this bank;
+- either Offer cannot be resolved to a stored Order;
+- the Offers are not on opposite sides of a Voucher this bank issues;
+- `amount` is outside either Offer's limits;
+- the resulting records would violate the `Voucher.limit` or any Order limit.
+
+> **No other caller may create records.** There is no `mint`; issuers begin trading by placing Orders that debit the issuer account.
+
+### 2.3 Signature fan-out
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `submit_order(order, accounts[], records?)` | any relayer → each bank owning records in `records` | Verify `order` is a valid holder-signed Order by `order.pubkey`. If `records` are supplied, every owned record must sit on an account owned by `order.pubkey`, match the Order's terms, and not be bound to a conflicting Order. Persist Order; bind records; issue per-record `ready`/`reject`. The bank then self-advances (see `bank-schema.md` §2). |
-
-### 2.4 Signature fan-out
-
-| Method | Caller | Side effect |
-|---|---|---|
-| `subscribe(subscription)` | creator → bank | Validate (see `bank-schema.md` §1.6; `subscription.pubkey` = sender); store the doc and its watch keys. |
+| `subscribe(subscription)` | creator → bank | Validate (see `bank-schema.md` §1.7; `subscription.pubkey` = sender); store the doc and its watch keys. |
 | `notify_signatures(signatures)` | peer bank or any relayer → bank | Verify each signature against its signer pubkey; store the valid ones; re-run the advance engine for every deal they touch. Invalid entries are skipped, not fatal. |
 
-### 2.5 Read
+### 2.4 Read
 
 | Method | Caller | Side effect |
 |---|---|---|
@@ -70,7 +78,7 @@ The bank validates that all accounts exist, reference the correct Voucher, and s
 | `get_invoice(hash)` / `get_cheque(hash)` | any → bank | Return the Order or Offer at `hash` if it has the invoice (`debit` omitted) or cheque (`credit` omitted) specialization. |
 | `list_vouchers(filter)` | any → bank | Return Vouchers the bank chooses to expose (e.g., public, discoverable, or all known). Exact filters are bank policy; the method shape is protocol. |
 
-### 2.6 Address directory (REST)
+### 2.5 Address directory (REST)
 
 The Address directory uses plain HTTP endpoints rather than the JSON-RPC envelope:
 
@@ -102,15 +110,15 @@ The `url` field is the canonical RPC URL — the location clients should use. It
 
 ## 4. Orchestration with the doc-oriented API
 
-The initiating client builds the deal as a set of requests (explicit transfers and/or `offer_match`es), creates records at each participating bank, and lets each holder sign an Order authorizing their side.
+The matchmaker builds the deal by discovering compatible Offers and asking each bank to create the records that connect them.
 
-1. **create_records** on every participating bank with its own requests, any Account doc bodies the requests need, and optional `record_subscriptions`.
-2. **Partition per holder**: each transfer's debit record hash goes to the giver's Order, the credit record hash to the receiver's Order. Build one signed Order per holder. Matchmakers building against `lead` Orders may use the Offer path without a separate holder signature.
-3. **subscribe**: cross-subscribe the participating banks to each other's record signatures (or pick another topology — see `README.md` §2.4).
-4. **submit_order** the initiator's own Order, with `lead=true`, to every bank owning its records. The bank binds the Order to matching records and issues `ready`/`reject`.
-5. Hand every other holder their unsigned Order (plus the record bodies and bank URLs — e.g. a deal token, see `README.md` §3). Each verifies against the banks (`get_record_signatures`), signs their Order (with `lead=false` unless they are also a lead), and submits. Matchmakers submit Orders against `lead` Offers without holder signatures.
-6. **The banks do the rest.** Each bank's advance engine issues `hold` once all its records are approved, then `settle` once preconditions are met. Watch with `get_record_signatures`; if a push was lost, relay signatures by hand (`get_record_signatures` → `notify_signatures`).
+1. **Holders publish intent.** Each holder submits their Voucher, Account, and Order to the banks that issue the Vouchers they want to trade. Banks MAY derive and publish Offers.
+2. **Matchmaker discovers Offers.** The matchmaker scans `list_offers` (or an off-band offer stream) and picks, for each bank, two Offers on opposite sides of the same Voucher that form a mutually acceptable trade.
+3. **create_records** on every participating bank with an `offer_pair` request (`offer1`, `offer2`, `amount`, `deal_id`), plus any Account doc bodies the bank still needs and optional `record_subscriptions`.
+4. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
+5. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (either already stored or submitted via `submit_order`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met.
+6. **Watch and relay.** Follow banks subscribe to predecessor bank signatures. If a push is lost, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`).
 
-Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Order binding, per-record ready, hold preconditions, settle proofs — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
+Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Offer resolution, per-record ready, hold preconditions, settle proofs, Confirm clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 
-> **Invariant:** The method names, parameter shapes, and side-effect semantics above are protocol. The exact HTTP client library, retry policy, timeout values, and how the client stores the deal graph are implementation details.
+> **Invariant:** The method names, parameter shapes, and side-effect semantics above are protocol. The exact HTTP client library, retry policy, timeout values, and how the matchmaker discovers Offers are implementation details.

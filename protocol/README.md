@@ -24,7 +24,7 @@ A **Voucher** is a signed, content-addressed document in which one party (the **
 
 A **transfer** moves a Voucher from one holder to another. The debit holder's balance decreases; the credit holder's balance increases. The sum across all Accounts for a given Voucher is always zero.
 
-**Minting is a transfer too.** Issuing a Voucher creates the first debit/credit record pair between two of the issuer's own accounts: the *issue* account goes negative, the *holding* account goes positive. There is no special mint balance logic — the same mechanism that moves value in trades creates it at mint.
+**Issuers start trading without a mint step.** An issuer's own Order can debit the issuer account, driving it negative. That negative balance represents vouchers the issuer owes the network; the first buyer's account is credited in the same debit/credit pair. There is no separate mint operation.
 
 ---
 
@@ -45,7 +45,7 @@ barter.game v1 is built on three behavioral assumptions. They are not enforced b
 
 Banks are open by default. The v1 reference posture:
 
-- Banks allow minting **any** voucher that references them.
+- Banks allow **any** Voucher to be registered by its issuer.
 - Banks accept new ledger records for new accounts and new vouchers; they only check that the voucher references the bank.
 - Banks accept and store any docs/signatures linked to vouchers that reference this bank, **from anyone** — the sender of a request need not be the doc's owner (counterparties legitimately carry each other's Account docs and relay each other's signatures).
 - All calls to bank APIs are signed by the sender's key. Moderation is **key-blocking**, not gatekeeping: banks MAY refuse or rate-limit service to spammers and abusers based on their pubkey.
@@ -54,21 +54,25 @@ Banks are open by default. The v1 reference posture:
 
 ---
 
-## 2. Settlement model — direct approval, three waves, lead/follow
+## 2. Settlement model — matchmaker-created records, Order authorization, lead/follow
 
-A deal executes in three waves: **ready → hold → settle** sanctioned by the holders. Banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
+A deal executes in three waves: **ready → hold → settle**. Records are created by a matchmaker, authorized by holder Orders, and cleared by a matchmaker `Confirm`. Banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
 
 ### 2.0 Three-wave execution model: ready → hold → settle
 
-**1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has authorization from the Holder. Authorization is independent: Alice can authorize without waiting for Bob. Authorization comes from:
+**1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has:
 
-- A matching signed `Order` doc (see `bank-schema.md`). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance.
-- A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The holder still signs the Order that references the Offer.
+- a valid `Order` (or `Offer`) bound to the record, **and**
+- a per-bank `Confirm` from the matchmaker for this deal, **and**
+- sufficient coverage on the debit account.
+
+Authorization is independent per holder: Alice can submit her Order without waiting for Bob. Authorization comes from:
+
+- A matching signed `Order` doc (see `bank-schema.md`). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance (or that the holder is the issuer authorizing a negative balance).
+- A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The underlying Order still provides the authorization.
 - An invoice or cheque specialization of an Order or Offer (one side omitted, see `bank-schema.md`).
 
-If a bank sees both a holder-signed Order and a matching Order/Offer for the same Records, either one satisfies the ready gate.
-
-**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Order have been approved. A bank holds its own records in a deal when all of the records covered by Orders at this bank are `ready` and:
+**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records are approved. A bank holds its own records in a deal when all of its records are `ready` and:
 
 - the authorizing Order has `lead=true`, **or**
 - the authorizing Order has `lead=false` and every credit record from other banks that this Order depends on has a `hold` signature already.
@@ -78,7 +82,9 @@ A bank may issue a `hold` only if the debit is covered. Coverage means either:
 - the account has enough available balance after existing holds, **or**
 - the account will receive a credit in this deal that has already been held by this bank.
 
-The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Order.
+Issuers are the exception: an issuer's own Order may debit the issuer account below zero, representing vouchers the issuer owes the network. No separate mint step exists.
+
+The bank MUST NOT hold an amount that would make a non-issuer account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Order.
 
 If a record cannot be held — because its debit is uncovered, the account is unknown, `reject` received for any record the Order depends on, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
 
@@ -89,11 +95,11 @@ If a record cannot be held — because its debit is uncovered, the account is un
 
 Settling means: apply the deltas of every owned record, release the holds, issue `settle` signatures, fan out.
 
-> **Implementation note:** The v1 reference implementation calls `create_records` on each bank, then each holder builds and signs their own Order and calls `submit_order` on every bank that owns records touching their accounts. `submit_order` issues per-record `ready` (or `reject`) signatures. Once all its records are approved, the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied.
+> **Implementation note:** The matchmaker calls `create_records` on each bank with an `offer_pair` request. Each bank returns the record bodies it created. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit Orders (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
 
 ### 2.1 Authorization sources
 
-A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_order` resolves them.
+A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account, and a matchmaker `Confirm` for the deal. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_order` and `submit_confirm` resolve them.
 
 ### 2.2 Risk — lead and follow
 
@@ -173,8 +179,10 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 |---|---|---|
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
-| Coordinator pattern | **Client-orchestrated**: the proposing user calls each bank with its own slice and relays signatures; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the vouchers it issues + the holder Order hash lists + its predecessor bank pubkeys; no bank sees the full deal | **Yes** |
+| Coordinator pattern | **Matchmaker-orchestrated**: a matchmaker calls `create_records` on each bank, then sends a per-bank `Confirm`; banks never call each other on the trade path | **Yes** |
+| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders/Offers + the per-bank `Confirm` + predecessor bank pubkeys; no bank sees the full deal | **Yes** |
+| Record creation | Only the matchmaker may create records, and only via `offer_pair` requests | **Yes** |
+| Advance gate | A bank advances records only after receiving a `Confirm` addressed to it and valid Orders for its records | **Yes** |
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
 | Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
@@ -185,7 +193,7 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Order cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
 | Order ownership | **One Order per participating holder**, containing the records that touch that holder's accounts | **Yes** |
 | Holder authorization | Holders sign Voucher, Order, and Address docs; banks sign Record and Offer docs | **Yes** |
-| Balance floor | Holder-authorized transfers cannot overdraw the debit account; negative balances are created only by issuer minting | **Yes** |
+| Balance floor | Non-issuer holder-authorized transfers cannot overdraw the debit account; issuers may go negative via their own Orders | **Yes** |
 | Offers | Banks MAY derive and publish Offer docs from Orders; Offers hide holder identity and account hashes | **Yes** |
 
 ---
