@@ -11,7 +11,7 @@ This file defines the parts of the v1 contract that are not specific to banking 
 - Bank discovery and pubkey pinning
 - Standard vs custom API surface
 
-For Voucher/Account/Record/Tx/Order/Offer/Subscription schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
+For Voucher/Account/Record/Order/Offer/Subscription schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
 
 ---
 
@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "tx" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "subscription" | "address";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -61,9 +61,9 @@ Encoded fields:
 
 - `Base58PubKey`, `Base58Signature`, `Base58SHA256` — base58 strings.
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
-- `DateString` — `YYYY-MM-DD`.
+- `DateString` — `2024-05-02T00:00:00Z` -  ISO 8601 datetime  
 
-The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Account, Record, Tx, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
+The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Record, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
 
 ### 3.1 Signature
 
@@ -72,9 +72,8 @@ Attestations are first-class docs. A signature with an `action` anchors to **exa
 ```ts
 Signature: BaseDoc & {
   type: "signature";
-  hash?: Base58SHA256;       // content-addressed target (record hash, Tx hash, Offer hash, Address hash)
-  action?: "ready" | "hold" | "settle" | "reject"
-         | "lead" | "follow";
+  hash?: Base58SHA256;       // content-addressed target (record hash, Order hash, Offer hash, Address hash)
+  action?: "ready" | "hold" | "settle" | "reject";
   seen?: Base58SHA256[];     // hashes of prior Signature docs
   reason?: string;
   sig?: Base58Signature;     // ed25519 sig over canonical(doc minus sig)
@@ -85,16 +84,14 @@ Signature: BaseDoc & {
 
 | Action | Signer | Target | Meaning |
 |---|---|---|---|
-| `lead` | initiating holder | `hash` = their Tx hash | authorizes the Tx's records; accepts moving first |
-| `follow` | every other holder | `hash` = their Tx hash | authorizes the Tx's records; doubles as receipt confirmation |
 | `ready` | bank | `hash` = a record hash | the bank's per-record limits/validity verdict |
 | `hold` | bank | `hash` = a record hash | this bank's debit account is locked for this record |
 | `settle` | bank | `hash` = a record hash | this bank applied this record's delta |
 | `reject` | bank | `hash` = a record hash | this record is rejected; holds released |
 
-A bank's signature on an Offer or Address (no `action`) is a pure attestation that the bank has stored/derived the doc.
+A holder's signature on an Order (no `action`) is the holder's authorization for the transfers described in that Order. A bank's signature on an Offer or Address (no `action`) is a pure attestation that the bank has stored/derived the doc.
 
-`seen` is the load-bearing field for multi-party settlement: a follower bank's `settle` on a record lists the hashes of the upstream `settle` Signature docs it verified before applying its own record. That turns the lead→follow handoff into a verifiable settle chain — every link proves the prior link committed.
+`seen` is the load-bearing field for multi-party settlement: a follow bank's `settle` on a record lists the hashes of the upstream `settle` Signature docs it verified before applying its own record. That turns the lead→follow handoff into a verifiable settle chain — every link proves the prior link committed.
 
 > **Invariant:** `Signature.seen` carries the cascade proof. A follower MUST verify its predecessors' settle signatures before applying balances and MUST cite them in `seen`. The exactly-one-target rule for actioned signatures is protocol.
 
@@ -185,7 +182,7 @@ Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have hear
 
 ### 5.2 Pubkey pinning (security)
 
-The discovery document is **not a trust anchor**. A comvoucherd DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
+The discovery document is **not a trust anchor**. A compromised DNS / hosting provider could serve a different pubkey, and TOFU clients would be fooled. v1 pins pubkey alongside URL everywhere trust is established:
 
 - The client config map stores `{pubkey, url}` per bank.
 - Invite strings carry `<pubkey>@<bank-url>` syntax (see `README.md`).

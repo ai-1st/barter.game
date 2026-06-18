@@ -21,7 +21,7 @@ All RPCs are `POST` to `<bank-url>/rpc` with the envelope shape defined in [`bas
 
 The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to subscribers.
 
-The API surface below is intentionally small. Wave 1 (ready) is driven by holder calls to `submit_tx`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied, either because a new signature arrived via push/relay or because a client re-called `submit_tx` or `notify_signatures`.
+The API surface below is intentionally small. Wave 1 (ready) is driven by holder calls to `submit_order`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied, either because a new signature arrived via push/relay or because a client re-called `submit_order` or `notify_signatures`.
 
 ### 2.1 Doc submission
 
@@ -29,14 +29,14 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by holder
 |---|---|---|
 | `mint(voucher, debit_account, credit_account, amount)` | issuer → issuer bank | Validate that `voucher` references this bank, that both Accounts belong to the issuer, reference the voucher, and use distinct Account hashes, and that `integer`/`limit` are respected. Store the Account docs, create the first debit/credit record pair for the requested `amount`, apply the balance deltas, and **settle it immediately** — single signer, single bank, zero counterparty risk. Issue record-level `settle` signatures; no `ready` or `hold` step is needed. |
 | `submit_account(account)` | holder → issuer bank | Store an Account doc. There is no separate "open account" operation; this is it. Account bodies stay on the holder's machine. |
-| `submit_order(order, accounts[], publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash and, if published, the Offer hash and bank signature. |
+| `submit_order(order, accounts[], records?, publish_offer?)` | holder → each bank that hosts one of the referenced accounts | Store the Order and the referenced Accounts this bank can verify. If `records` are supplied, bind the Order to any of this bank's records it matches and issue per-record `ready`/`reject`. If `publish_offer` is true, derive and store an Offer, and make it discoverable. Return the Order hash, ready/reject results, and, if published, the Offer hash and bank signature. |
 | `submit_address(address)` | any → bank | Store or update an Address doc for the pubkey it describes, replacing any older Address by ULID. |
 
 ### 2.2 Record creation
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `create_records(requests, docs?, record_subscriptions?)` | client → each bank | Intake `docs`; validate each request; mint the debit/credit pairs with mandatory `pair`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `draft` records; the bank copies them into active storage when they are signed. |
+| `create_records(requests, docs?, record_subscriptions?)` | client → each bank | Intake `docs`; validate each request; mint the debit/credit pairs with mandatory `pair`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `draft` records; the bank copies them into active storage when they are authorized. |
 
 A `request` is either:
 
@@ -49,13 +49,13 @@ The bank validates that all accounts exist, reference the correct Voucher, and s
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `submit_tx(tx, holder_signature?, docs?)` | any relayer → each bank owning records in `tx.records` | Verify `holder_signature` is a valid `lead`/`follow` by `tx.pubkey` over the Tx hash (or that a matching `lead` Order/Offer authorizes the Tx). Every owned record must sit on an account owned by `tx.pubkey`, and not be bound to a different Tx. Persist Tx + signature; bind records; issue per-record `ready`/`reject`. The bank then self-advances (see `bank-schema.md` §2). |
+| `submit_order(order, accounts[], records?)` | any relayer → each bank owning records in `records` | Verify `order` is a valid holder-signed Order by `order.pubkey`. If `records` are supplied, every owned record must sit on an account owned by `order.pubkey`, match the Order's terms, and not be bound to a conflicting Order. Persist Order; bind records; issue per-record `ready`/`reject`. The bank then self-advances (see `bank-schema.md` §2). |
 
 ### 2.4 Signature fan-out
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `subscribe(subscription)` | creator → bank | Validate (see `bank-schema.md` §1.8; `subscription.pubkey` = sender); store the doc and its watch keys. |
+| `subscribe(subscription)` | creator → bank | Validate (see `bank-schema.md` §1.6; `subscription.pubkey` = sender); store the doc and its watch keys. |
 | `notify_signatures(signatures)` | peer bank or any relayer → bank | Verify each signature against its signer pubkey; store the valid ones; re-run the advance engine for every deal they touch. Invalid entries are skipped, not fatal. |
 
 ### 2.5 Read
@@ -102,15 +102,15 @@ The `url` field is the canonical RPC URL — the location clients should use. It
 
 ## 4. Orchestration with the doc-oriented API
 
-The initiating client builds the deal as a set of requests (explicit transfers and/or `offer_match`es), creates records at each participating bank, and lets each holder build and sign their own Tx.
+The initiating client builds the deal as a set of requests (explicit transfers and/or `offer_match`es), creates records at each participating bank, and lets each holder sign an Order authorizing their side.
 
 1. **create_records** on every participating bank with its own requests, any Account doc bodies the requests need, and optional `record_subscriptions`.
-2. **Partition per holder**: each transfer's debit record hash goes to the giver's Tx, the credit record hash to the receiver's Tx. Build one unsigned Tx per holder. Matchmakers building against `lead` Offers build their own Txs too.
+2. **Partition per holder**: each transfer's debit record hash goes to the giver's Order, the credit record hash to the receiver's Order. Build one signed Order per holder. Matchmakers building against `lead` Orders may use the Offer path without a separate holder signature.
 3. **subscribe**: cross-subscribe the participating banks to each other's record signatures (or pick another topology — see `README.md` §2.4).
-4. **submit_tx** the initiator's own Tx, signed `lead`, to every bank owning its records.
-5. Hand every other holder their unsigned Tx (plus the record bodies and bank URLs — e.g. a deal token, see `README.md` §3). Each verifies against the banks (`get_record_signatures`), signs `follow`, and submits. Matchmakers submit Txs against `lead` Offers without holder signatures.
+4. **submit_order** the initiator's own Order, with `lead=true`, to every bank owning its records. The bank binds the Order to matching records and issues `ready`/`reject`.
+5. Hand every other holder their unsigned Order (plus the record bodies and bank URLs — e.g. a deal token, see `README.md` §3). Each verifies against the banks (`get_record_signatures`), signs their Order (with `lead=false` unless they are also a lead), and submits. Matchmakers submit Orders against `lead` Offers without holder signatures.
 6. **The banks do the rest.** Each bank's advance engine issues `hold` once all its records are approved, then `settle` once preconditions are met. Watch with `get_record_signatures`; if a push was lost, relay signatures by hand (`get_record_signatures` → `notify_signatures`).
 
-Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Tx binding, per-record ready, hold preconditions, settle proofs — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
+Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Order binding, per-record ready, hold preconditions, settle proofs — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 
 > **Invariant:** The method names, parameter shapes, and side-effect semantics above are protocol. The exact HTTP client library, retry policy, timeout values, and how the client stores the deal graph are implementation details.

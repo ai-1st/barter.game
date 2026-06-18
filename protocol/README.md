@@ -5,14 +5,14 @@
 > If you are building your own bank or client, read this overview first, then see:
 >
 > - [`base.md`](./base.md) — identity, canonical JSON, `BaseDoc`, `Signature`, `Address`, the JSON-RPC envelope, replay protection, and request signing.
-> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Tx`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
+> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
 > - [`bank-rpc.md`](./bank-rpc.md) — the bank JSON-RPC API and REST address-directory endpoints.
 >
 > `MASTER-INPUT.md` is the source-of-truth design narrative from the product owner; `scenarios/*.md` are step-by-step interaction traces. `IMPLEMENTATION.md` explains how the reference team built it.
 
 A federated mutual-credit ledger enabling multi-party barter deals where parties issue Vouchers for their goods and services and exchange them with others. A deal is a chain of paired credit/debit transfers — one or more holders moving Vouchers among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
-The simplest non-trivial deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, each holder authorizes their own view of it by signing **their own Tx**, and one or more **lead** banks settle first while everyone else follows.
+The simplest non-trivial deal is bilateral: two holders at two banks swap. But the same machinery covers a single holder moving value inside one bank, a three-party ring (`A → B → C → A`), and arbitrarily complex multi-bank settlements. What never changes: a deal is a set of credit/debit pairs, each holder authorizes their own view of it by signing **their own Order**, and one or more **lead** banks settle first while everyone else follows.
 
 ### Core concepts: Voucher, Issuer, Holder, Bank
 
@@ -60,28 +60,27 @@ A deal executes in three waves: **ready → hold → settle** sanctioned by the 
 
 ### 2.0 Three-wave execution model: ready → hold → settle
 
-**1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has authorization from the Holder. Authorization is independent: Alice can authorize without waiting for Bob. Authorization can come from:
+**1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has authorization from the Holder. Authorization is independent: Alice can authorize without waiting for Bob. Authorization comes from:
 
-- A direct holder `lead` or `follow` signature on the holder's own **Tx**.
-- A matching `Order` doc (see `bank-schema.md`). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance.
-- A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The holder still signs the Tx that references the Offer.
+- A matching signed `Order` doc (see `bank-schema.md`). When a holder is represented by an Order, the holder's bank issues `ready` on the matched Records on the holder's behalf, checking at ready time that the relevant accounts have sufficient free balance.
+- A matching `Offer` doc (see `bank-schema.md`) — a bank-issued derivation of an Order. The holder still signs the Order that references the Offer.
 - An invoice or cheque specialization of an Order or Offer (one side omitted, see `bank-schema.md`).
 
-If a bank sees both a direct Tx signature and a matching Order/Offer for the same Records, either one satisfies the ready gate. 
+If a bank sees both a holder-signed Order and a matching Order/Offer for the same Records, either one satisfies the ready gate.
 
-**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Tx have been approved. A bank holds its own records in a Tx when all of the records in that Tx are `ready` and:
+**2. Hold** — `ready` signatures are fanned out to subscribed banks, so every bank can see which records in a holder's Order have been approved. A bank holds its own records in a deal when all of the records covered by Orders at this bank are `ready` and:
 
-- the Tx is authorized as `lead`, **or**
-- the Tx is authorized as `follow` and every credit record in this Tx from other banks has a `hold` signature already
+- the authorizing Order has `lead=true`, **or**
+- the authorizing Order has `lead=false` and every credit record from other banks that this Order depends on has a `hold` signature already.
 
 A bank may issue a `hold` only if the debit is covered. Coverage means either:
 
 - the account has enough available balance after existing holds, **or**
 - the account will receive a credit in this deal that has already been held by this bank.
 
-The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Tx.
+The bank MUST NOT hold an amount that would make the account's effective balance negative. If several debits compete for the same available balance or held credit, the bank SHOULD prefer debits whose covering credit is in the same holder Order.
 
-If a record cannot be held — because its debit is uncovered, the account is unknown, `reject` received for any record in the Tx, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
+If a record cannot be held — because its debit is uncovered, the account is unknown, `reject` received for any record the Order depends on, or any other precondition fails — the bank MUST issue a `reject` signature for that record. The reject propagates to the record's paired counterpart and is fanned out to peer banks; any bank that has records depending on the rejected ones MUST reject those as well. A single reject therefore aborts the deal cascade.
 
 **3. Settle** — settlement is an ordered cascade of record-level signatures, not a single atomic flip:
 
@@ -90,11 +89,11 @@ If a record cannot be held — because its debit is uncovered, the account is un
 
 Settling means: apply the deltas of every owned record, release the holds, issue `settle` signatures, fan out.
 
-> **Implementation note:** The v1 reference implementation calls `create_records` on each bank, then each holder builds their own Tx and calls `submit_tx` on every bank that owns records touching their accounts. `submit_tx` issues per-record `ready` (or `reject`) signatures. Once all its records are approved, the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied.
+> **Implementation note:** The v1 reference implementation calls `create_records` on each bank, then each holder builds and signs their own Order and calls `submit_order` on every bank that owns records touching their accounts. `submit_order` issues per-record `ready` (or `reject`) signatures. Once all its records are approved, the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied.
 
 ### 2.1 Authorization sources
 
-A bank advances a record only when it has valid authorization — a holder-signed Tx or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_tx` resolves them.
+A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_order` resolves them.
 
 ### 2.2 Risk — lead and follow
 
@@ -123,7 +122,7 @@ This falls straight out of the issuer-authority rule: a transfer of voucher `P` 
 The **initiating client** is the one party that legitimately knows the whole deal — it designed it — so it builds the graph and hands each bank only that bank's slice:
 
 - **Bodies it gets:** only the credit/debit records whose voucher this bank issues.
-- **Hashes it gets:** the record hashes in each holder Tx presented to it. These are opaque identifiers. A bank needs them to verify that its own records are included in each Tx; it cannot infer another record's amount, account, holder, or voucher from a record hash alone.
+- **Hashes it gets:** the record hashes in each holder Order presented to it. These are opaque identifiers. A bank needs them to verify that its own records are included in each Order; it cannot infer another record's amount, account, holder, or voucher from a record hash alone.
 - **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their record-level `settle` signatures, see `base.md`). It learns *that* a peer bank participates, not *what* that peer transfers.
 
 > **Invariant:** This visibility boundary is load-bearing. Any implementation that lets a bank see another bank's record bodies violates the protocol.
@@ -175,7 +174,7 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
 | Coordinator pattern | **Client-orchestrated**: the proposing user calls each bank with its own slice and relays signatures; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the vouchers it issues + the holder Tx hash lists + its predecessor bank pubkeys; no bank sees the full deal | **Yes** |
+| Visibility | Each bank sees only the records of the vouchers it issues + the holder Order hash lists + its predecessor bank pubkeys; no bank sees the full deal | **Yes** |
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
 | Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
@@ -183,9 +182,9 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
 | Account creation | Accounts are opened by presenting an unsigned Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
 | Voucher fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
-| Tx cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
-| Tx ownership | **One Tx per participating holder**, containing only records that touch that holder's accounts | **Yes** |
-| Holder authorization | Holders sign Voucher, Order, Tx, and Address docs; banks sign Record and Offer docs | **Yes** |
+| Order cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
+| Order ownership | **One Order per participating holder**, containing the records that touch that holder's accounts | **Yes** |
+| Holder authorization | Holders sign Voucher, Order, and Address docs; banks sign Record and Offer docs | **Yes** |
 | Balance floor | Holder-authorized transfers cannot overdraw the debit account; negative balances are created only by issuer minting | **Yes** |
 | Offers | Banks MAY derive and publish Offer docs from Orders; Offers hide holder identity and account hashes | **Yes** |
 
