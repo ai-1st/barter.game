@@ -13,14 +13,12 @@
   "exclude": [
     "node_modules",
     "dist",
-    "packages/*/node_modules",
-    "apps/*/node_modules",
-    "old"
+    "old/**/node_modules"
   ],
   "test": {
     "include": [
-      "packages/**/test-deno/*.deno-test.ts",
-      "apps/bank/test-deno/*.deno-test.ts"
+      "old/packages/**/test-deno/*.deno-test.ts",
+      "old/apps/bank/test-deno/*.deno-test.ts"
     ]
   },
   "deploy": {

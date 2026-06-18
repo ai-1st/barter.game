@@ -34,60 +34,66 @@ v1 is CLI-only; a web UI is on the v1.5 roadmap (`TODOS.md`).
 
 ## Monorepo structure
 
+The active work is the protocol contract in `protocol/`. The previous
+implementation has been archived under `old/` and will be rebuilt from
+scratch once the protocol rework is complete.
+
 ```
 barter.game/
-├── package.json              # Root workspace manifest (workspaces: packages/*, apps/*)
+├── package.json              # Root workspace manifest (workspaces: old/packages/*, old/apps/*)
 ├── tsconfig.json             # Shared TypeScript config (strict, ES2022, bundler resolution)
-├── deno.json                 # Deno config (imports, test include, unstable KV)
+├── deno.json                 # Deno config for the archived implementation
 ├── bun.lock                  # Bun lockfile
 ├── .github/workflows/        # CI/CD: Deno Deploy autodeploy on merge
-├── packages/
-│   └── protocol/             # @barter.game/protocol — the canonical library
-│       ├── src/
-│       │   ├── canonical.ts  # RFC 8785 hand-rolled canonicalizer (load-bearing)
-│       │   ├── crypto.ts     # ed25519 sign/verify, SHA-256, base58
-│       │   ├── schemas.ts    # Runtime doc validators (plain TS predicates)
-│       │   ├── invite.ts     # barter:// invite strings + barterdeal: deal-token codec
-│       │   ├── deal.ts       # Deal builder: per-holder Txs, lead/follow roles, settle topology
-│       │   └── index.ts      # Re-exports
-│       ├── test/             # Bun test suite
-│       └── test-deno/        # Deno test suite (same golden vectors)
-├── apps/
-│   ├── bank/                 # Deno Deploy bank server
-│   │   ├── main.ts           # Deno.serve entrypoint, routing, KV open
-│   │   ├── env.ts            # BANK_<NAME>_PRIV_KEY loader
-│   │   ├── db.ts             # Deno KV single-table BankDB
-│   │   ├── rpc.ts            # JSON-RPC envelope validation + dispatch
-│   │   ├── registry.ts       # Method name → handler map
-│   │   ├── advance.ts        # Self-advance engine: approved → held → settled
-│   │   ├── subscriptions.ts  # Signature fan-out (notify_signatures pushes)
-│   │   ├── peer.ts           # Peer bank discovery client
-│   │   ├── handlers/         # One file per RPC method (+ intake.ts)
-│   │   └── test-deno/        # Bank integration tests (mint, direct approval, subscriptions, N-party)
-│   └── cli/                  # @barter.game/cli
-│       ├── src/
-│       │   ├── index.ts      # CLI entrypoint (command router)
-│       │   ├── client.ts     # HTTP RPC client
-│       │   ├── profile.ts    # ~/.barter/profile.json read/write
-│       │   ├── docstore.ts   # ~/.barter/docs/ — client-held docs; Account bodies never leave
-│       │   ├── dealstate.ts  # ~/.barter/deals/ — initiator's deal state, keyed by deal ULID
-│       │   ├── orchestrate.ts # createRecordsAndLead / submitFollow / relayAll
-│       │   └── commands/     # init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
-│       └── package.json
+├── protocol/                 # ACTIVE — the invariant protocol contract
+│   ├── README.md             # Protocol overview and trust model
+│   ├── base.md               # Base docs, envelope, discovery
+│   ├── bank-schema.md        # Voucher/Account/Record/Order/Offer/Confirm schemas
+│   └── bank-rpc.md           # Bank RPC methods and orchestration
+├── old/                      # Archived implementation
+│   ├── packages/
+│   │   └── protocol/         # @barter.game/protocol — reference library
+│   │       ├── src/canonical.ts
+│   │       ├── src/crypto.ts
+│   │       ├── src/schemas.ts
+│   │       ├── src/invite.ts
+│   │       ├── src/deal.ts
+│   │       ├── test/
+│   │       └── test-deno/
+│   ├── apps/
+│   │   ├── bank/             # Deno Deploy bank server
+│   │   │   ├── main.ts
+│   │   │   ├── env.ts
+│   │   │   ├── db.ts
+│   │   │   ├── rpc.ts
+│   │   │   ├── registry.ts
+│   │   │   ├── advance.ts
+│   │   │   ├── subscriptions.ts
+│   │   │   ├── peer.ts
+│   │   │   ├── handlers/
+│   │   │   └── test-deno/
+│   │   └── cli/              # @barter.game/cli
+│   │       ├── src/index.ts
+│   │       ├── src/client.ts
+│   │       ├── src/profile.ts
+│   │       ├── src/docstore.ts
+│   │       ├── src/dealstate.ts
+│   │       ├── src/orchestrate.ts
+│   │       └── src/commands/
+│   ├── supabase/             # Archived Supabase/Postgres implementation
+│   └── scripts/
 ├── scripts/
 │   ├── demo-local.sh         # End-to-end multi-party demo against a local Deno server
-│   ├── demo-deploy.sh        # (optional) same demo against deployed Deno Deploy banks
-│   └── genkey.ts             # Generate ed25519 keypair for a new bank
-├── old/                      # Archived Supabase/Postgres implementation
-│   ├── supabase/
-│   └── scripts/
+│   ├── demo-deploy.sh        # Same demo against deployed Deno Deploy banks
+│   └── genkey.ts             # Generate an ed25519 keypair for a new bank
+├── scenarios/                # Step-by-step interaction traces
 ├── website/                  # Hugo site (Hextra theme)
 └── docs/                     # Legacy design notes
 ```
 
 ## Build and test commands
 
-All commands run from the repo root.
+These commands operate on the archived implementation under `old/`.
 
 ```bash
 # Install dependencies
@@ -99,7 +105,7 @@ bun run build
 # Type-check all workspaces
 bun run typecheck
 
-# Run the full test matrix (this is the gate before any commit)
+# Run the full test matrix (this is the gate before any commit that touches old/)
 bun run test:all
 ```
 
@@ -107,7 +113,7 @@ bun run test:all
 
 | Command | Runtime | What it tests |
 |---|---|---|
-| `bun run test` | Bun | Protocol canonical JSON, crypto, schemas, invites/deal tokens, deal builder |
+| `bun run test` | Bun | Protocol library canonical JSON, crypto, schemas, invites/deal tokens, deal builder |
 | `bun run test:deno` | Deno | Golden vectors under Deno (**cross-runtime parity**) + the full bank integration suite: mint, direct approval, subscriptions/fan-out, N-party self-advance |
 | `./scripts/demo-local.sh` | Bash + Bun + Deno | End-to-end against a local Deno server (generates keys, starts server, runs CLI demo) |
 | `./scripts/demo-deploy.sh` | Bash + Bun | End-to-end against deployed Deno Deploy banks (set `BARTER_BANK_*_URL` env vars) |
@@ -117,7 +123,7 @@ The **Deno suite is load-bearing**. If Bun and Deno disagree on a canonical hash
 ### Individual workspace commands
 
 ```bash
-# Protocol only
+# Protocol library only
 bun --filter '@barter.game/protocol' test
 bun --filter '@barter.game/protocol' typecheck
 
@@ -177,10 +183,10 @@ cd website && hugo mod get && hugo --gc --minify
 
 - **Private keys**: User keys are stored plaintext in `~/.barter/profile.json`. This is intentional for v1 but unacceptable for production. Do not add real value to these keys.
 - **Bank keys**: Loaded from `Deno.env.get("BANK_<NAME>_PRIV_KEY")`. Never log them, never return them in RPC responses.
-- **Signing model**: Users sign Voucher, Order, Tx, and Address docs. Banks sign Record and Offer docs. Account and Account docs are NOT signed; their authority comes from being referenced by signed Txs/Orders/mint records.
+- **Signing model**: Users sign Voucher, Account, Order, and Address docs. Banks sign Record, Offer, and Signature docs. An Account doc's authority comes from the holder's signature plus being referenced by a Record or Order the holder signed.
 - **Replay protection / idempotency**: Every RPC envelope carries a ULID `id` bound to `(sender_pubkey, recipient_pubkey)`. The recipient stores seen triples in KV and rejects exact duplicates with `-32002`. In addition, state-changing handlers are idempotent where it matters: `create_records` checks the existing leg state before minting a duplicate record pair, and `mint` is bounded by `Voucher.limit` and the envelope replay window. A fresh signed envelope cannot be used to double-apply a mint or re-create records for the same deal leg.
 - **Signature verification**: Every inbound request is verified against its `pubkey` before any handler runs. The `to` field must match the recipient bank's pubkey.
-- **Account privacy**: Banks must NEVER accept or store Account bodies — `account.account` is an opaque hash, and the bodies stay on the holder's machine (`~/.barter/docs/`). `intake.ts` rejects Account docs; do not add a server-side code path that receives one.
+- **Account privacy**: Account names stay private to the holder, but banks DO store the signed Account doc so they can verify that a Record's `details.account` hash belongs to the record's holder. Counterparties see only the account hash; the Account name never leaves the holder's control.
 - **Double-spend gate**: An atomic KV check-and-set on the active-hold key enforces at most one active hold per account. Concurrent hold attempts surface as `-32003` or, inside the advance engine, a quiet back-off retried on the next event.
 - **Sum invariant**: On every settle, the bank must enforce that balances across all accounts for a given Voucher sum to zero (or the agreed limit).
 - **Pubkey pinning**: Clients pin `pubkey + url` at `init` time. `<bank-url>/barter-bank.json` is fetched and compared against the pin; divergence fails closed.

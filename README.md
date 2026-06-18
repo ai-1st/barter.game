@@ -79,12 +79,12 @@ barter.game/
 ├── IMPLEMENTATION.md     ← how *this repo* implements v1 (change anything here for your stack)
 ├── SCHEMA.md             ← v1 reference database schema
 ├── TODOS.md              ← the v1.5+ roadmap
-├── packages/protocol/    ← the @barter.game/protocol library (canonical, crypto, schemas, invites, deal tokens)
-├── apps/
-│   ├── cli/              ← the `barter` CLI: init, mint, account, invite, trade, deal, accept, status, nudge, subscribe, inbox
-│   └── bank/             ← the Deno Deploy bank server (entrypoint, handlers, advance engine, subscriptions, db)
-├── supabase/
-│   └── migrations/       ← SQL schema kept for reference; the live server uses Deno KV
+├── old/                  ← archived implementation while the protocol is being reworked
+│   ├── apps/
+│   │   ├── cli/          ← the `barter` CLI (archived; will be rebuilt)
+│   │   └── bank/         ← the Deno Deploy bank server (archived; will be rebuilt)
+│   ├── packages/protocol/← the @barter.game/protocol library (archived)
+│   └── supabase/         ← SQL schema kept for reference
 ├── scripts/
 │   ├── demo-deploy.sh    ← full v1 demo against live Deno Deploy banks
 │   ├── demo-local.sh     ← same demo against a locally started bank server
@@ -95,30 +95,29 @@ barter.game/
 
 ## Using the CLI
 
+The v1 CLI is archived in `old/apps/cli/` while the protocol is being
+reworked. It will be rebuilt against the new `protocol/` contract. The
+demo scripts below still exercise the live Deno Deploy banks using the
+old implementation.
+
 ```bash
 # One-time setup
 barter init --bank https://barter-game-banks.ai-1st.deno.net/alice
 
-# Issue a personal currency — the mint IS the first ledger record pair
-# (your issue account goes to -5, your holding account to +5)
-barter mint "1 logo" --amount 5 --integer
+# Issue a personal currency by placing an issuer sell-Order
+barter order --sell "1 logo" --amount 5 --integer
 
 # Offer a swap: prints a signed barter:// invite string for the counterparty
-# (accounts are implicit — no bank call to "open" anything)
 barter invite --give <my-voucher>:1 --get <their-voucher>:1
 
-# Counterparty initiates from the invite: creates records on both banks,
-# lead-signs their own Tx, and prints a deal token back for you
+# Counterparty initiates from the invite: creates records on both banks
+# and prints a deal token back for you
 barter trade --invite "barter://..."
 
-# You verify and follow-sign your own Tx — from here the banks
-# self-advance through hold and settle; nobody drives settlement
+# You verify and sign — from here the banks self-advance
 barter accept "barterdeal:..."
 
-# Or initiate an N-party deal from a JSON file (one deal token per holder)
-barter deal <deal-file.json>
-
-# Watch a deal you initiated; relay signatures by hand if a push got lost
+# Watch a deal; relay signatures by hand if a push got lost
 barter status <deal-ulid>
 barter nudge <deal-ulid>
 
@@ -133,23 +132,22 @@ The CLI is the protocol's truest surface; the web UI ships in v1.5.
 ## How the protocol works (one paragraph)
 
 Every user and every bank is an ed25519 keypair. Voucher, Account,
-Account, Signature, and Order docs are canonicalized via RFC 8785 JSON,
-SHA-256-hashed, and content-addressed by that hash. Accounts are
-implicit — they come into existence when an Account doc is first
-presented, and Account bodies never leave the holder (banks only ever
-see the hash). Ledger records are bank-minted in mandatory debit/credit
-pairs; the mint itself is just the first such pair. Each holder signs
-their OWN `Tx` — the record hashes on their own accounts — with action
-`lead` (the initiator) or `follow` (everyone else); banks answer with
-per-record `approve`/`reject` signatures. From there the banks
-self-advance: each one holds its debit accounts, the lead bank settles
-once it has seen every peer's `hold`, and followers settle after their
-predecessors, citing the upstream settle proofs in `Signature.seen`.
+Signature, and Order docs are canonicalized via RFC 8785 JSON,
+SHA-256-hashed, and content-addressed by that hash. Accounts are signed
+by their holder and stored by the bank; the account name stays private,
+but the bank needs the Account doc to verify that a Record's account
+hash belongs to the record's holder. There is no mint: an issuer starts
+trading by placing an Order that debits its own issuer account, driving
+it negative. Ledger records are bank-minted in mandatory debit/credit
+pairs. A matchmaker discovers compatible Offers and calls
+create_records on each participating bank, then sends each bank a
+per-bank Confirm listing the records it should act on. Once a record
+has a valid Order bound and the Confirm is received, the bank's advance
+engine takes over: it issues ready, locks the debit account with hold,
+and settles once preconditions are met. Settle signatures for follower
+records cite the upstream settle proofs in `Signature.seen`.
 Signatures travel between banks via Subscription fan-out, or any party
-relays them by hand (`barter nudge`) — they carry their own authority.
-The lead banks carry the small remaining risk that a follower goes
-rogue; per the ETHOS, that risk is settled socially, not by
-protocol-level rollback.
+relays them by hand — they carry their own authority.
 
 Full details in [`protocol/README.md`](./protocol/README.md) and the split contract files; the story version is
 [`MASTER-INPUT.md`](./MASTER-INPUT.md).
@@ -172,7 +170,7 @@ bun run scripts/genkey.ts | sed 's/^BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/k
 # 3. Create a Deno Deploy project at https://deno.com/deploy
 #    - Link this repo
 #    - Set environment variables from /tmp/key.env
-#    - Entrypoint: apps/bank/main.ts
+#    - Entrypoint: old/apps/bank/main.ts
 #    The included .github/workflows/deploy.yml auto-deploys on every push to main.
 
 # 4. Hit it
@@ -192,11 +190,9 @@ and operational details.
 bun run test:all
 ```
 
-The suite runs the protocol library under Bun, then re-runs the same
-canonical-JSON golden vectors plus full bank integration scenarios under
-Deno: minting, the bilateral direct-approval walkthrough, subscription
-fan-out, and a four-bank N-party deal in which the banks self-advance to
-settled. Cross-runtime parity is the load-bearing invariant — every
+The suite runs the archived protocol library under Bun, then re-runs the
+same canonical-JSON golden vectors plus full bank integration scenarios
+under Deno. Cross-runtime parity is the load-bearing invariant — every
 signature in the protocol depends on it.
 
 ## What v1 doesn't do
@@ -224,8 +220,8 @@ for the v1.5+ work.
 4. [`protocol/README.md`](./protocol/README.md) — the **invariant protocol contract overview**, then `protocol/base.md`, `protocol/bank-schema.md`, and `protocol/bank-rpc.md` (45 minutes if you read carefully)
 5. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
 6. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
-7. `packages/protocol/src/` — the code (an afternoon)
-8. `apps/bank/` — the server-side handlers and advance engine
+7. `old/packages/protocol/src/` — the archived reference code
+8. `old/apps/bank/` — the archived server-side handlers and advance engine
 9. [`TODOS.md`](./TODOS.md) — what's next
 
 ## Building your own implementation?

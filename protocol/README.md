@@ -96,11 +96,11 @@ If a record cannot be held — because its debit is uncovered, the account is un
 
 Settling means: apply the deltas of every owned record, release the holds, issue `settle` signatures, fan out.
 
-> **Implementation note:** The matchmaker calls `create_records` on each bank with the same two Offers and four amounts (`offer1`, `debit_amount1`, `credit_amount1`, `offer2`, `credit_amount2`, `debit_amount2`) plus a shared `deal_id`. Each bank extracts the two amounts that apply to the Voucher it issues and mints one debit/credit record pair. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit Orders (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
+> **Implementation note:** The matchmaker calls `create_records` on each bank with the same nested `offer1` / `offer2` objects and a shared `deal_id`. Each bank extracts the two amounts that apply to the Voucher it issues and mints one debit/credit record pair. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit their docs via `submit_docs` (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
 
 ### 2.1 Authorization sources
 
-A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account, and a matchmaker `Confirm` for the deal. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_order` and `submit_confirm` resolve them.
+A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account, and a matchmaker `Confirm` for the deal. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_docs` and `submit_confirm` resolve them.
 
 ### 2.2 Risk — lead and follow
 
@@ -157,13 +157,13 @@ The inviter's offer:
 barter://<inviter-pubkey>@<inviter-bank-url>
   ?give=<voucher-hash>:<amount>:<account-hash>
   &get=<voucher-hash>:<amount>:<account-hash>
-  [&accs=<base64url(JSON Account bodies)>]
+  [&accs=<base64url(JSON Account docs)>]
   &exp=<unix-seconds>&sig=<inviter-sig>
 ```
 
 - `give`: what the inviter offers — voucher, amount, and the inviter's **funded account** it will be debited from.
 - `get`: what the inviter wants — voucher, amount, and the inviter's **receiving account** (authored locally; accounts are implicit).
-- `accs`: the bodies of the inviter's Account docs referenced by the records, so the initiator can present them to the banks.
+- `accs`: the inviter's Account docs referenced by the records, so the initiator can present them to the banks.
 - `sig`: ed25519 over canonical JSON of the invite minus `sig`, by the inviter's pubkey.
 
 ### 3.2 Deal tokens
@@ -189,7 +189,7 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |
 | Key rotation | Out of scope; redeploy with new secret if compromised | **Yes** |
 | Canonicalization | RFC 8785 / JCS; cross-runtime golden vectors | **Yes** |
-| Account creation | Accounts are opened by presenting an unsigned Account doc to the issuing bank; there is no separate protocol operation | **Yes** |
+| Account creation | Accounts are BaseDocs signed by the holder and stored by the issuing bank | **Yes** |
 | Voucher fungibility | Fungible: any "1 logo" issued by Alice is interchangeable; NFT-style is v2 | **Yes** |
 | Order cardinality | Open: `K ≥ 1` transfer pairs across 1..N banks; bilateral (`K=2`) is the simplest case | **Yes** |
 | Order ownership | **One Order per participating holder**, containing the records that touch that holder's accounts | **Yes** |

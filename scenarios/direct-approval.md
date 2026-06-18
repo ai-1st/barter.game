@@ -39,7 +39,16 @@ Alice wants to give 1 Avoucher and get 1 Bvoucher.
 }
 ```
 
-Alice signs the Order and submits it to **both** Abank and Bbank via `submit_order`, including the referenced Account bodies.
+Alice signs the Order and submits it to **both** Abank and Bbank via `submit_docs`, including the referenced Account docs and requesting Offer publication:
+
+```json
+{ "method": "submit_docs",
+  "params": {
+    "docs": [<alice-order>, <alice-avoucher-account>, <alice-bvoucher-account>],
+    "publish_offers": [<alice-order-hash>]
+  },
+  "pubkey": A.pub, "to": Abank.pub }
+```
 
 Abank derives and publishes an Offer from Alice's Order for the Avoucher side. Bbank derives and publishes an Offer for the Bvoucher side.
 
@@ -69,7 +78,18 @@ Bob wants to give 1 Bvoucher and get 1 Avoucher.
 }
 ```
 
-Bob signs and submits the Order to both banks. Abank derives a buy-Avoucher Offer; Bbank derives a sell-Bvoucher Offer.
+Bob signs and submits the Order to both banks via `submit_docs`, with Offer publication:
+
+```json
+{ "method": "submit_docs",
+  "params": {
+    "docs": [<bob-order>, <bob-avoucher-account>, <bob-bvoucher-account>],
+    "publish_offers": [<bob-order-hash>]
+  },
+  "pubkey": B.pub, "to": Abank.pub }
+```
+
+Abank derives a buy-Avoucher Offer; Bbank derives a sell-Bvoucher Offer.
 
 ## Phase 1 — Matchmaker discovers Offers
 
@@ -108,7 +128,7 @@ The matchmaker sees:
 
 ## Phase 2 — Matchmaker creates records
 
-The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_records` at **both** banks with the same two Offers and four amounts:
+The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_records` at **both** banks with the same nested Offer objects:
 
 - `offer1` = Alice's Offer (debit Avoucher `1`, credit Bvoucher `1`).
 - `offer2` = Bob's Offer (debit Bvoucher `1`, credit Avoucher `1`).
@@ -116,12 +136,16 @@ The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <alice-cross-voucher-offer-hash>,
-    "debit_amount1": 1,
-    "credit_amount1": 1,
-    "offer2": <bob-cross-voucher-offer-hash>,
-    "credit_amount2": 1,
-    "debit_amount2": 1,
+    "offer1": {
+      "hash": <alice-cross-voucher-offer-hash>,
+      "debit_amount": 1,
+      "credit_amount": 1
+    },
+    "offer2": {
+      "hash": <bob-cross-voucher-offer-hash>,
+      "debit_amount": 1,
+      "credit_amount": 1
+    },
     "deal_id": <deal-id>,
     "record_subscriptions": [
       { "record": <alice-avoucher-debit-hash>, "url": <abank-notify-url> },
@@ -131,7 +155,7 @@ The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank sees that Alice's Offer debits Avoucher and Bob's Offer credits Avoucher. It uses `debit_amount1` and `credit_amount2` to create the Avoucher record pair:
+Abank sees that Alice's Offer debits Avoucher and Bob's Offer credits Avoucher. It uses `offer1.debit_amount` and `offer2.credit_amount` to create the Avoucher record pair:
 
 - Debit record: Alice's Avoucher account, amount `1`.
 - Credit record: Bob's Avoucher account, amount `1`.
@@ -143,12 +167,16 @@ The matchmaker makes the same call at Bbank:
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <alice-cross-voucher-offer-hash>,
-    "debit_amount1": 1,
-    "credit_amount1": 1,
-    "offer2": <bob-cross-voucher-offer-hash>,
-    "credit_amount2": 1,
-    "debit_amount2": 1,
+    "offer1": {
+      "hash": <alice-cross-voucher-offer-hash>,
+      "debit_amount": 1,
+      "credit_amount": 1
+    },
+    "offer2": {
+      "hash": <bob-cross-voucher-offer-hash>,
+      "debit_amount": 1,
+      "credit_amount": 1
+    },
     "deal_id": <deal-id>,
     "record_subscriptions": [
       { "record": <bob-bvoucher-debit-hash>, "url": <bbank-notify-url> },
@@ -158,7 +186,7 @@ The matchmaker makes the same call at Bbank:
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank uses `credit_amount1` and `debit_amount2` to create the Bvoucher record pair:
+Bbank uses `offer1.credit_amount` and `offer2.debit_amount` to create the Bvoucher record pair:
 
 - Debit record: Bob's Bvoucher account, amount `1`.
 - Credit record: Alice's Bvoucher account, amount `1`.

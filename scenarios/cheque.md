@@ -34,14 +34,13 @@ Alice builds an Order with `credit` omitted:
 }
 ```
 
-Alice signs the Order and calls `submit_order` on Abank with `publish_offer: true`:
+Alice signs the Order and calls `submit_docs` on Abank with the Order, Account doc, and `publish_offers`:
 
 ```json
-{ "method": "submit_order",
+{ "method": "submit_docs",
   "params": {
-    "order": <cheque-order>,
-    "accounts": [<alice-avoucher-account>],
-    "publish_offer": true
+    "docs": [<cheque-order>, <alice-avoucher-account>],
+    "publish_offers": [<cheque-order-hash>]
   },
   "pubkey": A.pub, "to": Abank.pub }
 ```
@@ -69,7 +68,16 @@ Bob authorizes Abank to credit his account if someone matches his Offer. He buil
 }
 ```
 
-Bob signs the Order and calls `submit_order` on Abank with `publish_offer: true`.
+Bob signs the Order and calls `submit_docs` on Abank with the Order, Account doc, and `publish_offers`:
+
+```json
+{ "method": "submit_docs",
+  "params": {
+    "docs": [<bob-receiving-order>, <bob-avoucher-account>],
+    "publish_offers": [<bob-receiving-order-hash>]
+  },
+  "pubkey": B.pub, "to": Abank.pub }
+```
 
 Abank stores the Order, derives and signs a credit-only Offer hiding Bob's account hash, and returns the Offer hash.
 
@@ -77,17 +85,21 @@ Abank stores the Order, derives and signs a credit-only Offer hiding Bob's accou
 
 The matchmaker discovers both Offers on Abank's public offer stream.
 
-The matchmaker calls `create_records`. Alice's cheque Offer has no credit side, so `credit_amount1` is `0`; Bob's receiving Offer has no debit side, so `debit_amount2` is `0`:
+The matchmaker calls `create_records`. Alice's cheque Offer has no credit side, so `offer1.credit_amount` is `0`; Bob's receiving Offer has no debit side, so `offer2.debit_amount` is `0`:
 
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <alice-cheque-offer-hash>,
-    "debit_amount1": 5,
-    "credit_amount1": 0,
-    "offer2": <bob-receiving-offer-hash>,
-    "credit_amount2": 5,
-    "debit_amount2": 0,
+    "offer1": {
+      "hash": <alice-cheque-offer-hash>,
+      "debit_amount": 5,
+      "credit_amount": 0
+    },
+    "offer2": {
+      "hash": <bob-receiving-offer-hash>,
+      "debit_amount": 0,
+      "credit_amount": 5
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }

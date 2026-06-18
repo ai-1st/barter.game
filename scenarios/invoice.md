@@ -34,14 +34,13 @@ Alice builds an Order with `debit` omitted:
 }
 ```
 
-Alice signs the Order and calls `submit_order` on Bbank with `publish_offer: true`:
+Alice signs the Order and calls `submit_docs` on Bbank with the Order, Account doc, and `publish_offers`:
 
 ```json
-{ "method": "submit_order",
+{ "method": "submit_docs",
   "params": {
-    "order": <invoice-order>,
-    "accounts": [<alice-bvoucher-account>],
-    "publish_offer": true
+    "docs": [<invoice-order>, <alice-bvoucher-account>],
+    "publish_offers": [<invoice-order-hash>]
   },
   "pubkey": A.pub, "to": Bbank.pub }
 ```
@@ -68,7 +67,16 @@ Bob authorizes Bbank to debit his account to pay the invoice. He builds an Order
 }
 ```
 
-Bob signs the Order and calls `submit_order` on Bbank with `publish_offer: true`.
+Bob signs the Order and calls `submit_docs` on Bbank with the Order, Account doc, and `publish_offers`:
+
+```json
+{ "method": "submit_docs",
+  "params": {
+    "docs": [<bob-cheque-order>, <bob-bvoucher-account>],
+    "publish_offers": [<bob-cheque-order-hash>]
+  },
+  "pubkey": B.pub, "to": Bbank.pub }
+```
 
 Bbank stores the Order, derives and signs a cheque Offer hiding Bob's account hash, and returns the Offer hash.
 
@@ -76,17 +84,21 @@ Bbank stores the Order, derives and signs a cheque Offer hiding Bob's account ha
 
 The matchmaker discovers both Offers on Bbank's public offer stream.
 
-The matchmaker calls `create_records`. The invoice Offer has no debit side, so `debit_amount1` is `0`; Bob's cheque Offer has no credit side, so `credit_amount2` is `0`:
+The matchmaker calls `create_records`. The invoice Offer has no debit side, so `offer1.debit_amount` is `0`; Bob's cheque Offer has no credit side, so `offer2.credit_amount` is `0`:
 
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <invoice-offer-hash>,
-    "debit_amount1": 0,
-    "credit_amount1": 10,
-    "offer2": <bob-cheque-offer-hash>,
-    "credit_amount2": 0,
-    "debit_amount2": 10,
+    "offer1": {
+      "hash": <invoice-offer-hash>,
+      "debit_amount": 0,
+      "credit_amount": 10
+    },
+    "offer2": {
+      "hash": <bob-cheque-offer-hash>,
+      "debit_amount": 10,
+      "credit_amount": 0
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }

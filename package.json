@@ -5,8 +5,8 @@
   "license": "MIT",
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "apps/*"
+    "old/packages/*",
+    "old/apps/*"
   ],
   "scripts": {
     "test": "bun --filter '@barter.game/protocol' test",

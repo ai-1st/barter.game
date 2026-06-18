@@ -55,8 +55,6 @@ type BaseDoc = {
 }
 ```
 
-`Account` is **not** a `BaseDoc`: its identity is purely content-addressed from its semantic fields, so it has no `ulid` and its owner field is named `holder` rather than `pubkey`.
-
 Encoded fields:
 
 - `Base58PubKey`, `Base58Signature`, `Base58SHA256` — base58 strings.
@@ -106,7 +104,7 @@ Address: BaseDoc & {
 }
 ```
 
-Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by presenting a signed Address doc with a newer ULID. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (see §5.1); Address docs allow an entity to announce URL changes in a verifiable, self-signed form.
+Banks maintain public directories of Address docs. Anyone MAY update an Address for a pubkey by submitting a signed Address doc with a newer ULID via `submit_docs`. The canonical discovery endpoint is `<bank-url>/barter-bank.json` (see §5.1); Address docs allow an entity to announce URL changes in a verifiable, self-signed form.
 
 > **Invariant:** Address docs are signed by the pubkey they describe (a bank or a user). A newer ULID overrides an older one for the same pubkey.
 

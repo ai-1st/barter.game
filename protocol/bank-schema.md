@@ -24,8 +24,6 @@ type BaseDoc = {
 }
 ```
 
-`Account` is **not** a `BaseDoc`: its identity is purely content-addressed from its semantic fields, so it has no `ulid` and its owner field is named `holder` rather than `pubkey`.
-
 ### 1.1 Voucher
 
 A unit of value the `pubkey` owner vows to deliver.
@@ -50,18 +48,19 @@ Voucher: BaseDoc & {
 
 ### 1.2 Account
 
-A holder's named bucket. **Account bodies never leave the holder's machine** — banks reference accounts only by hash; the name is private.
+A holder's named bucket. Accounts are BaseDocs, signed by the holder, and **stored by the bank** so the bank can validate that any record referencing the account belongs to the account's owner. The `name` remains private to the holder.
 
 ```ts
-Account: {
+Account: BaseDoc & {
   type: "account";
-  holder: Base58PubKey;   // owner of the account
   name: string;           // local label, typically not public
   voucher: Base58SHA256;  // hash of the Voucher this account holds
 }
 ```
 
-> **Invariant:** A bank MUST NOT accept or store Account bodies. `Record.account` is an opaque hash to the bank.
+`Account.pubkey` is the holder. `Account.ulid` uniquely identifies this account. The holder signs the Account doc; the bank stores it by hash after verifying the signature.
+
+> **Invariant:** A bank MUST reject a record whose `details.account` hash does not resolve to a stored Account owned by the record's holder. Account names are private, but the Account doc itself is part of the bank's verified state.
 
 ### 1.3 Record
 
@@ -71,7 +70,7 @@ One half of a paired credit/debit entry in the double-entry ledger.
 Record: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
-  orders: Base58SHA256[]; // hashes of Order docs that authorize this record
+  order: Base58SHA256;    // hash of the Order/Offer doc that authorizes this record
   details: Base58SHA256;  // hash of the bank-internal record details
 }
 
@@ -85,9 +84,9 @@ RecordDetails {
 
 A **transfer** is one debit + one credit of the same Voucher for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Voucher's issuer bank. `pair` links the two halves by ULID. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). The chain may be a line, a ring, or a general graph, spanning one bank or many.
 
-Records are **bank-minted**: the bank assigns their ULIDs and ensures uniqueness. As BaseDocs, they have content hashes. The Order → record binding lives in `Record.orders[]`. Banks sign `Signature` docs (see `base.md`) referencing Records by hash; holders do not sign Records directly.
+Records are **bank-minted**: the bank assigns their ULIDs and ensures uniqueness. As BaseDocs, they have content hashes. The Order → record binding lives in `Record.order`. Banks sign `Signature` docs (see `base.md`) referencing Records by hash; holders do not sign Records directly.
 
-For a normal transfer, the debit record lists the giver's Order and the credit record lists the receiver's Order. A bank MUST verify that every record it approves is covered by at least one valid Order, and for paired records it SHOULD verify that the referenced Orders describe mutually consistent terms.
+For a normal transfer, the debit record references the giver's Order and the credit record references the receiver's Order. A bank MUST verify that every record it approves is covered by a valid Order, and for paired records it MUST verify that the referenced Orders describe mutually consistent terms and amounts.
 
 ### 1.4 Order
 
@@ -109,13 +108,21 @@ Order: BaseDoc & {
     min: number;            // minimum amount to credit per match; prevents fragmentation
     max: number;            // maximum amount to credit per match
   };
-  credit_account_limit?: number; // maximum amount allowed in the credit account; prevents overstocking
-  credit_order_limit?: number;   // maximum cumulative amount processed through this order
+  debit_order_limit?: number;    // maximum cumulative debit amount processed through this order
+  credit_order_limit?: number;   // maximum cumulative credit amount processed through this order
+  debit_account_limit?: number;  // minimum balance allowed on the debit account (optional floor)
+  credit_account_limit?: number; // maximum balance allowed in the credit account; prevents overstocking
   lead: boolean;            // if true, holder authorizes lead role for matched Records
 }
 ```
 
-`Order.pubkey` MUST equal the `holder` field of each referenced Account.
+`Order.pubkey` MUST equal `pubkey` of each referenced Account.
+
+When a bank receives an Order, it MUST validate the `rate`:
+
+- `rate` MUST be a positive number.
+- If both `debit` and `credit` are present, `rate` MUST equal `debit.max / credit.max` (within the bank's rounding policy). More generally, for any matched amounts the ratio of debit to credit MUST equal `rate`.
+- If the Order is one-sided (invoice or cheque), `rate` is informational and MUST still be positive.
 
 An Order may reference Vouchers at **different banks**. The holder submits the same signed Order to each of those banks; each bank checks only the side that involves a Voucher it issues. For example, an Order that says "give Alice-coin, get Bob-coin" is submitted to both Alice's bank and Bob's bank.
 
@@ -128,14 +135,17 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 
 **Order-Record matching.** A Record `R` matches an Order `O` when all of the following hold:
 
-1. `R` is a `debit` record and `O.debit` is present, OR `R` is a `credit` record and `O.credit` is present.
-2. `R`'s `details.holder` equals `O.pubkey`.
-3. If `R` is a debit, `R.details.account` equals `O.debit.account`.
-4. If `R` is a credit, `R.details.account` equals `O.credit.account`.
-5. The Voucher referenced by the record (via the account) equals the Voucher in the corresponding `O.debit`/`O.credit` side.
+1. `R.order` resolves to a valid Order/Offer `O`.
+2. `R` is a `debit` record and `O.debit` is present, OR `R` is a `credit` record and `O.credit` is present.
+3. `R.details.holder` equals `O.pubkey`.
+4. If `R` is a debit, `R.details.account` equals `O.debit.account`.
+5. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. The cumulative amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
-8. The resulting balance of the credit account does not exceed `O.credit_account_limit` (if set).
+7. If `O` is two-sided and the paired record's amount is known, the ratio of the debit amount to the credit amount equals `O.rate` (within the bank's rounding policy).
+8. The cumulative debit amount across all Records already matched to `O` does not exceed `O.debit_order_limit` (if set).
+9. The cumulative credit amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
+10. The resulting balance of the debit account does not fall below `O.debit_account_limit` (if set).
+11. The resulting balance of the credit account does not exceed `O.credit_account_limit` (if set).
 
 If an Order matches, the bank treats it as equivalent to a holder authorization for the purposes of the ready/hold/settle waves. Specifically:
 
@@ -171,7 +181,7 @@ Offer: BaseDoc & {
 
 Banks MAY publish Offers through their public API. Matchmakers discover compatible Offers and ask banks to create record pairs by referencing the Offer hashes.
 
-A Record's `orders[]` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. If the referenced Order/Offer has `lead=true`, the bank executes without requiring a separate holder-signed Order.
+A Record's `order` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. If the referenced Order/Offer has `lead=true`, the bank executes without requiring a separate holder-signed Order.
 
 Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **invoice offer**, and an Offer with `credit` omitted is a **cheque offer**.
 
@@ -234,14 +244,14 @@ On receiving a `create_records` call, the bank MAY turn each `RecordSubscription
 
 ## 2. State machine (per-record, per-bank)
 
-Each bank runs its own state machine over each record it owns. Records are created by the matchmaker via `create_records`; they stay in `created` until both (a) valid Orders are bound and (b) a per-bank `Confirm` arrives. From `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_order` binding an Order, a verified signature arriving via `notify_signatures`).
+Each bank runs its own state machine over each record it owns. Records are created by the matchmaker via `create_records`; they stay in `created` until both (a) valid Orders are bound and (b) a per-bank `Confirm` arrives. From `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_docs` binding an Order, a verified signature arriving via `notify_signatures`).
 
 ```
    per-record state (per bank)
 
    created ── create_records ──▶ all records minted
 
-   submit_order + submit_confirm (by matchmaker/holders → bank)
+   submit_docs + submit_confirm (by matchmaker/holders → bank)
         │
         ▼
    ┌──────────┐
@@ -275,11 +285,11 @@ The matchmaker is the only party that calls `create_records`. Holders submit Ord
 
 ### 3.1 Double-spend prevention
 
-When the advance engine attempts to acquire a hold on a debit account that is already locked by another deal, that hold attempt returns `-32003` for that record. The affected bank fans out the conflict signature; the coordinator (or any participant) may call `reject` on individual records to release holds and abort. Holds span the full participant set, but each per-account lock is independent and bank-local.
+When the advance engine attempts to acquire a hold on a debit account, it aggregates all records of the **same deal** that debit that account and locks the **total** amount once. If that account is already locked by a **different** deal, the hold attempt returns `-32003` for the record. The affected bank fans out the conflict signature; the coordinator (or any participant) may call `reject` on individual records to release holds and abort. Holds span the full participant set, but each per-account lock is independent and bank-local.
 
 The approve-time balance check is computed net of active holds, so a deal cannot be approved against balance that another in-flight deal has locked.
 
-> **Invariant:** At most one active hold per account MUST be enforced. How (database unique index, mutex, optimistic locking) is an implementation detail.
+> **Invariant:** At most one active hold per account per external deal MUST be enforced. Multiple records of the same deal that debit the same account share a single aggregated hold. How (database unique index keyed by account+deal, mutex, optimistic locking) is an implementation detail.
 
 ### 3.2 Mutual-credit balance semantics
 

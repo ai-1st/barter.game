@@ -19,12 +19,12 @@ The matchmaker will arrange:
 
 ## Phase 0 — Holders and matchmaker publish Offers
 
-Alice and Bob each sign an Order and submit it to both banks, letting each bank derive and publish the relevant Offer. The matchmaker also signs two one-sided Orders:
+Alice and Bob each sign an Order and submit it to both banks via `submit_docs`, requesting Offer publication. The matchmaker also signs two one-sided Orders:
 
 - At Abank: a credit-only Order (invoice-style) authorizing a credit of up to `10` Avoucher to the matchmaker's account.
 - At Bbank: a credit-only Order authorizing a credit of up to `10` Bvoucher to the matchmaker's account.
 
-The matchmaker submits these Orders to Abank and Bbank with `publish_offer: true`.
+The matchmaker submits these Orders via `submit_docs` with `publish_offers`.
 
 ## Phase 1 — Matchmaker discovers Offers
 
@@ -50,12 +50,16 @@ Alice's `100` Avoucher is split between Bob (`90`) and the matchmaker (`10`). Th
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <alice-sell-avoucher-offer-hash>,
-    "debit_amount1": 90,
-    "credit_amount1": 81,
-    "offer2": <bob-buy-avoucher-offer-hash>,
-    "credit_amount2": 90,
-    "debit_amount2": 81,
+    "offer1": {
+      "hash": <alice-sell-avoucher-offer-hash>,
+      "debit_amount": 90,
+      "credit_amount": 81
+    },
+    "offer2": {
+      "hash": <bob-buy-avoucher-offer-hash>,
+      "debit_amount": 81,
+      "credit_amount": 90
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
@@ -66,12 +70,16 @@ Alice's `100` Avoucher is split between Bob (`90`) and the matchmaker (`10`). Th
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <alice-sell-avoucher-offer-hash>,
-    "debit_amount1": 10,
-    "credit_amount1": 9,
-    "offer2": <matchmaker-buy-avoucher-offer-hash>,
-    "credit_amount2": 10,
-    "debit_amount2": 9,
+    "offer1": {
+      "hash": <alice-sell-avoucher-offer-hash>,
+      "debit_amount": 10,
+      "credit_amount": 9
+    },
+    "offer2": {
+      "hash": <matchmaker-buy-avoucher-offer-hash>,
+      "debit_amount": 9,
+      "credit_amount": 10
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
@@ -91,12 +99,16 @@ Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <bob-sell-bvoucher-offer-hash>,
-    "debit_amount1": 90,
-    "credit_amount1": 81,
-    "offer2": <alice-buy-bvoucher-offer-hash>,
-    "credit_amount2": 90,
-    "debit_amount2": 81,
+    "offer1": {
+      "hash": <bob-sell-bvoucher-offer-hash>,
+      "debit_amount": 90,
+      "credit_amount": 81
+    },
+    "offer2": {
+      "hash": <alice-buy-bvoucher-offer-hash>,
+      "debit_amount": 81,
+      "credit_amount": 90
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
@@ -107,12 +119,16 @@ Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": <bob-sell-bvoucher-offer-hash>,
-    "debit_amount1": 10,
-    "credit_amount1": 9,
-    "offer2": <matchmaker-buy-bvoucher-offer-hash>,
-    "credit_amount2": 10,
-    "debit_amount2": 9,
+    "offer1": {
+      "hash": <bob-sell-bvoucher-offer-hash>,
+      "debit_amount": 10,
+      "credit_amount": 9
+    },
+    "offer2": {
+      "hash": <matchmaker-buy-bvoucher-offer-hash>,
+      "debit_amount": 9,
+      "credit_amount": 10
+    },
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
