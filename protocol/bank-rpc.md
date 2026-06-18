@@ -37,25 +37,35 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by matchm
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `create_records(requests, docs?, record_subscriptions?)` | matchmaker → each bank | Intake `docs`; validate each request; mint the debit/credit pairs with mandatory `pair` and `deal_id`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
+| `create_records(offer1, debit_amount1, credit_amount1, offer2, credit_amount2, debit_amount2, deal_id, record_subscriptions?)` | matchmaker → each bank | Resolve the two Offers; mint the single debit/credit record pair this bank is responsible for; tag it with `deal_id`; attach optional `record_subscriptions` for fan-out; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
 
-The only `request` type in v1 is:
+The matchmaker passes the same six primary parameters to every participating bank. Each bank extracts the two amounts that apply to the Voucher it issues and creates one debit/credit record pair for that Voucher.
+
+Parameter mapping for a swap where Alice gives Voucher X and receives Voucher Y, while Bob gives Voucher Y and receives Voucher X:
 
 ```ts
-{ type: "offer_pair", offer1, offer2, amount, deal_id }
+offer1           // Alice's Offer: debit X, credit Y
+debit_amount1    // amount of X Alice gives
+credit_amount1   // amount of Y Alice receives
+offer2           // Bob's Order: debit Y, credit X
+credit_amount2   // amount of X Bob receives
+debit_amount2    // amount of Y Bob gives
+deal_id          // ULID shared across all banks
 ```
 
-- `offer1` and `offer2` are hashes of **Offers issued by this bank**. They MUST be on opposite sides of the same Voucher: one debits the Voucher, the other credits it. The bank resolves each Offer to its underlying Order, creates a debit record for the seller and a credit record for the buyer, and tags both with the supplied `deal_id`.
-- `amount` is the amount of this bank's Voucher to transfer from the seller to the buyer. The bank verifies it satisfies both Offers' `min`/`max` constraints.
-- `deal_id` is a ULID chosen by the matchmaker. All records created by all banks for the same deal share this id.
+- At the bank issuing **X**: use `debit_amount1` and `credit_amount2` to create the X record pair.
+- At the bank issuing **Y**: use `credit_amount1` and `debit_amount2` to create the Y record pair.
 
-The bank rejects the request if:
+The bank verifies:
 
-- either Offer is unknown or was not issued by this bank;
-- either Offer cannot be resolved to a stored Order;
-- the Offers are not on opposite sides of a Voucher this bank issues;
-- `amount` is outside either Offer's limits;
-- the resulting records would violate the `Voucher.limit` or any Order limit.
+- Both Offers are valid and bank-signed. At least one of them was issued by this bank; the other may be foreign.
+- The local amount pair (the two amounts that apply to this bank's Voucher) are equal.
+- The local amount satisfies the local Offer's `min`/`max` constraints.
+- The cross-voucher amounts are consistent: `credit_amount1` and `debit_amount2` refer to the same voucher, and `debit_amount1` and `credit_amount2` refer to the same voucher.
+- Both Offers resolve to stored Orders (or the bank already has the Orders).
+- The resulting records would not violate `Voucher.limit` or any Order limit.
+
+The bank rejects the request if any of these checks fail.
 
 > **No other caller may create records.** There is no `mint`; issuers begin trading by placing Orders that debit the issuer account.
 
@@ -114,7 +124,7 @@ The matchmaker builds the deal by discovering compatible Offers and asking each 
 
 1. **Holders publish intent.** Each holder submits their Voucher, Account, and Order to the banks that issue the Vouchers they want to trade. Banks MAY derive and publish Offers.
 2. **Matchmaker discovers Offers.** The matchmaker scans `list_offers` (or an off-band offer stream) and picks, for each bank, two Offers on opposite sides of the same Voucher that form a mutually acceptable trade.
-3. **create_records** on every participating bank with an `offer_pair` request (`offer1`, `offer2`, `amount`, `deal_id`), plus any Account doc bodies the bank still needs and optional `record_subscriptions`.
+3. **create_records** on every participating bank with the same six primary parameters (`offer1`, `debit_amount1`, `credit_amount1`, `offer2`, `credit_amount2`, `debit_amount2`, `deal_id`), plus optional `record_subscriptions`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
 4. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
 5. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (either already stored or submitted via `submit_order`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met.
 6. **Watch and relay.** Follow banks subscribe to predecessor bank signatures. If a push is lost, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`).

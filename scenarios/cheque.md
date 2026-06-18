@@ -77,23 +77,23 @@ Abank stores the Order, derives and signs a credit-only Offer hiding Bob's accou
 
 The matchmaker discovers both Offers on Abank's public offer stream.
 
-The matchmaker calls `create_records` with an `offer_pair`:
+The matchmaker calls `create_records`. Alice's cheque Offer has no credit side, so `credit_amount1` is `0`; Bob's receiving Offer has no debit side, so `debit_amount2` is `0`:
 
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <alice-cheque-offer-hash>,
-        "offer2": <bob-receiving-offer-hash>,
-        "amount": 5,
-        "deal_id": <deal-id> }
-    ]
+    "offer1": <alice-cheque-offer-hash>,
+    "debit_amount1": 5,
+    "credit_amount1": 0,
+    "offer2": <bob-receiving-offer-hash>,
+    "credit_amount2": 5,
+    "debit_amount2": 0,
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank resolves both Offers to Alice's and Bob's Orders, validates the amount against both limits, and creates:
+Abank resolves both Offers to Alice's and Bob's Orders, validates the non-zero amounts against both limits, and creates:
 
 - Debit record: Alice's account, amount `5`.
 - Credit record: Bob's account, amount `5`.

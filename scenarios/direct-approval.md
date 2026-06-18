@@ -108,20 +108,21 @@ The matchmaker sees:
 
 ## Phase 2 — Matchmaker creates records
 
-The matchmaker picks a `deal_id` ULID shared across all banks.
+The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_records` at **both** banks with the same two Offers and four amounts:
 
-### At Abank
+- `offer1` = Alice's Offer (debit Avoucher `1`, credit Bvoucher `1`).
+- `offer2` = Bob's Offer (debit Bvoucher `1`, credit Avoucher `1`).
 
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <alice-sell-avoucher-offer-hash>,
-        "offer2": <bob-buy-avoucher-offer-hash>,
-        "amount": 1,
-        "deal_id": <deal-id> }
-    ],
+    "offer1": <alice-cross-voucher-offer-hash>,
+    "debit_amount1": 1,
+    "credit_amount1": 1,
+    "offer2": <bob-cross-voucher-offer-hash>,
+    "credit_amount2": 1,
+    "debit_amount2": 1,
+    "deal_id": <deal-id>,
     "record_subscriptions": [
       { "record": <alice-avoucher-debit-hash>, "url": <abank-notify-url> },
       { "record": <bob-avoucher-credit-hash>, "url": <abank-notify-url> }
@@ -130,25 +131,25 @@ The matchmaker picks a `deal_id` ULID shared across all banks.
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank resolves both Offers to Alice's and Bob's Orders, verifies the amounts and limits, and mints:
+Abank sees that Alice's Offer debits Avoucher and Bob's Offer credits Avoucher. It uses `debit_amount1` and `credit_amount2` to create the Avoucher record pair:
 
 - Debit record: Alice's Avoucher account, amount `1`.
 - Credit record: Bob's Avoucher account, amount `1`.
 
 Both records are tagged with `deal_id` and `pair`. Abank returns the record bodies.
 
-### At Bbank
+The matchmaker makes the same call at Bbank:
 
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <bob-sell-bvoucher-offer-hash>,
-        "offer2": <alice-buy-bvoucher-offer-hash>,
-        "amount": 1,
-        "deal_id": <deal-id> }
-    ],
+    "offer1": <alice-cross-voucher-offer-hash>,
+    "debit_amount1": 1,
+    "credit_amount1": 1,
+    "offer2": <bob-cross-voucher-offer-hash>,
+    "credit_amount2": 1,
+    "debit_amount2": 1,
+    "deal_id": <deal-id>,
     "record_subscriptions": [
       { "record": <bob-bvoucher-debit-hash>, "url": <bbank-notify-url> },
       { "record": <alice-bvoucher-credit-hash>, "url": <bbank-notify-url> }
@@ -157,7 +158,7 @@ Both records are tagged with `deal_id` and `pair`. Abank returns the record bodi
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank mints:
+Bbank uses `credit_amount1` and `debit_amount2` to create the Bvoucher record pair:
 
 - Debit record: Bob's Bvoucher account, amount `1`.
 - Credit record: Alice's Bvoucher account, amount `1`.

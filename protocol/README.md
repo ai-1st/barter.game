@@ -7,8 +7,9 @@
 > - [`base.md`](./base.md) — identity, canonical JSON, `BaseDoc`, `Signature`, `Address`, the JSON-RPC envelope, replay protection, and request signing.
 > - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
 > - [`bank-rpc.md`](./bank-rpc.md) — the bank JSON-RPC API and REST address-directory endpoints.
->
-> `MASTER-INPUT.md` is the source-of-truth design narrative from the product owner; `scenarios/*.md` are step-by-step interaction traces. `IMPLEMENTATION.md` explains how the reference team built it.
+> - `scenarios/*.md` are step-by-step interaction traces. 
+> 
+> `IMPLEMENTATION.md` explains how the reference team built it.
 
 A federated mutual-credit ledger enabling multi-party barter deals where parties issue Vouchers for their goods and services and exchange them with others. A deal is a chain of paired credit/debit transfers — one or more holders moving Vouchers among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
@@ -62,7 +63,7 @@ A deal executes in three waves: **ready → hold → settle**. Records are creat
 
 **1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has:
 
-- a valid `Order` (or `Offer`) bound to the record, **and**
+- a valid `Order` bound to the record, **and**
 - a per-bank `Confirm` from the matchmaker for this deal, **and**
 - sufficient coverage on the debit account.
 
@@ -95,7 +96,7 @@ If a record cannot be held — because its debit is uncovered, the account is un
 
 Settling means: apply the deltas of every owned record, release the holds, issue `settle` signatures, fan out.
 
-> **Implementation note:** The matchmaker calls `create_records` on each bank with an `offer_pair` request. Each bank returns the record bodies it created. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit Orders (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
+> **Implementation note:** The matchmaker calls `create_records` on each bank with the same two Offers and four amounts (`offer1`, `debit_amount1`, `credit_amount1`, `offer2`, `credit_amount2`, `debit_amount2`) plus a shared `deal_id`. Each bank extracts the two amounts that apply to the Voucher it issues and mints one debit/credit record pair. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit Orders (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
 
 ### 2.1 Authorization sources
 

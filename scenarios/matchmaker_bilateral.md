@@ -39,28 +39,40 @@ The matchmaker subscribes to Offer streams from both banks and sees:
 
 ## Phase 2 — Matchmaker creates records
 
-The matchmaker chooses a `deal_id` ULID.
+The matchmaker chooses a `deal_id` ULID shared across all calls. Each `create_records` call creates one debit/credit record pair.
 
 ### At Abank
 
-Alice's `100` Avoucher is split between Bob (`90`) and the matchmaker (`10`). The matchmaker makes two `offer_pair` requests:
+Alice's `100` Avoucher is split between Bob (`90`) and the matchmaker (`10`). The matchmaker makes two calls:
+
+**Call 1 — Alice → Bob (`90` Avoucher):**
 
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <alice-sell-avoucher-offer-hash>,
-        "offer2": <bob-buy-avoucher-offer-hash>,
-        "amount": 90,
-        "deal_id": <deal-id> },
-      { "type": "offer_pair",
-        "offer1": <alice-sell-avoucher-offer-hash>,
-        "offer2": <matchmaker-buy-avoucher-offer-hash>,
-        "amount": 10,
-        "deal_id": <deal-id> }
-    ],
-    "record_subscriptions": [ ... ]
+    "offer1": <alice-sell-avoucher-offer-hash>,
+    "debit_amount1": 90,
+    "credit_amount1": 81,
+    "offer2": <bob-buy-avoucher-offer-hash>,
+    "credit_amount2": 90,
+    "debit_amount2": 81,
+    "deal_id": <deal-id>
+  },
+  "pubkey": M.pub, "to": Abank.pub }
+```
+
+**Call 2 — Alice → Matchmaker (`10` Avoucher):**
+
+```json
+{ "method": "create_records",
+  "params": {
+    "offer1": <alice-sell-avoucher-offer-hash>,
+    "debit_amount1": 10,
+    "credit_amount1": 9,
+    "offer2": <matchmaker-buy-avoucher-offer-hash>,
+    "credit_amount2": 10,
+    "debit_amount2": 9,
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
 ```
@@ -74,22 +86,34 @@ Abank creates:
 
 Bob's `100` Bvoucher is split between Alice (`90`) and the matchmaker (`10`):
 
+**Call 1 — Bob → Alice (`90` Bvoucher):**
+
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <bob-sell-bvoucher-offer-hash>,
-        "offer2": <alice-buy-bvoucher-offer-hash>,
-        "amount": 90,
-        "deal_id": <deal-id> },
-      { "type": "offer_pair",
-        "offer1": <bob-sell-bvoucher-offer-hash>,
-        "offer2": <matchmaker-buy-bvoucher-offer-hash>,
-        "amount": 10,
-        "deal_id": <deal-id> }
-    ],
-    "record_subscriptions": [ ... ]
+    "offer1": <bob-sell-bvoucher-offer-hash>,
+    "debit_amount1": 90,
+    "credit_amount1": 81,
+    "offer2": <alice-buy-bvoucher-offer-hash>,
+    "credit_amount2": 90,
+    "debit_amount2": 81,
+    "deal_id": <deal-id>
+  },
+  "pubkey": M.pub, "to": Bbank.pub }
+```
+
+**Call 2 — Bob → Matchmaker (`10` Bvoucher):**
+
+```json
+{ "method": "create_records",
+  "params": {
+    "offer1": <bob-sell-bvoucher-offer-hash>,
+    "debit_amount1": 10,
+    "credit_amount1": 9,
+    "offer2": <matchmaker-buy-bvoucher-offer-hash>,
+    "credit_amount2": 10,
+    "debit_amount2": 9,
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
 ```

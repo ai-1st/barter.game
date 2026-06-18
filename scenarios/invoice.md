@@ -76,23 +76,23 @@ Bbank stores the Order, derives and signs a cheque Offer hiding Bob's account ha
 
 The matchmaker discovers both Offers on Bbank's public offer stream.
 
-The matchmaker calls `create_records` with an `offer_pair`:
+The matchmaker calls `create_records`. The invoice Offer has no debit side, so `debit_amount1` is `0`; Bob's cheque Offer has no credit side, so `credit_amount2` is `0`:
 
 ```json
 { "method": "create_records",
   "params": {
-    "requests": [
-      { "type": "offer_pair",
-        "offer1": <invoice-offer-hash>,
-        "offer2": <bob-cheque-offer-hash>,
-        "amount": 10,
-        "deal_id": <deal-id> }
-    ]
+    "offer1": <invoice-offer-hash>,
+    "debit_amount1": 0,
+    "credit_amount1": 10,
+    "offer2": <bob-cheque-offer-hash>,
+    "credit_amount2": 0,
+    "debit_amount2": 10,
+    "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank resolves both Offers to Alice's and Bob's Orders, validates the amount against both limits, and creates:
+Bbank resolves both Offers to Alice's and Bob's Orders, validates the non-zero amounts against both limits, and creates:
 
 - Debit record: Bob's account, amount `10`.
 - Credit record: Alice's account, amount `10`.
