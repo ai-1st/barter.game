@@ -1,0 +1,14 @@
+{
+  "name": "@barter.game/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --directory .",
+    "build": "echo 'No build step yet — static SPA served directly by the bank'",
+    "typecheck": "echo 'No TypeScript files yet — tracked in docs/ui/implementation-plan.md Phase 0'",
+    "test": "echo 'No tests yet — tracked in docs/ui/implementation-plan.md Phase 0'"
+  },
+  "devDependencies": {}
+}

@@ -95,10 +95,9 @@ barter.game/
 
 ## Using the CLI
 
-The v1 CLI is archived in `old/apps/cli/` while the protocol is being
-reworked. It will be rebuilt against the new `protocol/` contract. The
-demo scripts below still exercise the live Deno Deploy banks using the
-old implementation.
+The v1 CLI was removed along with the legacy implementation while the
+protocol is being reworked; it will be rebuilt against the new `protocol/`
+contract. The demo scripts below exercise the live Deno Deploy banks.
 
 ```bash
 # One-time setup
@@ -170,7 +169,7 @@ bun run scripts/genkey.ts | sed 's/^BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/k
 # 3. Create a Deno Deploy project at https://deno.com/deploy
 #    - Link this repo
 #    - Set environment variables from /tmp/key.env
-#    - Entrypoint: old/apps/bank/main.ts
+#    - Entrypoint: apps/bank/main.ts
 #    The included .github/workflows/deploy.yml auto-deploys on every push to main.
 
 # 4. Hit it
@@ -220,8 +219,8 @@ for the v1.5+ work.
 4. [`protocol/README.md`](./protocol/README.md) — the **invariant protocol contract overview**, then `protocol/base.md`, `protocol/bank-schema.md`, and `protocol/bank-rpc.md` (45 minutes if you read carefully)
 5. [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — how *we* built it; change anything here for your own stack (30 minutes)
 6. [`SCHEMA.md`](./SCHEMA.md) — the v1 reference database layer (15 minutes)
-7. `old/packages/protocol/src/` — the archived reference code
-8. `old/apps/bank/` — the archived server-side handlers and advance engine
+7. [`packages/protocol/src/`](./packages/protocol/src/) — the shared protocol primitives (canonical JSON, signing, validators)
+8. [`apps/bank/`](./apps/bank/) — the Deno bank server: handlers, advance engine, and custom UI API
 9. [`TODOS.md`](./TODOS.md) — what's next
 
 ## Building your own implementation?

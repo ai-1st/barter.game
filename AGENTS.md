@@ -14,9 +14,7 @@ This repo contains:
 - The **CLI client** (`apps/cli/`) — the `barter` command that drives the protocol end-to-end.
 - The **bank server** (`apps/bank/`) — Deno Deploy project serving one or more federated bank processes.
 - The **website** (`website/`) — Hugo/Hextra static site.
-- The **old Supabase implementation** (`old/supabase/`) — preserved for reference.
-
-v1 is CLI-only; a web UI is on the v1.5 roadmap (`TODOS.md`).
+- The **web UI** (`apps/web/`) — browser SPA served by the bank.
 
 ## Technology stack
 
@@ -34,15 +32,16 @@ v1 is CLI-only; a web UI is on the v1.5 roadmap (`TODOS.md`).
 
 ## Monorepo structure
 
-The active work is the protocol contract in `protocol/`. The previous
-implementation has been archived under `old/` and will be rebuilt from
-scratch once the protocol rework is complete.
+The active work is the protocol contract in `protocol/`, the shared
+protocol library in `packages/protocol/`, the Deno bank server in
+`apps/bank/`, and the browser SPA in `apps/web/`. (The previous Supabase
+and CLI implementation that lived under `old/` has been removed.)
 
 ```
 barter.game/
-├── package.json              # Root workspace manifest (workspaces: old/packages/*, old/apps/*)
+├── package.json              # Root workspace manifest (workspaces: packages/*, apps/web)
 ├── tsconfig.json             # Shared TypeScript config (strict, ES2022, bundler resolution)
-├── deno.json                 # Deno config for the archived implementation
+├── deno.json                 # Deno config: import map, bank server, Deno Deploy app
 ├── bun.lock                  # Bun lockfile
 ├── .github/workflows/        # CI/CD: Deno Deploy autodeploy on merge
 ├── protocol/                 # ACTIVE — the invariant protocol contract
@@ -50,38 +49,22 @@ barter.game/
 │   ├── base.md               # Base docs, envelope, discovery
 │   ├── bank-schema.md        # Voucher/Account/Record/Order/Offer/Confirm schemas
 │   └── bank-rpc.md           # Bank RPC methods and orchestration
-├── old/                      # Archived implementation
-│   ├── packages/
-│   │   └── protocol/         # @barter.game/protocol — reference library
-│   │       ├── src/canonical.ts
-│   │       ├── src/crypto.ts
-│   │       ├── src/schemas.ts
-│   │       ├── src/invite.ts
-│   │       ├── src/deal.ts
-│   │       ├── test/
-│   │       └── test-deno/
-│   ├── apps/
-│   │   ├── bank/             # Deno Deploy bank server
-│   │   │   ├── main.ts
-│   │   │   ├── env.ts
-│   │   │   ├── db.ts
-│   │   │   ├── rpc.ts
-│   │   │   ├── registry.ts
-│   │   │   ├── advance.ts
-│   │   │   ├── subscriptions.ts
-│   │   │   ├── peer.ts
-│   │   │   ├── handlers/
-│   │   │   └── test-deno/
-│   │   └── cli/              # @barter.game/cli
-│   │       ├── src/index.ts
-│   │       ├── src/client.ts
-│   │       ├── src/profile.ts
-│   │       ├── src/docstore.ts
-│   │       ├── src/dealstate.ts
-│   │       ├── src/orchestrate.ts
-│   │       └── src/commands/
-│   ├── supabase/             # Archived Supabase/Postgres implementation
-│   └── scripts/
+├── packages/
+│   └── protocol/             # @barter.game/protocol — shared protocol library
+│       ├── src/index.ts      #   canonical JSON (JCS), ed25519 signing, doc validators
+│       ├── test/             #   bun tests + golden canonical vectors
+│       └── test-deno/        #   cross-runtime parity tests
+├── apps/
+│   ├── bank/                 # ACTIVE — Deno bank server (Deno Deploy)
+│   │   ├── main.ts           #   HTTP router: RPC + UI API + SPA + Barter Links
+│   │   ├── rpc.ts            #   JSON-RPC envelope verification + replay
+│   │   ├── registry.ts       #   method → handler map
+│   │   ├── advance.ts        #   self-advance engine (ready → hold → settle)
+│   │   ├── db.ts env.ts peer.ts local.ts ui.ts
+│   │   ├── handlers/         #   submit_docs, create_records, submit_confirm, get_*, ...
+│   │   └── e2e-local.ts e2e-crossbank.ts   # end-to-end settlement checks
+│   └── web/                  # ACTIVE — browser SPA served by the bank
+│       └── index.html app.js protocol.js styles.css
 ├── scripts/
 │   ├── demo-local.sh         # End-to-end multi-party demo against a local Deno server
 │   ├── demo-deploy.sh        # Same demo against deployed Deno Deploy banks
@@ -93,7 +76,7 @@ barter.game/
 
 ## Build and test commands
 
-These commands operate on the archived implementation under `old/`.
+These commands operate on the active workspaces (`packages/protocol`, `apps/web`).
 
 ```bash
 # Install dependencies
@@ -105,7 +88,7 @@ bun run build
 # Type-check all workspaces
 bun run typecheck
 
-# Run the full test matrix (this is the gate before any commit that touches old/)
+# Run the full test matrix (this is the gate before any commit)
 bun run test:all
 ```
 

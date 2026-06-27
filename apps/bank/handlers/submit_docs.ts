@@ -1,0 +1,167 @@
+import {
+  getDoc,
+  hasDoc,
+  storeAccount,
+  storeAddress,
+  storeOffer,
+  storeOrder,
+  storeSignature,
+  storeVoucher,
+} from '../db.ts';
+import {
+  hashDoc,
+  newUlid,
+  offerSideFromOrderSide,
+  signDoc,
+  validateAccount,
+  validateAddress,
+  validateOrder,
+  validateSignature,
+  validateVoucher,
+  verifyDoc,
+  type Offer,
+  type Order,
+} from '@barter.game/protocol';
+import type { Bank } from '../types.ts';
+import { RpcError } from '../error.ts';
+
+export async function submitDocs(
+  bank: Bank,
+  params: Record<string, unknown>,
+  sender: string,
+): Promise<unknown> {
+  const docsRaw = params.docs;
+  if (!Array.isArray(docsRaw)) {
+    throw new RpcError(-32602, 'docs array required');
+  }
+
+  const stored: string[] = [];
+  const offers: string[] = [];
+
+  for (const raw of docsRaw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new RpcError(-32600, 'invalid doc');
+    }
+    const type = (raw as Record<string, unknown>).type;
+    switch (type) {
+      case 'voucher': {
+        const v = validateVoucher(raw, bank.pubkey);
+        if (v.bank !== bank.pubkey) {
+          throw new RpcError(-32000, 'voucher bank mismatch');
+        }
+        await verifyOrFail(raw, v.sig, v.pubkey);
+        const h = await storeVoucher(bank, v);
+        if (!stored.includes(h)) stored.push(h);
+        break;
+      }
+      case 'account': {
+        const a = validateAccount(raw);
+        await verifyOrFail(raw, a.sig, a.pubkey);
+        if (a.pubkey !== sender) {
+          throw new RpcError(-32001, 'account must be signed by sender');
+        }
+        if (!(await hasDoc(bank, a.voucher))) {
+          throw new RpcError(-32005, 'account voucher unknown');
+        }
+        const h = await storeAccount(bank, a);
+        if (!stored.includes(h)) stored.push(h);
+        break;
+      }
+      case 'order': {
+        const o = validateOrder(raw);
+        await verifyOrFail(raw, o.sig, o.pubkey);
+        if (o.pubkey !== sender) {
+          throw new RpcError(-32001, 'order must be signed by sender');
+        }
+        await validateOrderAccounts(bank, o);
+        const h = await storeOrder(bank, o);
+        if (!stored.includes(h)) stored.push(h);
+        break;
+      }
+      case 'address': {
+        const a = validateAddress(raw);
+        await verifyOrFail(raw, a.sig, a.pubkey);
+        await storeAddress(bank, a);
+        const h = hashDoc(a);
+        if (!stored.includes(h)) stored.push(h);
+        break;
+      }
+      case 'signature': {
+        const s = validateSignature(raw);
+        await verifyOrFail(raw, s.sig, s.pubkey);
+        const h = await storeSignature(bank, s);
+        if (!stored.includes(h)) stored.push(h);
+        break;
+      }
+      default:
+        throw new RpcError(-32600, `unsupported doc type: ${type}`);
+    }
+  }
+
+  const publish = params.publish_offers;
+  if (Array.isArray(publish)) {
+    for (const orderHash of publish) {
+      if (typeof orderHash !== 'string') continue;
+      const offerHash = await deriveOffer(bank, orderHash, sender);
+      if (offerHash && !offers.includes(offerHash)) offers.push(offerHash);
+    }
+  }
+
+  return { stored, offers };
+}
+
+async function verifyOrFail(
+  raw: unknown,
+  sig: string | undefined,
+  pubkey: string,
+): Promise<void> {
+  if (!sig) throw new RpcError(-32001, 'missing signature');
+  if (!verifyDoc(raw, sig, pubkey)) {
+    throw new RpcError(-32001, 'invalid signature');
+  }
+}
+
+async function validateOrderAccounts(bank: Bank, order: Order): Promise<void> {
+  const sides: ('debit' | 'credit')[] = ['debit', 'credit'];
+  for (const side of sides) {
+    const s = order[side];
+    if (!s) continue;
+    // A bank only needs to verify the account for the side that involves a voucher it issues.
+    if (s.bank !== bank.pubkey) continue;
+    const accDoc = await getDoc<unknown>(bank, s.account);
+    if (!accDoc) {
+      throw new RpcError(-32005, `unknown ${side} account`);
+    }
+    const acc = accDoc as { pubkey: string; voucher: string };
+    if (acc.pubkey !== order.pubkey) {
+      throw new RpcError(-32000, `${side} account not owned by order signer`);
+    }
+    if (acc.voucher !== s.voucher) {
+      throw new RpcError(-32000, `${side} account voucher mismatch`);
+    }
+  }
+}
+
+export async function deriveOffer(
+  bank: Bank,
+  orderHash: string,
+  sender: string,
+): Promise<string | null> {
+  const orderDoc = await getDoc<unknown>(bank, orderHash);
+  if (!orderDoc) return null;
+  const order = orderDoc as Order;
+  if (order.pubkey !== sender) return null;
+  const offer: Offer = {
+    type: 'offer',
+    pubkey: bank.pubkey,
+    ulid: newUlid(),
+    order: orderHash,
+    rate: order.rate,
+    debit: offerSideFromOrderSide(order.debit),
+    credit: offerSideFromOrderSide(order.credit),
+    lead: order.lead,
+    sig: '',
+  };
+  offer.sig = signDoc(offer, bank.privateKey);
+  return storeOffer(bank, offer);
+}

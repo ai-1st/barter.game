@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../apps/web",
+    "declaration": false,
+    "sourceMap": false
+  }
+}

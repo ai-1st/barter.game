@@ -1,0 +1,42 @@
+import type { Bank } from './types.ts';
+import { submitDocs } from './handlers/submit_docs.ts';
+import { submitConfirm } from './handlers/submit_confirm.ts';
+import { createRecords } from './handlers/create_records.ts';
+import { notifySignatures } from './handlers/notify_signatures.ts';
+import { getRecordSignatures } from './handlers/get_record_signatures.ts';
+import { subscribe } from './handlers/subscribe.ts';
+import {
+  getVoucher,
+  getAccountBalance,
+  listAccounts,
+  listOffers,
+  getInvoice,
+  getCheque,
+  getOffer,
+  listVouchers,
+  getAddress,
+} from './handlers/get.ts';
+
+export type Handler = (
+  bank: Bank,
+  params: Record<string, unknown>,
+  sender: string,
+) => Promise<unknown>;
+
+export const registry: Record<string, Handler> = {
+  submit_docs: submitDocs,
+  submit_confirm: submitConfirm,
+  create_records: createRecords,
+  notify_signatures: notifySignatures,
+  get_record_signatures: getRecordSignatures,
+  subscribe,
+  get_voucher: getVoucher,
+  get_account_balance: getAccountBalance,
+  list_accounts: listAccounts,
+  list_offers: listOffers,
+  get_invoice: getInvoice,
+  get_cheque: getCheque,
+  get_offer: getOffer,
+  list_vouchers: listVouchers,
+  get_address: getAddress,
+};

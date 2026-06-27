@@ -9,15 +9,9 @@
         "typescript": "^5.6.0",
       },
     },
-    "apps/cli": {
-      "name": "@barter.game/cli",
+    "apps/web": {
+      "name": "@barter.game/web",
       "version": "0.0.1",
-      "bin": {
-        "barter": "./src/index.ts",
-      },
-      "dependencies": {
-        "@barter.game/protocol": "workspace:*",
-      },
     },
     "packages/protocol": {
       "name": "@barter.game/protocol",
@@ -34,9 +28,9 @@
     },
   },
   "packages": {
-    "@barter.game/cli": ["@barter.game/cli@workspace:apps/cli"],
-
     "@barter.game/protocol": ["@barter.game/protocol@workspace:packages/protocol"],
+
+    "@barter.game/web": ["@barter.game/web@workspace:apps/web"],
 
     "@noble/ed25519": ["@noble/ed25519@3.1.0", "", {}, "sha512-pfcObRY3CtvwfaG9Mt5XqZdKmAQppl37tHUeuBhDUbiwJBCVY4/A4lbMvb1xKhMDx96AqAqZpMWuBX1HulhX4g=="],
 

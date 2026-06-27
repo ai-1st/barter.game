@@ -16,6 +16,9 @@ supabase/.temp
 # Deno
 .deno
 
+# Local preview launch config (may contain a local demo bank key)
+.claude/launch.json
+
 # Hugo website
 website/_vendor/
 website/public/

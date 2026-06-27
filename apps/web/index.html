@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>barter.game</title>
+  <link rel="stylesheet" href="app/styles.css">
+  <meta name="description" content="Federated mutual-credit ledger">
+</head>
+<body>
+  <div id="app"></div>
+  <script type="importmap">
+  {
+    "imports": {
+      "@noble/ed25519": "https://esm.sh/@noble/ed25519@3.1.0",
+      "@noble/hashes/sha2.js": "https://esm.sh/@noble/hashes@2.2.0/sha2.js",
+      "@scure/base": "https://esm.sh/@scure/base@2.2.0",
+      "ulid": "https://esm.sh/ulid@2.3.0"
+    }
+  }
+  </script>
+  <script type="module" src="app/app.js"></script>
+</body>
+</html>

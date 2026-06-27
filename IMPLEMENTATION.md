@@ -16,7 +16,7 @@ The v1 reference implementation consists of:
 
 The demo runs live banks on Deno Deploy. Additional banks can be added by setting another `BANK_<NAME>_PRIV_KEY` environment variable — no separate deploy is needed, because `apps/bank/main.ts` discovers and routes all configured banks at startup.
 
-The old Supabase/Postgres implementation is archived in `old/supabase/` for reference.
+The legacy Supabase/Postgres and CLI implementation that previously lived under `old/` has been removed; the active implementation is the Deno bank server in `apps/bank/` backed by Deno KV.
 
 ---
 

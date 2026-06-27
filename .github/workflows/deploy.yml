@@ -4,19 +4,26 @@ on:
   push:
     branches: [main]
 
+# This project is deployed with the Deno Deploy "EA" CLI (`deno deploy`), which
+# targets the application configured in deno.json (`deploy.org` / `deploy.app`).
+# The app's entrypoint (apps/bank/main.ts), build config, and bank-key env vars
+# (BANK_<NAME>_PRIV_KEY) live in the Deno Deploy app settings, not here.
+#
+# Requires a repository secret DENO_DEPLOY_TOKEN (create one at
+# https://app.deno.com -> account settings -> access tokens).
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy to Deno Deploy
-        uses: denoland/deployctl@v1
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
         with:
-          project: ${{ vars.DENO_DEPLOY_PROJECT }}
-          entrypoint: old/apps/bank/main.ts
-          root: .
+          deno-version: v2.x
+
+      - name: Deploy to Deno Deploy (production)
+        env:
+          DENO_DEPLOY_TOKEN: ${{ secrets.DENO_DEPLOY_TOKEN }}
+        run: deno deploy --prod --org ai-1st --app barter-game-banks

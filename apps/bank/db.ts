@@ -1,0 +1,718 @@
+import type {
+  Account,
+  Address,
+  Base58PubKey,
+  Base58SHA256,
+  Confirm,
+  Offer,
+  Order,
+  BankRecord,
+  Signature,
+  Subscription,
+  ULID,
+  Voucher,
+} from '@barter.game/protocol';
+import { hashDoc } from '@barter.game/protocol';
+import type { Bank } from './types.ts';
+
+const REPLAY_WINDOW_MS = 1000 * 60 * 60 * 24; // 24h
+
+// --- key builders ---------------------------------------------------------
+
+function k(bank: Bank, ...parts: Deno.KvKeyPart[]): Deno.KvKey {
+  return [bank.pubkey, ...parts];
+}
+
+// --- generic docs ---------------------------------------------------------
+
+export async function storeDoc(
+  bank: Bank,
+  doc: unknown,
+): Promise<Base58SHA256> {
+  const h = hashDoc(doc);
+  await bank.kv.set(k(bank, 'doc', h), doc);
+  return h;
+}
+
+export async function getDoc<T = unknown>(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<T | null> {
+  const r = await bank.kv.get<T>(k(bank, 'doc', hash));
+  return r.value;
+}
+
+export async function hasDoc(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<boolean> {
+  const r = await bank.kv.get(k(bank, 'doc', hash));
+  return r.value !== null;
+}
+
+// --- vouchers -------------------------------------------------------------
+
+export async function storeVoucher(
+  bank: Bank,
+  voucher: Voucher,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, voucher);
+  await bank.kv.set(k(bank, 'voucher', h), { stored_at: Date.now() });
+  await bank.kv.set(k(bank, 'issuer_voucher', voucher.pubkey, h), true);
+  return h;
+}
+
+export async function getVoucher(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<Voucher | null> {
+  const doc = await getDoc<unknown>(bank, hash);
+  if (!doc) return null;
+  return doc as Voucher;
+}
+
+export async function listVouchers(bank: Bank): Promise<Voucher[]> {
+  const iter = bank.kv.list<{ stored_at: number }>({
+    prefix: k(bank, 'voucher'),
+  });
+  const out: Voucher[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const v = await getVoucher(bank, hash);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+export async function listVouchersByIssuer(
+  bank: Bank,
+  issuer: Base58PubKey,
+): Promise<Voucher[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'issuer_voucher', issuer),
+  });
+  const out: Voucher[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const v = await getVoucher(bank, hash);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+// --- accounts -------------------------------------------------------------
+
+export type AccountRow = {
+  holder: Base58PubKey;
+  voucher: Base58SHA256;
+  balance: number;
+  ulid: ULID;
+};
+
+export async function storeAccount(
+  bank: Bank,
+  account: Account,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, account);
+  const row: AccountRow = {
+    holder: account.pubkey,
+    voucher: account.voucher,
+    balance: 0,
+    ulid: account.ulid,
+  };
+  await bank.kv.set(k(bank, 'account', h), row);
+  await bank.kv.set(
+    k(bank, 'holder_account', account.pubkey, account.voucher, h),
+    true,
+  );
+  return h;
+}
+
+export async function getAccount(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<{ doc: Account; row: AccountRow } | null> {
+  const doc = await getDoc<unknown>(bank, hash);
+  if (!doc) return null;
+  const row = await bank.kv.get<AccountRow>(k(bank, 'account', hash));
+  if (!row.value) return null;
+  return { doc: doc as Account, row: row.value };
+}
+
+export async function listAccounts(
+  bank: Bank,
+  holder: Base58PubKey,
+): Promise<{ account: Account; voucher: Voucher | null; balance: number }[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'holder_account', holder),
+  });
+  const out: { account: Account; voucher: Voucher | null; balance: number }[] =
+    [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const a = await getAccount(bank, hash);
+    if (!a) continue;
+    const voucher = await getVoucher(bank, a.doc.voucher);
+    out.push({ account: a.doc, voucher, balance: a.row.balance });
+  }
+  return out;
+}
+
+export async function getAccountBalance(
+  bank: Bank,
+  accountHash: Base58SHA256,
+): Promise<{ current: number; pending: number } | null> {
+  const a = await getAccount(bank, accountHash);
+  if (!a) return null;
+  const holds = await listHoldsForAccount(bank, accountHash);
+  const pending = holds.reduce((sum, h) => sum + h.amount, 0);
+  return { current: a.row.balance, pending };
+}
+
+export async function updateAccountBalance(
+  bank: Bank,
+  accountHash: Base58SHA256,
+  delta: number,
+): Promise<void> {
+  const key = k(bank, 'account', accountHash);
+  const r = await bank.kv.get<AccountRow>(key);
+  if (!r.value) throw new Error('account not found');
+  const ok = await bank.kv
+    .atomic()
+    .check(r)
+    .set(key, { ...r.value, balance: r.value.balance + delta })
+    .commit();
+  if (!ok.ok) throw new Error('account balance conflict');
+}
+
+// --- orders ---------------------------------------------------------------
+
+export async function storeOrder(
+  bank: Bank,
+  order: Order,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, order);
+  await bank.kv.set(k(bank, 'order', h), { stored_at: Date.now() });
+  await bank.kv.set(k(bank, 'holder_order', order.pubkey, h), true);
+  return h;
+}
+
+export async function getOrder(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<Order | null> {
+  const doc = await getDoc<Record<string, unknown>>(bank, hash);
+  if (!doc) return null;
+  if (doc.type !== 'order') return null;
+  return doc as Order;
+}
+
+export async function listOrdersByHolder(
+  bank: Bank,
+  holder: Base58PubKey,
+): Promise<Order[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'holder_order', holder),
+  });
+  const out: Order[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const o = await getOrder(bank, hash);
+    if (o) out.push(o);
+  }
+  return out;
+}
+
+export async function getOrderUsage(
+  bank: Bank,
+  orderHash: Base58SHA256,
+): Promise<{ debit: number; credit: number }> {
+  const r = await bank.kv.get<{ debit: number; credit: number }>(
+    k(bank, 'order_usage', orderHash),
+  );
+  return r.value ?? { debit: 0, credit: 0 };
+}
+
+export async function addOrderUsage(
+  bank: Bank,
+  orderHash: Base58SHA256,
+  debit: number,
+  credit: number,
+): Promise<void> {
+  const key = k(bank, 'order_usage', orderHash);
+  const r = await bank.kv.get<{ debit: number; credit: number }>(key);
+  const cur = r.value ?? { debit: 0, credit: 0 };
+  const ok = await bank.kv
+    .atomic()
+    .check(r)
+    .set(key, { debit: cur.debit + debit, credit: cur.credit + credit })
+    .commit();
+  if (!ok.ok) throw new Error('order usage conflict');
+}
+
+// --- offers ---------------------------------------------------------------
+
+export async function storeOffer(
+  bank: Bank,
+  offer: Offer,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, offer);
+  await bank.kv.set(k(bank, 'offer', h), { stored_at: Date.now() });
+  await bank.kv.set(k(bank, 'order_offer', offer.order, h), true);
+  // index by voucher + intention
+  if (offer.debit) {
+    await bank.kv.set(
+      k(bank, 'voucher_offer', offer.debit.voucher, 'sell', h),
+      true,
+    );
+  }
+  if (offer.credit) {
+    await bank.kv.set(
+      k(bank, 'voucher_offer', offer.credit.voucher, 'buy', h),
+      true,
+    );
+  }
+  return h;
+}
+
+export async function getOffersForOrder(
+  bank: Bank,
+  orderHash: Base58SHA256,
+): Promise<Base58SHA256[]> {
+  const iter = bank.kv.list<boolean>({ prefix: k(bank, 'order_offer', orderHash) });
+  const out: Base58SHA256[] = [];
+  for await (const entry of iter) {
+    out.push(entry.key[entry.key.length - 1] as string);
+  }
+  return out;
+}
+
+export async function getOffer(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<Offer | null> {
+  const doc = await getDoc<Record<string, unknown>>(bank, hash);
+  if (!doc) return null;
+  if (doc.type !== 'offer') return null;
+  return doc as Offer;
+}
+
+export async function listOffers(
+  bank: Bank,
+  voucherHash: Base58SHA256,
+  intention: 'sell' | 'buy',
+): Promise<Offer[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'voucher_offer', voucherHash, intention),
+  });
+  const out: Offer[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const o = await getOffer(bank, hash);
+    if (o) out.push(o);
+  }
+  return out;
+}
+
+// --- records --------------------------------------------------------------
+
+export type RecordRow = {
+  doc: BankRecord;
+  details: {
+    pair: ULID;
+    deal_id: ULID;
+    holder: Base58PubKey;
+    account: Base58SHA256;
+  };
+};
+
+export async function storeRecord(
+  bank: Bank,
+  record: BankRecord,
+  details: RecordRow['details'],
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, record);
+  await bank.kv.set(k(bank, 'record', h), { doc: record, details });
+  await bank.kv.set(k(bank, 'deal_record', details.deal_id, h), true);
+  await bank.kv.set(k(bank, 'account_record', details.account, h), true);
+  return h;
+}
+
+export async function getRecord(
+  bank: Bank,
+  hash: Base58SHA256,
+): Promise<RecordRow | null> {
+  const r = await bank.kv.get<RecordRow>(k(bank, 'record', hash));
+  return r.value;
+}
+
+export async function listRecordsByDeal(
+  bank: Bank,
+  dealId: ULID,
+): Promise<RecordRow[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'deal_record', dealId),
+  });
+  const out: RecordRow[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const r = await getRecord(bank, hash);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+export async function listRecordsByVoucher(
+  bank: Bank,
+  voucherHash: Base58SHA256,
+): Promise<RecordRow[]> {
+  // Heuristic: scan all records and filter by voucher via the underlying order.
+  const iter = bank.kv.list<RecordRow>({ prefix: k(bank, 'record') });
+  const out: RecordRow[] = [];
+  for await (const entry of iter) {
+    const row = entry.value;
+    const order = await getOrder(bank, row.doc.order);
+    const side =
+      row.doc.type === 'debit' ? order?.debit : order?.credit;
+    if (side && side.voucher === voucherHash) out.push(row);
+  }
+  return out;
+}
+
+// --- holds ----------------------------------------------------------------
+
+export type Hold = {
+  account: Base58SHA256;
+  deal_id: ULID;
+  amount: number;
+};
+
+export async function listHoldsForAccount(
+  bank: Bank,
+  accountHash: Base58SHA256,
+): Promise<Hold[]> {
+  const iter = bank.kv.list<number>({
+    prefix: k(bank, 'hold', accountHash),
+  });
+  const out: Hold[] = [];
+  for await (const entry of iter) {
+    const dealId = entry.key[entry.key.length - 1] as string;
+    out.push({ account: accountHash, deal_id: dealId, amount: entry.value });
+  }
+  return out;
+}
+
+export async function getActiveHold(
+  bank: Bank,
+  accountHash: Base58SHA256,
+): Promise<Hold | null> {
+  const r = await bank.kv.get<Hold>(k(bank, 'active_hold', accountHash));
+  return r.value;
+}
+
+/**
+ * Acquire an aggregated hold for a single account+deal. Rejects if the
+ * account is already held by a different external deal.
+ */
+export async function acquireHold(
+  bank: Bank,
+  accountHash: Base58SHA256,
+  dealId: ULID,
+  amount: number,
+): Promise<boolean> {
+  const activeKey = k(bank, 'active_hold', accountHash);
+  const holdKey = k(bank, 'hold', accountHash, dealId);
+  const r = await bank.kv.get<Hold>(activeKey);
+  if (r.value && r.value.deal_id !== dealId) {
+    return false;
+  }
+  const ok = await bank.kv
+    .atomic()
+    .check(r)
+    .set(activeKey, { account: accountHash, deal_id: dealId, amount })
+    .set(holdKey, amount)
+    .commit();
+  return ok.ok === true;
+}
+
+export async function releaseHold(
+  bank: Bank,
+  accountHash: Base58SHA256,
+  dealId: ULID,
+): Promise<void> {
+  const activeKey = k(bank, 'active_hold', accountHash);
+  const holdKey = k(bank, 'hold', accountHash, dealId);
+  const r = await bank.kv.get<Hold>(activeKey);
+  const atomic = bank.kv.atomic().delete(holdKey);
+  if (r.value && r.value.deal_id === dealId) {
+    atomic.delete(activeKey);
+  }
+  await atomic.commit();
+}
+
+// --- confirms -------------------------------------------------------------
+
+export async function storeConfirm(
+  bank: Bank,
+  confirm: Confirm,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, confirm);
+  await bank.kv.set(k(bank, 'confirm', confirm.deal_id), {
+    hash: h,
+    records: confirm.records,
+    at: Date.now(),
+  });
+  return h;
+}
+
+export async function getConfirm(
+  bank: Bank,
+  dealId: ULID,
+): Promise<{ hash: Base58SHA256; records: Base58SHA256[]; at: number } | null> {
+  const r = await bank.kv.get<{ hash: string; records: string[]; at: number }>(
+    k(bank, 'confirm', dealId),
+  );
+  return r.value;
+}
+
+// --- signatures -----------------------------------------------------------
+
+export async function storeSignature(
+  bank: Bank,
+  sig: Signature,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, sig);
+  if (sig.hash) {
+    await bank.kv.set(k(bank, 'record_sig', sig.hash, h), true);
+  }
+  return h;
+}
+
+export async function getSignaturesForRecord(
+  bank: Bank,
+  recordHash: Base58SHA256,
+): Promise<Signature[]> {
+  const iter = bank.kv.list<boolean>({
+    prefix: k(bank, 'record_sig', recordHash),
+  });
+  const out: Signature[] = [];
+  for await (const entry of iter) {
+    const hash = entry.key[entry.key.length - 1] as string;
+    const s = await getDoc<unknown>(bank, hash);
+    if (s) out.push(s as Signature);
+  }
+  return out;
+}
+
+// --- addresses ------------------------------------------------------------
+
+export async function storeAddress(bank: Bank, addr: Address): Promise<void> {
+  await storeDoc(bank, addr);
+  const key = k(bank, 'address', addr.pubkey);
+  const existing = await bank.kv.get<Address>(key);
+  if (!existing.value || addr.ulid > existing.value.ulid) {
+    await bank.kv.set(key, addr);
+  }
+}
+
+export async function getAddress(
+  bank: Bank,
+  pubkey: Base58PubKey,
+): Promise<Address | null> {
+  const r = await bank.kv.get<Address>(k(bank, 'address', pubkey));
+  return r.value;
+}
+
+// --- subscriptions --------------------------------------------------------
+
+export async function storeSubscription(
+  bank: Bank,
+  sub: Subscription,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, sub);
+  await bank.kv.set(k(bank, 'subscription', sub.pubkey, sub.ulid), sub);
+  return h;
+}
+
+// --- replay window --------------------------------------------------------
+
+export async function claimReplayId(
+  bank: Bank,
+  sender: Base58PubKey,
+  id: ULID,
+  to: Base58PubKey,
+): Promise<boolean> {
+  const key = k(bank, 'replay', sender, id, to);
+  const existing = await bank.kv.get(key);
+  if (existing.value !== null) return false;
+  const ok = await bank.kv
+    .atomic()
+    .check(existing)
+    .set(key, Date.now(), { expireIn: REPLAY_WINDOW_MS })
+    .commit();
+  return ok.ok === true;
+}
+
+// --- UI state -------------------------------------------------------------
+
+export type UiState = {
+  pubkey: Base58PubKey;
+  trusted: Base58PubKey[];
+  contacts: { pubkey: Base58PubKey; handle?: string; note?: string }[];
+  banks: { pubkey: Base58PubKey; url: string }[];
+  catalog: unknown[];
+  drafts: unknown[];
+  prefs: Record<string, unknown>;
+  rev: number;
+};
+
+export function emptyUiState(pubkey: Base58PubKey): UiState {
+  return {
+    pubkey,
+    trusted: [],
+    contacts: [],
+    banks: [],
+    catalog: [],
+    drafts: [],
+    prefs: {},
+    rev: 0,
+  };
+}
+
+export async function getUiState(
+  bank: Bank,
+  pubkey: Base58PubKey,
+): Promise<UiState> {
+  const r = await bank.kv.get<UiState>(k(bank, 'ui_state', pubkey));
+  return r.value ?? emptyUiState(pubkey);
+}
+
+export async function putUiState(
+  bank: Bank,
+  state: UiState,
+  expectedRev?: number,
+): Promise<number> {
+  const key = k(bank, 'ui_state', state.pubkey);
+  const current = await bank.kv.get<UiState>(key);
+  if (expectedRev !== undefined && current.value?.rev !== expectedRev) {
+    throw new Error('stale revision');
+  }
+  const next = { ...state, rev: (current.value?.rev ?? 0) + 1 };
+  const ok = await bank.kv
+    .atomic()
+    .check(current)
+    .set(key, next)
+    .commit();
+  if (!ok.ok) throw new Error('ui state conflict');
+  return next.rev;
+}
+
+// --- UI keystore / handle -------------------------------------------------
+
+export type KeystoreBlob = {
+  ciphertext: string;
+  nonce: string;
+  salt: string;
+  kdf: Record<string, unknown>;
+  aead?: string;
+  kit_issued?: boolean;
+};
+
+export async function registerHandle(
+  bank: Bank,
+  handle: string,
+  pubkey: Base58PubKey,
+  keystore: KeystoreBlob,
+): Promise<void> {
+  await bank.kv.set(k(bank, 'handle', handle), pubkey);
+  await bank.kv.set(k(bank, 'handle_by_pubkey', pubkey), handle);
+  await bank.kv.set(k(bank, 'keystore', pubkey), keystore);
+}
+
+export async function getHandleInfo(
+  bank: Bank,
+  handle: string,
+): Promise<{ available: true } | { available: false; pubkey: Base58PubKey }> {
+  const r = await bank.kv.get<Base58PubKey>(k(bank, 'handle', handle));
+  if (r.value) return { available: false, pubkey: r.value };
+  return { available: true };
+}
+
+export async function getKeystore(
+  bank: Bank,
+  handle: string,
+): Promise<{ pubkey: Base58PubKey; keystore: KeystoreBlob } | null> {
+  const r = await bank.kv.get<Base58PubKey>(k(bank, 'handle', handle));
+  if (!r.value) return null;
+  const kstore = await bank.kv.get<KeystoreBlob>(k(bank, 'keystore', r.value));
+  if (!kstore.value) return null;
+  return { pubkey: r.value, keystore: kstore.value };
+}
+
+export async function setKeystore(
+  bank: Bank,
+  pubkey: Base58PubKey,
+  keystore: KeystoreBlob,
+): Promise<void> {
+  await bank.kv.set(k(bank, 'keystore', pubkey), keystore);
+}
+
+export async function getHandleByPubkey(
+  bank: Bank,
+  pubkey: Base58PubKey,
+): Promise<string | null> {
+  const r = await bank.kv.get<string>(k(bank, 'handle_by_pubkey', pubkey));
+  return r.value;
+}
+
+// --- peer settle signatures (foreign lead-bank settles we observed) -------
+
+export async function storePeerSettleSig(
+  bank: Bank,
+  sig: Signature,
+): Promise<Base58SHA256> {
+  const h = await storeDoc(bank, sig);
+  await bank.kv.set(k(bank, 'peer_settle', sig.pubkey, h), { at: sig.ulid });
+  return h;
+}
+
+export async function listPeerSettleSigs(
+  bank: Bank,
+  signerPubkey: Base58PubKey,
+): Promise<Signature[]> {
+  const iter = bank.kv.list<{ at: string }>({
+    prefix: k(bank, 'peer_settle', signerPubkey),
+  });
+  const out: Signature[] = [];
+  for await (const entry of iter) {
+    const h = entry.key[entry.key.length - 1] as string;
+    const s = await getDoc<unknown>(bank, h);
+    if (s) out.push(s as Signature);
+  }
+  return out.sort((a, b) => b.ulid.localeCompare(a.ulid));
+}
+
+// --- active deal enumeration ----------------------------------------------
+
+export async function listActiveDeals(bank: Bank): Promise<ULID[]> {
+  const iter = bank.kv.list<boolean>({ prefix: k(bank, 'deal_record') });
+  const ids = new Set<string>();
+  for await (const entry of iter) {
+    const dealId = entry.key[2] as string;
+    ids.add(dealId);
+  }
+  return [...ids];
+}
+
+// --- deal propose idempotency ---------------------------------------------
+
+export async function markProposedDeal(
+  bank: Bank,
+  dealId: ULID,
+): Promise<boolean> {
+  const key = k(bank, 'proposed_deal', dealId);
+  const r = await bank.kv.get(key);
+  if (r.value) return false;
+  const ok = await bank.kv.atomic().check(r).set(key, true).commit();
+  return ok.ok === true;
+}

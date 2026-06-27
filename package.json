@@ -5,12 +5,12 @@
   "license": "MIT",
   "type": "module",
   "workspaces": [
-    "old/packages/*",
-    "old/apps/*"
+    "packages/*",
+    "apps/web"
   ],
   "scripts": {
-    "test": "bun --filter '@barter.game/protocol' test",
-    "test:deno": "deno test --allow-read --allow-write --allow-env --allow-net",
+    "test": "bun --filter './packages/protocol' test",
+    "test:deno": "cd packages/protocol && bun run test:deno",
     "test:all": "bun run test && bun run test:deno",
     "build": "bun --filter '*' build",
     "typecheck": "bun --filter '*' typecheck",

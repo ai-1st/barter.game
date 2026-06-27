@@ -4,21 +4,23 @@
     "lib": ["deno.ns", "deno.unstable", "deno.window", "ES2022", "DOM"]
   },
   "unstable": ["kv"],
+  "nodeModulesDir": "auto",
   "imports": {
-    "@noble/ed25519": "https://esm.sh/@noble/ed25519@3.1.0",
-    "@noble/hashes/sha2.js": "https://esm.sh/@noble/hashes@2.2.0/sha2.js",
-    "@scure/base": "https://esm.sh/@scure/base@2.2.0",
-    "ulid": "https://esm.sh/ulid@2.3.0"
+    "@barter.game/protocol": "./packages/protocol/src/index.ts",
+    "@noble/ed25519": "npm:@noble/ed25519@^3.1.0",
+    "@noble/hashes/": "npm:/@noble/hashes@^2.2.0/",
+    "@scure/base": "npm:@scure/base@^2.2.0",
+    "ulid": "npm:ulid@^2.3.0"
   },
   "exclude": [
     "node_modules",
-    "dist",
-    "old/**/node_modules"
+    "dist"
   ],
   "test": {
     "include": [
-      "old/packages/**/test-deno/*.deno-test.ts",
-      "old/apps/bank/test-deno/*.deno-test.ts"
+      "packages/protocol/test-deno/*.deno-test.ts",
+      "apps/bank/**/*.test.ts",
+      "apps/bank/**/*.deno-test.ts"
     ]
   },
   "deploy": {
@@ -26,6 +28,18 @@
     "app": "barter-game-banks"
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
