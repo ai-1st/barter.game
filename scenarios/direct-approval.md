@@ -1,12 +1,12 @@
-# Scenario: Bilateral Swap via Matchmaker
+# Scenario: Bilateral Swap via Coordinator
 
-Alice and Bob swap vouchers. Alice gives 1 Avoucher (issued by Abank) and receives 1 Bvoucher (issued by Bbank). Bob gives 1 Bvoucher and receives 1 Avoucher. A matchmaker discovers their public Offers and asks each bank to create the connecting records.
+Alice and Bob swap vouchers. Alice gives 1 Avoucher (issued by Abank) and receives 1 Bvoucher (issued by Bbank). Bob gives 1 Bvoucher and receives 1 Avoucher. A Coordinator discovers their public Offers, reads the underlying Orders, and asks each bank to create the connecting records.
 
 ## Setup
 
 - Alice: user keypair `A.pub`.
 - Bob: user keypair `B.pub`.
-- Matchmaker: user keypair `M.pub`.
+- Coordinator: user keypair `M.pub`.
 - Abank: bank keypair `Abank.pub`, issues Avoucher.
 - Bbank: bank keypair `Bbank.pub`, issues Bvoucher.
 - Alice and Bob already have Accounts at both banks for the vouchers they will receive.
@@ -52,7 +52,7 @@ Alice signs the Order and submits it to **both** Abank and Bbank via `submit_doc
   "pubkey": A.pub, "to": Abank.pub }
 ```
 
-Abank derives and publishes an Offer from Alice's Order for the Avoucher side. Bbank derives and publishes an Offer for the Bvoucher side.
+Abank derives and publishes a discovery Offer for the Avoucher (debit) side of Alice's Order; Bbank derives one for the Bvoucher (credit) side. Each Offer's `order` field carries Alice's single canonical Order hash. The Order itself stays bound at both banks, addressable by that hash.
 
 ### Bob's Order
 
@@ -93,22 +93,20 @@ Bob signs and submits the Order to both banks via `submit_docs`, with Offer publ
   "pubkey": B.pub, "to": Abank.pub }
 ```
 
-Abank derives a buy-Avoucher Offer; Bbank derives a sell-Bvoucher Offer.
+Abank derives a buy-Avoucher Offer (Bob's credit side); Bbank derives a sell-Bvoucher Offer (Bob's debit side). Both point back to Bob's canonical Order hash.
 
-## Phase 1 — Matchmaker discovers Offers
+## Phase 1 — Coordinator discovers Offers and resolves Orders
 
-The matchmaker polls `list_offers` (or uses an off-band offer stream) at both banks. Subscriptions to Offer streams are optional and not required for settlement.
+The Coordinator polls `list_offers` (or uses an off-band offer stream) at both banks. **Offers are a discovery surface only** — for each one the Coordinator reads the `order` field to obtain the canonical holder **Order hash**. It never passes an Offer hash to `create_records`; it passes Order hashes.
 
-The matchmaker sees:
+- At Abank: Alice's sell-Avoucher Offer → **Alice's Order hash**; Bob's buy-Avoucher Offer → **Bob's Order hash**.
+- At Bbank: Bob's sell-Bvoucher Offer → **Bob's Order hash**; Alice's buy-Bvoucher Offer → **Alice's Order hash**.
 
-- At Abank: Alice's sell-Avoucher Offer and Bob's buy-Avoucher Offer.
-- At Bbank: Bob's sell-Bvoucher Offer and Alice's buy-Bvoucher Offer.
+Each Order has one canonical hash that resolves identically at every bank its sides touch.
 
-## Phase 2 — Matchmaker shares Address docs
+## Phase 2 — Coordinator shares Address docs
 
-Before Abank and Bbank can call each other directly, each must have the
-other's signed `Address` doc. The matchmaker fetches each bank's Address and
-submits it to the other bank via `submit_docs`:
+Before Abank and Bbank can call each other directly, each must have the other's signed `Address` doc. The Coordinator fetches each bank's Address and submits it to the other bank via `submit_docs`:
 
 ```json
 // Fetch Bbank's Address
@@ -124,114 +122,102 @@ submits it to the other bank via `submit_docs`:
 
 Then symmetrically for Abank's Address to Bbank.
 
-## Phase 3 — Matchmaker creates records
+## Phase 3 — Coordinator creates records
 
-The matchmaker picks a `deal_id` ULID shared across all banks and calls `create_records` at **both** banks with the same nested Offer objects:
+The Coordinator picks a `deal_id` ULID shared across both banks. It makes one `create_records` call per bank, naming the `giver` Order (whose `debit` side is this bank's voucher) and the `receiver` Order (whose `credit` side is this bank's voucher), the `amount` of this bank's voucher moved giver → receiver, and the `counter_amount` of the counterparty voucher used for the two-sided rate check. The bank seals `deal_id` and the Coordinator's pubkey into each `RecordDetails`.
 
-- `offer1` = Alice's Offer (debit Avoucher `1`, credit Bvoucher `1`).
-- `offer2` = Bob's Offer (debit Bvoucher `1`, credit Avoucher `1`).
+### At Abank (Avoucher issuer)
+
+Alice's Order debits Avoucher (`giver`); Bob's Order credits Avoucher (`receiver`):
 
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": {
-      "hash": <alice-cross-voucher-offer-hash>,
-      "debit_amount": 1,
-      "credit_amount": 1
-    },
-    "offer2": {
-      "hash": <bob-cross-voucher-offer-hash>,
-      "debit_amount": 1,
-      "credit_amount": 1
-    },
+    "giver": <alice-order-hash>,
+    "receiver": <bob-order-hash>,
+    "amount": 1,
+    "counter_amount": 1,
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Abank.pub }
 ```
 
-Abank sees that Alice's Offer debits Avoucher and Bob's Offer credits Avoucher. It uses `offer1.debit_amount` and `offer2.credit_amount` to create the Avoucher record pair:
+`amount = 1` Avoucher moves Alice → Bob; `counter_amount = 1` is the Bvoucher moving the other way (at Bbank). Abank checks `1 / 1 <= alice.rate` and `1 / 1 <= bob.rate`, plus each side's `min`/`max`, then mints the Avoucher pair:
 
-- Debit record: Alice's Avoucher account, amount `1`.
-- Credit record: Bob's Avoucher account, amount `1`.
+- Debit record: Alice's Avoucher account, amount `1`, `order` = Alice's Order hash.
+- Credit record: Bob's Avoucher account, amount `1`, `order` = Bob's Order hash.
 
-Both records are tagged with `deal_id` and `pair`. Abank returns the record bodies.
+Both records are paired by a fresh `pair` ULID, tagged with `deal_id`, and sealed with `details.coordinator = M.pub`. Abank returns the record bodies.
 
-The matchmaker makes the same call at Bbank:
+### At Bbank (Bvoucher issuer)
+
+Bob's Order debits Bvoucher (`giver`); Alice's Order credits Bvoucher (`receiver`):
 
 ```json
 { "method": "create_records",
   "params": {
-    "offer1": {
-      "hash": <alice-cross-voucher-offer-hash>,
-      "debit_amount": 1,
-      "credit_amount": 1
-    },
-    "offer2": {
-      "hash": <bob-cross-voucher-offer-hash>,
-      "debit_amount": 1,
-      "credit_amount": 1
-    },
+    "giver": <bob-order-hash>,
+    "receiver": <alice-order-hash>,
+    "amount": 1,
+    "counter_amount": 1,
     "deal_id": <deal-id>
   },
   "pubkey": M.pub, "to": Bbank.pub }
 ```
 
-Bbank uses `offer1.credit_amount` and `offer2.debit_amount` to create the Bvoucher record pair:
+Bbank mints the Bvoucher pair:
 
-- Debit record: Bob's Bvoucher account, amount `1`.
-- Credit record: Alice's Bvoucher account, amount `1`.
+- Debit record: Bob's Bvoucher account, amount `1`, `order` = Bob's Order hash.
+- Credit record: Alice's Bvoucher account, amount `1`, `order` = Alice's Order hash.
 
-## Phase 4 — Matchmaker sends Confirm
+## Phase 4 — Coordinator sends per-(Order, bank) Mandates
 
-The matchmaker builds a per-bank `Confirm` listing the records that bank created:
+A Mandate is scoped **per (Order, bank)**. Each Order is two-sided across the two banks, so each gets a Mandate at the bank holding its debit record and another at the bank holding its credit record — **four Mandates** total.
 
 ```ts
-// Confirm to Abank
-{
-  type: "confirm",
-  pubkey: M.pub,
-  ulid: <new>,
-  deal_id: <deal-id>,
-  bank: Abank.pub,
-  records: [<alice-avoucher-debit-hash>, <bob-avoucher-credit-hash>]
-}
+// Alice's Order @ Abank — her Avoucher debit
+{ type: "mandate", pubkey: M.pub, ulid: <new>, deal_id: <deal-id>,
+  order: <alice-order-hash>, bank: Abank.pub,
+  records: [<alice-avoucher-debit-hash>] }
 
-// Confirm to Bbank
-{
-  type: "confirm",
-  pubkey: M.pub,
-  ulid: <new>,
-  deal_id: <deal-id>,
-  bank: Bbank.pub,
-  records: [<bob-bvoucher-debit-hash>, <alice-bvoucher-credit-hash>]
-}
+// Bob's Order @ Abank — his Avoucher credit
+{ type: "mandate", pubkey: M.pub, ulid: <new>, deal_id: <deal-id>,
+  order: <bob-order-hash>, bank: Abank.pub,
+  records: [<bob-avoucher-credit-hash>] }
+
+// Bob's Order @ Bbank — his Bvoucher debit
+{ type: "mandate", pubkey: M.pub, ulid: <new>, deal_id: <deal-id>,
+  order: <bob-order-hash>, bank: Bbank.pub,
+  records: [<bob-bvoucher-debit-hash>] }
+
+// Alice's Order @ Bbank — her Bvoucher credit
+{ type: "mandate", pubkey: M.pub, ulid: <new>, deal_id: <deal-id>,
+  order: <alice-order-hash>, bank: Bbank.pub,
+  records: [<alice-bvoucher-credit-hash>] }
 ```
 
-The matchmaker signs each Confirm and sends it to the corresponding bank:
+The Coordinator signs each Mandate and submits it with the record bodies it lists:
 
 ```json
-{ "method": "submit_confirm",
-  "params": { "confirm": <abank-confirm> },
+{ "method": "submit_mandate",
+  "params": {
+    "mandate": <alice-order-abank-mandate>,
+    "records": [<alice-avoucher-debit-record>]
+  },
   "pubkey": M.pub, "to": Abank.pub }
-
-{ "method": "submit_confirm",
-  "params": { "confirm": <bbank-confirm> },
-  "pubkey": M.pub, "to": Bbank.pub }
 ```
+
+For each Mandate, the bank verifies the Coordinator's signature, that `mandate.bank` is its own pubkey, that every listed record was created for this `deal_id` with `details.coordinator == M.pub` and `Record.order == mandate.order`, resolves `mandate.order` to the stored Order, and rejects a duplicate Mandate for the same `(deal_id, order)`.
 
 ## Phase 5 — Banks advance
 
-Abank now has:
+Each owned record advances once its `(deal, order)` has a Mandate listing it, signed by the bound coordinator, and the Order is bound.
 
-- A `Confirm` for this deal.
-- Alice's and Bob's Orders (submitted earlier).
-- Records matching both Orders.
+Because Alice's Order is `lead=true`, Abank issues `ready` on both its records, acquires the hold on Alice's Avoucher debit account, and issues `hold` Signatures.
 
-Because Alice's Order is `lead=true`, Abank issues `ready` on both records, acquires the hold on Alice's debit account, and issues `hold` Signatures.
+Bbank also has its two Mandates and both Orders. Bob's Order includes `credit.bank = Abank.pub`, so Bbank looks up Abank's `Address` doc and calls Abank's `notify_signatures` endpoint directly. Because Bob's Order is `lead=false`, Bbank waits until it has verified Abank's `hold` Signatures. Once seen, Bbank issues `ready`, holds Bob's Bvoucher debit account, and issues `hold` Signatures.
 
-Bbank also has its `Confirm` and Orders. Bob's Order includes `credit.bank = Abank.pub`, so Bbank looks up Abank's `Address` doc and calls Abank's `notify_signatures` endpoint directly. Because Bob's Order is `lead=false`, Bbank waits until it has verified Abank's `hold` Signatures. Once seen, Bbank issues `ready`, holds Bob's debit account, and issues `hold` Signatures.
-
-Abank learns Bbank's URL from `debit.bank = Bbank.pub` on Alice's Order (or from Bob's Order) and calls Bbank's `notify_signatures` directly. Abank observes Bbank's `hold` Signatures and settles first, applying the Avoucher deltas:
+Abank learns Bbank's URL from `credit.bank = Bbank.pub` on Alice's Order and calls Bbank's `notify_signatures` directly. Abank observes Bbank's `hold` Signatures and settles first, applying the Avoucher deltas:
 
 - Alice: `-1` Avoucher.
 - Bob: `+1` Avoucher.
@@ -248,5 +234,6 @@ Bbank observes Abank's `settle` Signatures, cites them in `Signature.seen`, and 
 - Alice owns `+1` Bvoucher at Bbank and owes `-1` Avoucher at Abank.
 - Bob owns `+1` Avoucher at Abank and owes `-1` Bvoucher at Bbank.
 - Alice authorized via her signed Order; Bob authorized via his signed Order.
-- The matchmaker never saw Alice's or Bob's account hashes; it only handled Offer hashes and record bodies.
-- Abank settled first; Bbank settled after verifying Abank's settle signature.
+- The Coordinator never saw Alice's or Bob's account hashes — only the Order hashes read from the discovery Offers and each bank's own record bodies.
+- Knowing the `deal_id` was not enough to act: each record seals `details.coordinator = M.pub`, so only Mandates signed by `M.pub` could advance them.
+- Abank settled first; Bbank settled after verifying Abank's `settle` signature.
