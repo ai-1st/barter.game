@@ -166,19 +166,20 @@ const bobInvoice = createInvoice(bob, bobAccountHash, voucherHash, 50);
 const bobInvoiceHash = hashDoc(bobInvoice);
 await rpcCall(bob, 'submit_docs', { docs: [bobInvoice], publish_offers: [bobInvoiceHash] });
 
-// Bob acts as matchmaker: pair Alice's cheque offer with Bob's invoice offer.
+// Bob acts as coordinator: discover the two offers and read the canonical
+// Order hash from each offer's `order` field.
 const aliceOffers = (await rpcCall(alice, 'list_offers', { voucher_hash: voucherHash, intention: 'sell' })) as Array<Record<string, unknown>>;
 const bobOffers = (await rpcCall(bob, 'list_offers', { voucher_hash: voucherHash, intention: 'buy' })) as Array<Record<string, unknown>>;
 const chequeOffer = aliceOffers.find((o) => (o as { debit?: { voucher: string } }).debit?.voucher === voucherHash);
 const invoiceOffer = bobOffers.find((o) => (o as { credit?: { voucher: string } }).credit?.voucher === voucherHash);
 if (!chequeOffer || !invoiceOffer) throw new Error('offers not found');
-const chequeOfferHash = hashDoc(chequeOffer);
-const invoiceOfferHash = hashDoc(invoiceOffer);
-console.log('Match offer', chequeOfferHash.slice(0, 16), 'with', invoiceOfferHash.slice(0, 16));
+const chequeOrderHash = (chequeOffer as { order: string }).order;
+const invoiceOrderHash = (invoiceOffer as { order: string }).order;
+console.log('Match order', chequeOrderHash.slice(0, 16), 'with', invoiceOrderHash.slice(0, 16));
 
 const propose = await uiAuth(bob, 'POST', '/propose_deal', {
-  offer1: { hash: chequeOfferHash, debit_amount: 50, credit_amount: 50 },
-  offer2: { hash: invoiceOfferHash, debit_amount: 50, credit_amount: 50 },
+  offer1: { hash: chequeOrderHash, debit_amount: 50, credit_amount: 50 },
+  offer2: { hash: invoiceOrderHash, debit_amount: 50, credit_amount: 50 },
   banks: [{ pubkey: bankPubkey, url: BANK_URL }],
 });
 console.log('Proposed deal', propose.deal_id, propose.state);

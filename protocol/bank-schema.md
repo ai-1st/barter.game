@@ -3,7 +3,7 @@
 This file defines the banking entities and the ledger invariants that operate on them:
 
 - `Voucher`, `Account`
-- `Record`, `Order`, `Offer`, `Confirm`
+- `Record`, `Order`, `Offer`, `Mandate`
 - `Subscription` (optional)
 - Per-record, per-bank state machine
 - Concurrency and balance semantics
@@ -18,7 +18,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "confirm" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -70,17 +70,24 @@ One half of a paired credit/debit entry in the double-entry ledger.
 Record: BaseDoc & {
   type: "credit" | "debit";
   amount: number;         // positive
-  order: Base58SHA256;    // hash of the Order/Offer doc that authorizes this record
+  order: Base58SHA256;    // hash of the Order doc that authorizes this record
   details: Base58SHA256;  // hash of the bank-internal record details
 }
 
 RecordDetails {
   pair: ULID;             // ULID of the peer record (set by the bank at creation)
-  deal_id: ULID;          // deal-wide identifier supplied by the matchmaker
+  deal_id: ULID;          // deal-wide identifier supplied by the coordinator
+  coordinator: Base58PubKey; // pubkey of the coordinator that called create_records
   holder: Base58PubKey;   // pubkey of the holder
   account: Base58SHA256;  // hash of holder's Account doc
 }
 ```
+
+`deal_id` and `coordinator` are sealed inside `RecordDetails`, so only the
+`details` **hash** appears on the public `Record`. A record can therefore only
+be advanced by a `Mandate` (see §1.6) signed by the same `coordinator` pubkey
+the bank sealed in at creation: knowing a `deal_id` is not enough to act on the
+records, because the actor must also hold the coordinator's private key.
 
 A **transfer** is one debit + one credit of the same Voucher for the same `amount`: value leaves the debited holder's account and lands in the credited holder's account, both at that Voucher's issuer bank. `pair` links the two halves by ULID. Transfers **chain** when the holder credited by one transfer is the holder debited by another — that holder is passing value along (`A → B → C`). The chain may be a line, a ring, or a general graph, spanning one bank or many.
 
@@ -139,13 +146,13 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 
 **Order-Record matching.** A Record `R` matches an Order `O` when all of the following hold:
 
-1. `R.order` resolves to a valid Order/Offer `O`.
+1. `R.order` resolves to the holder Order `O` (a valid, stored, signed Order).
 2. `R` is a `debit` record and `O.debit` is present, OR `R` is a `credit` record and `O.credit` is present.
 3. `R.details.holder` equals `O.pubkey`.
 4. If `R` is a debit, `R.details.account` equals `O.debit.account`.
 5. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. If `O` is two-sided, the bank waits until all records of the deal matched to `O` are known, then verifies `total_debit / total_credit <= O.rate` (within the bank's rounding policy).
+7. If `O` is two-sided, the bank verifies `debit_amount / credit_amount <= O.rate` (within the bank's rounding policy). When both sides of `O` are vouchers this bank issues, both amounts are local records. When `O` spans two banks, this bank holds only one side; the other side's amount is the `counter_amount` the coordinator supplied at `create_records`. The rate is therefore a **coordinator-asserted** check across banks; the holder's per-side `min`/`max` (enforced by whichever bank owns that side, since the holder submitted `O` to both) is the cryptographically hard guarantee.
 8. The cumulative debit amount across all Records already matched to `O` does not exceed `O.debit_order_limit` (if set).
 9. The cumulative credit amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
 10. The resulting balance of the debit account does not fall below `O.debit_account_limit` (if set).
@@ -185,37 +192,40 @@ Offer: BaseDoc & {
 }
 ```
 
-Banks MAY publish Offers through their public API. Matchmakers discover compatible Offers and ask banks to create record pairs by referencing the Offer hashes.
+Banks MAY publish Offers through their public API. **Offers are a discovery-only surface:** a coordinator scans Offers (`list_offers`), reads each Offer's `order` field to obtain the underlying holder **Order hash**, and references *that Order hash* — never the Offer hash — when calling `create_records` (see `bank-rpc.md`). The Offer's `rate`, `min`/`max`, and `lead` are advisory copies of the Order's terms; the bank validates against the resolved Order, which it already holds because the holder submitted it via `submit_docs`.
 
-A Record's `order` MAY reference either an `order` hash or an `offer` hash as its authorization source; the bank resolves the underlying Order when validating the record. The `lead` flag on the resolved Order/Offer tells the bank whether its records are in the lead set for the deal.
+A Record's `order` always references the authorizing **Order** hash (one holder-signed doc with a single canonical hash, resolvable identically at every bank the Order touches). Offers are never an authorization source on the execute path. The `lead` flag the bank uses comes from the resolved Order.
 
 Like Orders, Offers may omit one side: an Offer with `debit` omitted is an **invoice offer**, and an Offer with `credit` omitted is a **cheque offer**.
 
 > **Invariant:** Offers are bank-issued derived documents. They are not holder signatures, but they MUST be signed by the bank's pubkey and they MUST accurately reflect the terms of the referenced Order.
 
-### 1.6 Confirm
+### 1.6 Mandate
 
-A matchmaker-signed clearance that tells one bank: "record creation for this deal is complete, and the listed records are the ones you should act on." Banks do not advance records until they receive a `Confirm` that covers them.
+A **Mandate** is the coordinator-signed **unit of work** a bank validates and executes. It tells one bank: "here are the records that satisfy this one Order at your bank — validate the Order's conditions against them and proceed." It is scoped **per (Order, bank)**: a deal produces one Mandate for each Order at each bank that holds records for that Order. Banks do not advance records until they receive a Mandate that covers them.
 
 ```ts
-Confirm: BaseDoc & {
-  type: "confirm";
-  deal_id: ULID;            // deal-wide id supplied by the matchmaker
-  bank: Base58PubKey;       // the bank this Confirm is addressed to
-  records: Base58SHA256[];  // all record hashes this bank created for the deal
+Mandate: BaseDoc & {
+  type: "mandate";
+  deal_id: ULID;            // deal-wide id supplied by the coordinator (secret; sealed in RecordDetails)
+  order: Base58SHA256;      // the Order whose conditions these records satisfy
+  bank: Base58PubKey;       // the bank this Mandate is addressed to
+  records: Base58SHA256[];  // this bank's records (for `order`, in this deal) the bank should act on
 }
 ```
 
-`Confirm.pubkey` is the matchmaker. `Confirm.sig` is the matchmaker's signature over the canonical unsigned doc.
+`Mandate.pubkey` is the coordinator; `Mandate.sig` is the coordinator's signature over the canonical unsigned doc. The coordinator submits the signed Mandate **together with the Record bodies** it lists (see `bank-rpc.md` §2.1), so the request is self-contained.
 
-When a bank receives a `Confirm`:
+When a bank receives a Mandate:
 
-1. Verify the matchmaker's signature.
-2. Verify `Confirm.bank` equals the bank's own pubkey.
-3. Verify that every Record it created for `Confirm.deal_id` appears in `Confirm.records`.
-4. Only then may the bank advance those records out of `created`, and only once valid Orders are also bound.
+1. Verify the coordinator's signature.
+2. Verify `Mandate.bank` equals the bank's own pubkey.
+3. Resolve `Mandate.order` to a stored holder Order, and verify every hash in `Mandate.records` is a record this bank created for `deal_id` whose `details.coordinator` equals `Mandate.pubkey` (the anti-hijack binding — a Mandate signed by anyone else is rejected) and whose `Record.order` is `Mandate.order`.
+4. Validate the Order's conditions (rate, `min`/`max`, cumulative and account limits, balance) against the listed records, using the counterparty amount supplied at `create_records` for the cross-bank rate check (see §1.4).
+5. Reject a **duplicate** Mandate for the same `(deal_id, order)` — the unit of work is accepted at most once.
+6. Only then may the bank advance those records out of `created`.
 
-The matchmaker sends a different `Confirm` to each participating bank. A bank never needs the full chain's records — only its own slice.
+The coordinator sends a Mandate per Order per bank. A bank never sees another bank's record bodies — only its own slice — preserving the visibility boundary (`README.md` §2.3).
 
 ### 1.7 Subscription
 
@@ -237,19 +247,19 @@ When the bank issues or receives a Signature that matches a Subscription, it POS
 
 ## 2. State machine (per-record, per-bank)
 
-Each bank runs its own state machine over each record it owns. Records are created by the matchmaker via `create_records`; they stay in `created` until both (a) valid Orders are bound and (b) a per-bank `Confirm` arrives. From `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_docs` binding an Order, a verified signature arriving via `notify_signatures`).
+Each bank runs its own state machine over each record it owns. Records are created by the coordinator via `create_records`; they stay in `created` until both (a) valid Orders are bound and (b) a `Mandate` for the record's Order arrives. From `approved` onward the bank advances **itself**, re-evaluating on every event (a `submit_docs` binding an Order, a verified signature arriving via `notify_signatures`).
 
 ```
    per-record state (per bank)
 
    created ── create_records ──▶ all records minted
 
-   submit_docs + submit_confirm (by matchmaker/holders → bank)
+   submit_docs + submit_mandate (by coordinator/holders → bank)
         │
         ▼
    ┌──────────┐
    │ approved │  every owned Record has a valid Order bound,
-   └────┬─────┘  the per-bank Confirm is received, and records are `ready`
+   └────┬─────┘  the Mandate for its Order is received, and records are `ready`
         │        (if `lead` or no predecessors, advance engine runs immediately)
         │ advance engine
         │ all records ready, no lock conflict
@@ -268,7 +278,7 @@ Each bank runs its own state machine over each record it owns. Records are creat
    Any pre-settled state can transition to rejected via a bank-issued `reject` signature on the record.
 ```
 
-The matchmaker is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders / published Offers). The matchmaker then sends a `Confirm` to each bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The matchmaker **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
+The coordinator is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders). The coordinator then sends a `Mandate` per Order per bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The coordinator **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
 
 > **Invariant:** These states, their transitions, and their preconditions are protocol. The storage representation and the event loop that drives self-advancement are implementation details — but a bank MUST NOT settle without its lead/follow precondition met, and MUST NOT apply a record's delta twice.
 

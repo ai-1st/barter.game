@@ -21,61 +21,60 @@ All RPCs are `POST` to `<bank-url>/rpc` with the envelope shape defined in [`bas
 
 The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to subscribers.
 
-The API surface below is intentionally small. Wave 1 (ready) is driven by matchmaker calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and matchmaker `submit_confirm`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied. Banks learn each other's URLs from the Address registry and call each other directly; subscriptions are optional and not required for settlement.
+The API surface below is intentionally small. Wave 1 (ready) is driven by coordinator calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and coordinator `submit_mandate`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied. Banks learn each other's URLs from the Address registry and call each other directly; subscriptions are optional and not required for settlement.
 
 ### 2.1 Doc submission
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `submit_docs(docs, publish_offers?)` | any → bank | Validate and store each BaseDoc in `docs`. The bank routes by `type`: Vouchers must have `pubkey == bank`; Accounts must reference a known Voucher and be signed by the holder; Orders must reference known Accounts signed by the same holder and have a valid, positive `rate`; Addresses update the address directory if newer by ULID. Optionally derive and publish Offers for any Order hashes listed in `publish_offers`. Return the hashes of stored docs and any derived Offers. |
-| `submit_confirm(confirm)` | matchmaker → each participating bank | Verify the matchmaker's signature, that `confirm.bank` is this bank, and that every Record this bank created for `confirm.deal_id` is listed. Once verified, the bank may advance those records out of `created` as soon as valid Orders are bound. |
+| `submit_docs(docs, publish_offers?)` | any → bank | Validate and store each BaseDoc in `docs`. The bank routes by `type`: Vouchers must have `pubkey == bank`; Accounts must reference a known Voucher and be signed by the holder; Orders must reference known Accounts signed by the same holder and have a valid, positive `rate`; Addresses update the address directory if newer by ULID. Optionally derive and publish discovery Offers for any Order hashes listed in `publish_offers`. Return the hashes of stored docs and any derived Offers. |
+| `submit_mandate(mandate, records)` | coordinator → each participating bank | Validate and execute one [`Mandate`](bank-schema.md#16-mandate) as a unit of work. The coordinator passes the signed `mandate` **together with the `records` bodies** it lists. The bank verifies the coordinator signature, that `mandate.bank` is this bank, that each listed record is one it created for `mandate.deal_id` with `details.coordinator == mandate.pubkey` and `Record.order == mandate.order`, resolves `mandate.order` to a stored Order, validates that Order's conditions against the records (rate via the `counter_amount` from `create_records`, plus `min`/`max` and limits), and rejects a duplicate Mandate for the same `(deal_id, order)`. Once validated, the bank advances those records out of `created`. |
 
 ### 2.2 Record creation
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `create_records({ offer1, offer2, deal_id })` | matchmaker → each bank | Resolve the two Offers; mint the single debit/credit record pair this bank is responsible for; tag it with `deal_id`; return the record bodies. Records are created as `created` records and stay there until `submit_confirm` and matching Orders arrive. |
+| `create_records({ giver, receiver, amount, counter_amount, deal_id })` | coordinator → each bank | Mint the single debit/credit record pair that moves **this bank's voucher** from the `giver` to the `receiver`; seal `deal_id` and the coordinator pubkey into each `RecordDetails`; return the record bodies. Records are stored as `created` and stay there until a matching [`Mandate`](bank-schema.md#16-mandate) and the authorizing Orders arrive. |
 
 ```ts
 create_records(params: {
-  offer1: { hash, debit_amount, credit_amount };
-  offer2: { hash, debit_amount, credit_amount };
-  deal_id: ULID;
+  giver:          Base58SHA256;  // Order hash — the holder GIVING this bank's voucher (its `debit` side is here)
+  receiver:       Base58SHA256;  // Order hash — the holder RECEIVING this bank's voucher (its `credit` side is here)
+  amount:         number;        // units of THIS bank's voucher moved giver → receiver
+  counter_amount: number;        // units of the counterparty voucher (the giver's `credit` / receiver's `debit`), for the rate check
+  deal_id:        ULID;
 })
 ```
 
-The matchmaker passes the same `offer1` and `offer2` to every participating bank. Each bank extracts the two amounts that apply to the Voucher it issues and creates one debit/credit record pair for that Voucher. A bank MAY receive multiple `create_records` calls for the same `deal_id`; each call mints an independent record pair. The matchmaker's `Confirm` for that bank must list every record created for the deal.
+**Order hashes only.** `giver` and `receiver` are hashes of holder-signed **Order** docs — never Offers. An Order has a single canonical hash and the holder submits the same Order to every bank its sides touch, so the same hash resolves identically at every participating bank (a coordinator reads the Order hash from a discovery Offer's `order` field). Both Orders must already be stored at this bank (via `submit_docs`).
 
-Parameter mapping for a swap where Alice gives Voucher X and receives Voucher Y, while Bob gives Voucher Y and receives Voucher X:
+This bank issues exactly one voucher `V`. The call mints **one** transfer of `V`:
 
-```ts
-offer1: {
-  hash: <alice-offer-hash>,         // Alice's Offer: debit X, credit Y
-  debit_amount: 100,                // amount of X Alice gives
-  credit_amount: 90                 // amount of Y Alice receives
-}
-offer2: {
-  hash: <bob-offer-hash>,           // Bob's Offer: debit Y, credit X
-  debit_amount: 90,                 // amount of Y Bob gives
-  credit_amount: 100                // amount of X Bob receives
-}
-deal_id: <deal-id>
-```
+- a **debit** record on `giver`'s `debit.account` (giver's `debit.voucher` is `V`), and
+- a **credit** record on `receiver`'s `credit.account` (receiver's `credit.voucher` is `V`),
 
-- At the bank issuing **X**: use `offer1.debit_amount` and `offer2.credit_amount` to create the X record pair.
-- At the bank issuing **Y**: use `offer1.credit_amount` and `offer2.debit_amount` to create the Y record pair.
+both for `amount`, paired by a fresh `pair` ULID, tagged with `deal_id`, and sealed with `details.coordinator = <sender pubkey>`.
 
 The bank verifies:
 
-- Both Offers are valid and bank-signed. At least one of them was issued by this bank; the other may be foreign.
-- The local amount pair (the two amounts that apply to this bank's Voucher) are equal.
-- The matched amounts fall within each Offer's `min`/`max` constraints. For one-sided Offers the missing side is `0`.
-- Both Offers resolve to stored Orders (or the bank already has the Orders).
-- The resulting records would not violate `Voucher.limit` or any Order limit.
+- `giver` and `receiver` resolve to valid, signed, stored Orders.
+- `giver.debit.voucher == receiver.credit.voucher == V` (this bank's voucher); both `bank` fields are this bank.
+- `amount` is within `giver.debit.min/max` and `receiver.credit.min/max`.
+- **Rate** (two-sided Orders): `amount / counter_amount <= giver.rate` and `counter_amount / amount <= receiver.rate`. When the other side is also at this bank, `counter_amount` is verified against that side's records; when it is at another bank, `counter_amount` is the coordinator's assertion and the rate is enforced softly (the holder's `min`/`max`, checked by the bank that owns each side, is the hard bound — see [`bank-schema.md` §1.4](bank-schema.md)).
+- The resulting records would not violate `Voucher.limit` or any Order cumulative/account limit.
 
-The bank does **not** check `Order.rate` or `Offer.rate` at this stage. The aggregate rate across all records of the deal matched to a two-sided Order is checked before the bank issues `ready` (see `bank-schema.md`).
+The bank rejects the request if any check fails.
 
-The bank rejects the request if any of these checks fail.
+**Same-bank deals.** When this bank issues **both** vouchers in the swap, the coordinator calls `create_records` **twice** — once per voucher — with `giver` and `receiver` swapped:
+
+```ts
+// Voucher X (Alice gives, Bob gets):  amount = X units, counter_amount = Y units
+create_records({ giver: Aorder, receiver: Border, amount: 100, counter_amount: 90,  deal_id })
+// Voucher Y (Bob gives, Alice gets):  amount = Y units, counter_amount = X units
+create_records({ giver: Border, receiver: Aorder, amount: 90,  counter_amount: 100, deal_id })
+```
+
+Across two banks, the coordinator makes one call to each bank, with `giver`/`receiver` chosen so each call's `giver.debit.voucher` is that bank's voucher.
 
 > **No other caller may create records.** There is no `mint`; issuers begin trading by placing Orders that debit the issuer account.
 
@@ -130,16 +129,16 @@ The `url` field is the canonical RPC URL — the location clients should use. It
 
 ## 4. Orchestration with the doc-oriented API
 
-The matchmaker builds the deal by discovering compatible Offers and asking each bank to create the records that connect them.
+The coordinator builds the deal by discovering compatible Orders (via their discovery Offers) and asking each bank to create the records that connect them.
 
-1. **Holders publish intent.** Each holder calls `submit_docs` with their Voucher, Account, and Order docs, optionally requesting Offer publication (`publish_offers: [<order-hash>]`). The same Order is submitted to every bank that issues a Voucher on either side of it.
-2. **Matchmaker discovers Offers.** The matchmaker scans `list_offers` (or an off-band offer stream) and picks, for each bank, two Offers on opposite sides of the same Voucher that form a mutually acceptable trade.
-3. **Share Address docs.** Before banks can call each other directly, each bank must have a signed `Address` doc for every peer bank. The matchmaker fetches each bank's current Address (`get_address`) and submits it to the other participating banks via `submit_docs`. Banks also accept newer Address docs at any time.
-4. **create_records** on every participating bank with the same `offer1` / `offer2` object shape and shared `deal_id`. Each bank extracts the amounts that apply to the Voucher it issues and mints one debit/credit record pair.
-5. **submit_confirm.** The matchmaker collects the returned record bodies, builds a per-bank `Confirm` listing that bank's records, signs it, and sends it to each bank.
-6. **Banks advance.** Once a bank has both (a) the `Confirm` for this deal and (b) valid Orders bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
+1. **Holders publish intent.** Each holder calls `submit_docs` with their Voucher, Account, and Order docs, optionally requesting discovery-Offer publication (`publish_offers: [<order-hash>]`). The same Order is submitted to every bank that issues a Voucher on either side of it.
+2. **Coordinator discovers Orders.** The coordinator scans `list_offers` (or an off-band stream) for two Offers on opposite sides of the same Voucher that form a mutually acceptable trade, and reads each Offer's `order` field to obtain the two holder **Order hashes** (`giver`, `receiver`).
+3. **Share Address docs.** Before banks can call each other directly, each bank must have a signed `Address` doc for every peer bank. The coordinator fetches each bank's current Address (`get_address`) and submits it to the other participating banks via `submit_docs`. Banks also accept newer Address docs at any time.
+4. **create_records** on every participating bank, referencing the two Order hashes plus `amount` / `counter_amount` and a shared `deal_id`. Each bank mints the debit/credit record pair for the voucher it issues; for a same-bank swap the coordinator calls twice with `giver`/`receiver` swapped (see §2.2).
+5. **submit_mandate.** For each (Order, bank) the coordinator builds a `Mandate` naming that Order and listing the bank's records satisfying it, signs it, and sends it **with the record bodies** to the bank.
+6. **Banks advance.** Once a bank has both (a) a `Mandate` for an Order and (b) that Order bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
 7. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`). Subscriptions are optional and only useful for watchers or clients that want push delivery.
 
-Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Offer resolution, per-record ready, hold preconditions, settle proofs, Confirm clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
+Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Order resolution, per-record ready, hold preconditions, settle proofs, Mandate clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 
-> **Invariant:** The method names, parameter shapes, and side-effect semantics above are protocol. The exact HTTP client library, retry policy, timeout values, and how the matchmaker discovers Offers are implementation details.
+> **Invariant:** The method names, parameter shapes, and side-effect semantics above are protocol. The exact HTTP client library, retry policy, timeout values, and how the coordinator discovers Orders are implementation details.

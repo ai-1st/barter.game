@@ -18,7 +18,7 @@ import {
   validateAccount,
   validateAddress,
   validateBaseDoc,
-  validateConfirm,
+  validateMandate,
   validateOffer,
   validateOrder,
   validateRecord,
@@ -453,35 +453,41 @@ describe('validateRecord', () => {
   });
 });
 
-describe('validateConfirm', () => {
-  const confirm = {
-    type: 'confirm' as const,
+describe('validateMandate', () => {
+  const mandate = {
+    type: 'mandate' as const,
     pubkey: PUBKEY,
     ulid: ULID,
     deal_id: ULID,
+    order: HASH,
     bank: PUBKEY,
     records: [HASH],
   };
 
-  test('accepts a minimal valid confirm', () => {
-    expect(() => validateConfirm(confirm)).not.toThrow();
+  test('accepts a minimal valid mandate', () => {
+    expect(() => validateMandate(mandate)).not.toThrow();
+  });
+
+  test('rejects missing order', () => {
+    const { order: _order, ...noOrder } = mandate;
+    expect(() => validateMandate(noOrder)).toThrow(ValidationError);
   });
 
   test('rejects empty records', () => {
-    expect(() => validateConfirm({ ...confirm, records: [] })).toThrow(
+    expect(() => validateMandate({ ...mandate, records: [] })).toThrow(
       ValidationError,
     );
   });
 
   test('rejects bad deal_id', () => {
-    expect(() => validateConfirm({ ...confirm, deal_id: 'nope' })).toThrow(
+    expect(() => validateMandate({ ...mandate, deal_id: 'nope' })).toThrow(
       ValidationError,
     );
   });
 
   test('rejects non-base58 record hash', () => {
     expect(() =>
-      validateConfirm({ ...confirm, records: ['!!!'] }),
+      validateMandate({ ...mandate, records: ['!!!'] }),
     ).toThrow(ValidationError);
   });
 });

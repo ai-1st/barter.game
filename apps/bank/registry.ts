@@ -1,6 +1,6 @@
 import type { Bank } from './types.ts';
 import { submitDocs } from './handlers/submit_docs.ts';
-import { submitConfirm } from './handlers/submit_confirm.ts';
+import { submitMandate } from './handlers/submit_mandate.ts';
 import { createRecords } from './handlers/create_records.ts';
 import { notifySignatures } from './handlers/notify_signatures.ts';
 import { getRecordSignatures } from './handlers/get_record_signatures.ts';
@@ -25,7 +25,7 @@ export type Handler = (
 
 export const registry: Record<string, Handler> = {
   submit_docs: submitDocs,
-  submit_confirm: submitConfirm,
+  submit_mandate: submitMandate,
   create_records: createRecords,
   notify_signatures: notifySignatures,
   get_record_signatures: getRecordSignatures,

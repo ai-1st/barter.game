@@ -22,7 +22,7 @@ export type DocType =
   | 'signature'
   | 'order'
   | 'offer'
-  | 'confirm'
+  | 'mandate'
   | 'subscription'
   | 'address';
 
@@ -54,6 +54,7 @@ export type Account = BaseDoc & {
 export type RecordDetails = {
   pair: ULID;
   deal_id: ULID;
+  coordinator: Base58PubKey;
   holder: Base58PubKey;
   account: Base58SHA256;
 };
@@ -104,9 +105,10 @@ export type Offer = BaseDoc & {
   lead: boolean;
 };
 
-export type Confirm = BaseDoc & {
-  type: 'confirm';
+export type Mandate = BaseDoc & {
+  type: 'mandate';
   deal_id: ULID;
+  order: Base58SHA256;
   bank: Base58PubKey;
   records: Base58SHA256[];
 };
@@ -138,7 +140,7 @@ export type AnyDoc =
   | BankRecord
   | Order
   | Offer
-  | Confirm
+  | Mandate
   | Signature
   | Subscription
   | Address;
@@ -531,17 +533,18 @@ export function validateRecord(d: unknown): BankRecord {
   return d as BankRecord;
 }
 
-export function validateConfirm(d: unknown): Confirm {
+export function validateMandate(d: unknown): Mandate {
   const b = validateBaseDoc(d) as Record<string, unknown>;
-  if (b.type !== 'confirm') throw new ValidationError('type must be confirm');
-  requireFields(b, ['deal_id', 'bank', 'records']);
+  if (b.type !== 'mandate') throw new ValidationError('type must be mandate');
+  requireFields(b, ['deal_id', 'order', 'bank', 'records']);
   assertUlid(b.deal_id, 'deal_id');
+  assertBase58(b.order, 'order');
   assertBase58(b.bank, 'bank');
   if (!Array.isArray(b.records) || b.records.length === 0) {
     throw new ValidationError('records must be a non-empty array');
   }
   for (const r of b.records) assertBase58(r, 'records[]');
-  return d as Confirm;
+  return d as Mandate;
 }
 
 export function validateSignature(d: unknown): Signature {

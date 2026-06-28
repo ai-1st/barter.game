@@ -55,16 +55,16 @@ Banks are open by default. The v1 reference posture:
 
 ---
 
-## 2. Settlement model — matchmaker-created records, Order authorization, lead/follow
+## 2. Settlement model — coordinator-created records, Order authorization, lead/follow
 
-A deal executes in three waves: **ready → hold → settle**. Records are created by a matchmaker, authorized by holder Orders, and cleared by a matchmaker `Confirm`. Banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
+A deal executes in three waves: **ready → hold → settle**. Records are created by a coordinator, authorized by holder Orders, and cleared by a coordinator `Mandate` (one per Order per bank). Banks self-advance as signatures arrive, and there is no client `hold` or `settle` call.
 
 ### 2.0 Three-wave execution model: ready → hold → settle
 
 **1. Ready** — A bank issues a record-level `ready` signature on each of its own Records when it has:
 
 - a valid `Order` bound to the record, **and**
-- a per-bank `Confirm` from the matchmaker for this deal, **and**
+- a `Mandate` from the coordinator for that record's Order, **and**
 - sufficient coverage on the debit account.
 
 Authorization is independent per holder: Alice can submit her Order without waiting for Bob. Authorization comes from:
@@ -96,11 +96,11 @@ If a record cannot be held — because its debit is uncovered, the account is un
 
 Settling means: apply the deltas of every owned record, release the holds, issue `settle` signatures, fan out.
 
-> **Implementation note:** The matchmaker calls `create_records` on each bank with the same nested `offer1` / `offer2` objects and a shared `deal_id`. Each bank extracts the two amounts that apply to the Voucher it issues and mints one debit/credit record pair. The matchmaker then sends a per-bank `Confirm` listing that bank's records. Holders submit their docs via `submit_docs` (or have already submitted them / published Offers). Once a bank has both the `Confirm` and valid Orders for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
+> **Implementation note:** The coordinator calls `create_records` on each bank referencing the two holder **Order hashes** (`giver`, `receiver`) plus `amount` / `counter_amount` and a shared `deal_id`. Each bank mints one debit/credit record pair for the Voucher it issues (a same-bank swap takes two calls with `giver`/`receiver` swapped). The coordinator then sends a `Mandate` per Order per bank — naming the Order and listing that bank's records — together with the record bodies. Holders submit their docs via `submit_docs` (or have already submitted them). Once a bank has both the `Mandate` and the valid Order for its records, its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are satisfied.
 
 ### 2.1 Authorization sources
 
-A bank advances a record only when it has valid authorization — a holder-signed Order or matching Order/Offer — for every **Record** (credit or debit) touching a holder's account, and a matchmaker `Confirm` for the deal. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_docs` and `submit_confirm` resolve them.
+A bank advances a record only when it has valid authorization — a holder-signed Order — for every **Record** (credit or debit) touching a holder's account, and a coordinator `Mandate` for that record's Order. See `bank-schema.md` for the doc shapes and `bank-rpc.md` for how `submit_docs` and `submit_mandate` resolve them.
 
 ### 2.2 Risk — lead and follow
 
@@ -181,10 +181,10 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 |---|---|---|
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
-| Coordinator pattern | **Matchmaker-orchestrated**: a matchmaker calls `create_records` on each bank, then sends a per-bank `Confirm`; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders/Offers + the per-bank `Confirm` + peer bank pubkeys from `Order.bank`; no bank sees the full deal | **Yes** |
-| Record creation | Only the matchmaker may create records, and only via `offer_pair` requests | **Yes** |
-| Advance gate | A bank advances records only after receiving a `Confirm` addressed to it and valid Orders for its records | **Yes** |
+| Coordinator pattern | **Coordinator-orchestrated**: a coordinator calls `create_records` on each bank, then sends a `Mandate` per Order per bank; banks never call each other on the trade path | **Yes** |
+| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders + the Mandates for those Orders + peer bank pubkeys from `Order.bank`; no bank sees the full deal | **Yes** |
+| Record creation | Only the coordinator may create records, and only via `create_records({ giver, receiver, … })` referencing holder Order hashes | **Yes** |
+| Advance gate | A bank advances records only after receiving a `Mandate` for the record's Order and the valid Order itself | **Yes** |
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
 | Concurrent holds | Rejected `-32003`; first-write-wins on per-Account lock | **Yes** |
 | Key recovery | Out of scope (lose key → lose account) | **Yes** |

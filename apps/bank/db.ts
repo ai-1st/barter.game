@@ -3,7 +3,7 @@ import type {
   Address,
   Base58PubKey,
   Base58SHA256,
-  Confirm,
+  Mandate,
   Offer,
   Order,
   BankRecord,
@@ -321,6 +321,7 @@ export type RecordRow = {
   details: {
     pair: ULID;
     deal_id: ULID;
+    coordinator: Base58PubKey;
     holder: Base58PubKey;
     account: Base58SHA256;
   };
@@ -450,28 +451,42 @@ export async function releaseHold(
   await atomic.commit();
 }
 
-// --- confirms -------------------------------------------------------------
+// --- mandates -------------------------------------------------------------
+// Mandates are the per-(deal, order) unit of work. Stored under
+// (deal_id, order) so the advance engine can check whether a given record's
+// Order has been cleared, and so duplicate mandates for the same (deal, order)
+// are rejected.
 
-export async function storeConfirm(
+export type MandateRow = {
+  hash: Base58SHA256;
+  order: Base58SHA256;
+  coordinator: Base58PubKey;
+  records: Base58SHA256[];
+  at: number;
+};
+
+export async function storeMandate(
   bank: Bank,
-  confirm: Confirm,
+  mandate: Mandate,
 ): Promise<Base58SHA256> {
-  const h = await storeDoc(bank, confirm);
-  await bank.kv.set(k(bank, 'confirm', confirm.deal_id), {
+  const h = await storeDoc(bank, mandate);
+  const row: MandateRow = {
     hash: h,
-    records: confirm.records,
+    order: mandate.order,
+    coordinator: mandate.pubkey,
+    records: mandate.records,
     at: Date.now(),
-  });
+  };
+  await bank.kv.set(k(bank, 'mandate', mandate.deal_id, mandate.order), row);
   return h;
 }
 
-export async function getConfirm(
+export async function getMandate(
   bank: Bank,
   dealId: ULID,
-): Promise<{ hash: Base58SHA256; records: Base58SHA256[]; at: number } | null> {
-  const r = await bank.kv.get<{ hash: string; records: string[]; at: number }>(
-    k(bank, 'confirm', dealId),
-  );
+  order: Base58SHA256,
+): Promise<MandateRow | null> {
+  const r = await bank.kv.get<MandateRow>(k(bank, 'mandate', dealId, order));
   return r.value;
 }
 

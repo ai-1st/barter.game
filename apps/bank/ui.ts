@@ -13,7 +13,6 @@ import {
 import {
   emptyUiState,
   getAccountBalance,
-  getConfirm,
   getHandleByPubkey,
   getHandleInfo,
   getKeystore,
@@ -707,40 +706,77 @@ async function handleProposeDeal(
     }
   }
 
+  // Resolve the two holder Orders. `offer1`/`offer2` carry Order hashes plus the
+  // amount each order gives (its debit voucher). order1 gives V1 (amount1) and
+  // receives V2; order2 gives V2 (amount2) and receives V1.
+  const o1 = offer1Raw as Record<string, unknown>;
+  const o2 = offer2Raw as Record<string, unknown>;
+  const order1Hash = o1.hash;
+  const order2Hash = o2.hash;
+  const amount1 = o1.debit_amount;
+  const amount2 = o2.debit_amount;
+  if (
+    typeof order1Hash !== 'string' || typeof order2Hash !== 'string' ||
+    typeof amount1 !== 'number' || typeof amount2 !== 'number'
+  ) {
+    return json(400, { code: -32602, message: 'offer1/offer2 need { hash, debit_amount }' });
+  }
+  const order1 = await getOrder(bank, order1Hash);
+  const order2 = await getOrder(bank, order2Hash);
+  if (!order1 || !order2) {
+    return json(422, { code: -32005, message: 'this bank does not hold both orders' });
+  }
+
+  // Per bank: mint the record pair for the voucher it issues, then send one
+  // Mandate per Order (the giver's Order clears the debit record, the
+  // receiver's Order clears the credit record). All signed by this bank as
+  // coordinator.
   const records: Record<string, string[]> = {};
   for (const b of banks) {
+    let giver: string, receiver: string, amount: number, counter: number;
+    if (order1.debit && order1.debit.bank === b.pubkey) {
+      giver = order1Hash; receiver = order2Hash; amount = amount1; counter = amount2;
+    } else if (order2.debit && order2.debit.bank === b.pubkey) {
+      giver = order2Hash; receiver = order1Hash; amount = amount2; counter = amount1;
+    } else {
+      return json(422, { code: -32000, message: `bank ${b.pubkey} issues neither voucher` });
+    }
+
     const res = await bankRpcCall(bank, b.url, b.pubkey, 'create_records', {
-      offer1: offer1Raw,
-      offer2: offer2Raw,
-      deal_id: dealId,
+      giver, receiver, amount, counter_amount: counter, deal_id: dealId,
     }) as { result?: { records: Array<Record<string, unknown>> }; error?: { code: number; message: string } };
     if (res.error) {
       return json(502, { ok: false, code: res.error.code, message: res.error.message, bank: b.pubkey });
     }
     const recs = (res.result?.records ?? []) as Array<Record<string, unknown>>;
     records[b.pubkey] = recs.map((r) => hashDoc(r));
-  }
 
-  // Submit Confirm to each bank (signed by this bank as matchmaker).
-  for (const b of banks) {
-    const confirm = {
-      type: 'confirm',
-      pubkey: bank.pubkey,
-      ulid: newUlid(),
-      deal_id: dealId,
-      bank: b.pubkey,
-      records: records[b.pubkey] ?? [],
-      sig: '',
-    };
-    confirm.sig = signDoc(confirm, bank.privateKey);
-    await bankRpcCall(bank, b.url, b.pubkey, 'submit_confirm', { confirm });
+    const debitRec = recs.find((r) => r.type === 'debit');
+    const creditRec = recs.find((r) => r.type === 'credit');
+    const mandates: Array<{ order: string; recordHash: string }> = [];
+    if (debitRec) mandates.push({ order: giver, recordHash: hashDoc(debitRec) });
+    if (creditRec) mandates.push({ order: receiver, recordHash: hashDoc(creditRec) });
+    for (const m of mandates) {
+      const mandate = {
+        type: 'mandate',
+        pubkey: bank.pubkey,
+        ulid: newUlid(),
+        deal_id: dealId,
+        order: m.order,
+        bank: b.pubkey,
+        records: [m.recordHash],
+        sig: '',
+      };
+      mandate.sig = signDoc(mandate, bank.privateKey);
+      await bankRpcCall(bank, b.url, b.pubkey, 'submit_mandate', { mandate });
+    }
   }
 
   return json(200, {
     deal_id: dealId,
     participating_banks: banks.map((b) => b.pubkey),
     records,
-    state: 'confirming',
+    state: 'mandated',
   });
 }
 
@@ -758,11 +794,10 @@ async function handleDealStatus(
   dealId: string,
 ): Promise<Response> {
   if (!isValidUlid(dealId)) return json(400, { code: -32602, message: 'invalid deal_id' });
-  const confirm = await getConfirm(bank, dealId);
-  if (!confirm) return json(404, { code: -32005, message: 'deal not found' });
   const records = await listRecordsByDeal(bank, dealId);
+  if (records.length === 0) return json(404, { code: -32005, message: 'deal not found' });
   const legs = [];
-  let overall = 'confirming';
+  let overall = 'mandated';
   for (const r of records) {
     const h = hashDoc(r.doc);
     const sigs = await getSignaturesForRecord(bank, h);

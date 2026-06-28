@@ -2,7 +2,7 @@ import {
   getAccount,
   getAccountBalance,
   getAddress,
-  getConfirm,
+  getMandate,
   getOffer,
   getOrder,
   getRecord,
@@ -32,6 +32,7 @@ const EPS = 1e-9;
 type RecordState = {
   hash: Base58SHA256;
   row: RecordRow;
+  mandated: boolean;
   ready: boolean;
   held: boolean;
   settled: boolean;
@@ -43,9 +44,6 @@ type RecordState = {
 };
 
 export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
-  const confirm = await getConfirm(bank, dealId);
-  if (!confirm) return; // still awaiting matchmaker clearance
-
   const records = await listRecordsByDeal(bank, dealId);
   if (records.length === 0) return;
 
@@ -56,6 +54,10 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
     states.push({
       hash: h,
       row,
+      // A record is mandated when a Mandate exists for its (deal, order),
+      // lists this record, and was signed by the coordinator sealed into the
+      // record. Only mandated records may advance.
+      mandated: await isMandated(bank, dealId, row, h),
       ready: sigs.some((s) => s.action === 'ready'),
       held: sigs.some((s) => s.action === 'hold'),
       settled: sigs.some((s) => s.action === 'settle'),
@@ -66,6 +68,8 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
       rejectSig: sigs.find((s) => s.action === 'reject') ?? null,
     });
   }
+
+  if (!states.some((s) => s.mandated)) return; // still awaiting coordinator clearance
 
   if (states.some((s) => s.rejected)) return;
 
@@ -84,7 +88,7 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
   // 1. Ready
   for (let i = 0; i < states.length; i++) {
     const st = states[i]!;
-    if (st.ready || st.held || st.settled) continue;
+    if (st.ready || st.held || st.settled || !st.mandated) continue;
     const ok = await readyCheck(bank, st.row, resolved[i]!);
     if (ok) {
       await signAndStore(bank, st.hash, 'ready');
@@ -156,6 +160,18 @@ export async function advanceRecord(
   const rec = await getRecord(bank, recordHash);
   if (!rec) return;
   await advanceDeal(bank, rec.details.deal_id);
+}
+
+async function isMandated(
+  bank: Bank,
+  dealId: string,
+  row: RecordRow,
+  hash: Base58SHA256,
+): Promise<boolean> {
+  const mandate = await getMandate(bank, dealId, row.doc.order);
+  if (!mandate) return false;
+  if (mandate.coordinator !== row.details.coordinator) return false;
+  return mandate.records.includes(hash);
 }
 
 async function resolveOrderForRecord(

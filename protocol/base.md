@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "confirm" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
