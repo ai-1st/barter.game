@@ -60,7 +60,7 @@ The bank verifies:
 - `giver` and `receiver` resolve to valid, signed, stored Orders.
 - `giver.debit.voucher == receiver.credit.voucher == V` (this bank's voucher); both `bank` fields are this bank.
 - `amount` is within `giver.debit.min/max` and `receiver.credit.min/max`.
-- **Rate** (two-sided Orders): `amount / counter_amount <= giver.rate` and `counter_amount / amount <= receiver.rate`. When the other side is also at this bank, `counter_amount` is verified against that side's records; when it is at another bank, `counter_amount` is the coordinator's assertion and the rate is enforced softly (the holder's `min`/`max`, checked by the bank that owns each side, is the hard bound — see [`bank-schema.md` §1.4](bank-schema.md)).
+- **Counter leg — bank-asserted, never trusted** (two-sided Orders): the bank holds BOTH Orders (every holder submits their Order to each bank a side touches), so it validates the caller's `counter_amount` against the signed docs themselves: the giver's `credit` side and the receiver's `debit` side MUST name the same foreign voucher and bank; `counter_amount` MUST lie inside **both** Orders' min/max windows for that side; and both rates MUST hold — `amount / counter_amount <= giver.rate` and `counter_amount / amount <= receiver.rate`. For one-sided pairings (invoice/cheque) `counter_amount` MUST be `0`. What the bank cannot observe is the foreign leg's *settled* records; the counterparty bank enforces the same windows on its side, and the ready→hold→settle cascade ties the legs together.
 - The resulting records would not violate `Voucher.limit` or any Order cumulative/account limit.
 
 The bank rejects the request if any check fails.

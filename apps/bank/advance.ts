@@ -71,12 +71,20 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
 
   if (!states.some((s) => s.mandated)) return; // still awaiting coordinator clearance
 
-  if (states.some((s) => s.rejected)) return;
-
   // Resolve underlying orders.
   const resolved = await Promise.all(
     states.map((s) => resolveOrderForRecord(bank, s.row.doc)),
   );
+
+  // Reject cascade (README §2.0): a reject on ANY record — issued here or
+  // received from a peer via notify_signatures — aborts the whole deal at
+  // this bank. Reject every remaining pre-settled record, release holds,
+  // fan out, stop advancing.
+  if (states.some((s) => s.rejected)) {
+    const sigs = await rejectDeal(bank, states, 'rejected counterpart record');
+    if (sigs.length > 0) await fanOutRejectSigs(bank, sigs, resolved, states);
+    return;
+  }
 
   // Determine the lead bank set for this deal from the orders.
   const leadBanks = new Set<Base58PubKey>();
@@ -85,14 +93,21 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
     if (lb) leadBanks.add(lb);
   }
 
-  // 1. Ready
+  // 1. Ready — a PERMANENT precondition failure (bad side/account, min/max,
+  // uncovered debit with no in-deal credit, voucher limit) MUST reject the
+  // record and, by cascade, the deal. Transient shortfalls (coverage that a
+  // not-yet-held same-deal credit could still provide) just wait.
   for (let i = 0; i < states.length; i++) {
     const st = states[i]!;
     if (st.ready || st.held || st.settled || !st.mandated) continue;
-    const ok = await readyCheck(bank, st.row, resolved[i]!);
-    if (ok) {
+    const verdict = await readyCheck(bank, st.row, resolved[i]!, states);
+    if (verdict.ok) {
       await signAndStore(bank, st.hash, 'ready');
       st.ready = true;
+    } else if (verdict.permanent) {
+      const sigs = await rejectDeal(bank, states, verdict.reason);
+      if (sigs.length > 0) await fanOutRejectSigs(bank, sigs, resolved, states);
+      return;
     }
   }
 
@@ -215,26 +230,42 @@ async function determineLeadBank(
   return bank.pubkey;
 }
 
+// Verdict of a ready-time precondition check. `permanent: true` means nothing
+// within this deal can ever satisfy the precondition — the record MUST be
+// rejected (README §2.0). `permanent: false` means a later event (e.g. an
+// in-deal credit being held) may still cover it, so the engine just waits.
+type ReadyVerdict =
+  | { ok: true }
+  | { ok: false; permanent: boolean; reason: string };
+
+const notReady = (permanent: boolean, reason: string): ReadyVerdict =>
+  ({ ok: false, permanent, reason });
+
 async function readyCheck(
   bank: Bank,
   row: RecordRow,
   order: Order,
-): Promise<boolean> {
+  dealStates: RecordState[],
+): Promise<ReadyVerdict> {
   const account = await getAccount(bank, row.details.account);
-  if (!account) return false;
+  if (!account) return notReady(true, 'account unknown');
 
   // Verify order side matches record type & account.
   if (row.doc.type === 'debit') {
-    if (!order.debit) return false;
-    if (order.debit.account !== row.details.account) return false;
+    if (!order.debit) return notReady(true, 'order has no debit side');
+    if (order.debit.account !== row.details.account) return notReady(true, 'debit account mismatch');
   } else {
-    if (!order.credit) return false;
-    if (order.credit.account !== row.details.account) return false;
+    if (!order.credit) return notReady(true, 'order has no credit side');
+    if (order.credit.account !== row.details.account) return notReady(true, 'credit account mismatch');
   }
 
   const amount = row.doc.amount;
-  if (amount < (row.doc.type === 'debit' ? order.debit!.min : order.credit!.min)) return false;
-  if (amount > (row.doc.type === 'debit' ? order.debit!.max : order.credit!.max)) return false;
+  if (amount < (row.doc.type === 'debit' ? order.debit!.min : order.credit!.min)) {
+    return notReady(true, 'amount below order min');
+  }
+  if (amount > (row.doc.type === 'debit' ? order.debit!.max : order.credit!.max)) {
+    return notReady(true, 'amount above order max');
+  }
 
   // Free balance check for debits (non-issuers may not overdraw).
   if (row.doc.type === 'debit') {
@@ -243,30 +274,49 @@ async function readyCheck(
     );
     const isIssuer = voucher ? voucher.pubkey === row.details.holder : false;
     const bal = await getAccountBalance(bank, row.details.account);
-    if (!bal) return false;
+    if (!bal) return notReady(true, 'no balance row for debit account');
     const free = bal.current - bal.pending;
-    if (!isIssuer && free < amount) return false;
+    if (!isIssuer && free < amount) {
+      // Uncovered debit. Coverage may still arrive from a credit record in
+      // THIS deal targeting the same account (README §2.0 hold coverage);
+      // only when no such credit exists is the shortfall unrecoverable.
+      const inDealCredit = dealStates.some((s) =>
+        s.row.doc.type === 'credit' &&
+        s.row.details.account === row.details.account &&
+        !s.rejected);
+      return notReady(!inDealCredit, 'insufficient balance on debit account');
+    }
     if (isIssuer && voucher?.limit !== undefined) {
       const issued = await totalIssuedForVoucher(bank, order.debit!.voucher);
-      if (issued + amount > voucher.limit) return false;
+      if (issued + amount > voucher.limit) return notReady(true, 'voucher limit exceeded');
     }
     if (order.debit_account_limit !== undefined) {
-      if (!isIssuer && bal.current - amount < order.debit_account_limit) return false;
+      if (!isIssuer && bal.current - amount < order.debit_account_limit) {
+        const inDealCredit = dealStates.some((s) =>
+          s.row.doc.type === 'credit' &&
+          s.row.details.account === row.details.account &&
+          !s.rejected);
+        return notReady(!inDealCredit, 'debit account floor violated');
+      }
     }
   }
 
-  // Credit account ceiling check.
+  // Credit account ceiling check. Balance can drop through other deals, so
+  // this is transient — the engine waits rather than aborting the deal.
   if (row.doc.type === 'credit' && order.credit_account_limit !== undefined) {
     const bal = await getAccountBalance(bank, row.details.account);
-    if (!bal) return false;
-    if (bal.current + amount > order.credit_account_limit) return false;
+    if (bal && bal.current + amount > order.credit_account_limit) {
+      return notReady(false, 'credit account ceiling exceeded');
+    }
   }
 
   // Aggregate rate check for two-sided orders when both sides are local.
+  // More records for this deal may still arrive (a later create_records call
+  // adding the credit leg improves the ratio), so treat as transient.
   const rateOk = await aggregateRateCheck(bank, row.details.deal_id, order);
-  if (!rateOk) return false;
+  if (!rateOk) return notReady(false, 'aggregate rate exceeded');
 
-  return true;
+  return { ok: true };
 }
 
 async function aggregateRateCheck(
@@ -327,6 +377,7 @@ async function signAndStore(
   targetHash: Base58SHA256,
   action: Signature['action'],
   seen?: Base58SHA256[],
+  reason?: string,
 ): Promise<Signature> {
   const sig: Signature = {
     type: 'signature',
@@ -335,11 +386,63 @@ async function signAndStore(
     hash: targetHash,
     action,
     seen,
+    reason,
     sig: '',
   };
   sig.sig = signDoc(sig, bank.privateKey);
   await storeSignature(bank, sig);
   return sig;
+}
+
+// Abort the deal at this bank: issue a reject Signature on every pre-settled
+// record that doesn't have one, releasing any holds. Settled records stay
+// settled — there is no rollback (README §2.2). Returns the newly issued
+// reject signatures for fan-out.
+async function rejectDeal(
+  bank: Bank,
+  states: RecordState[],
+  reason: string,
+): Promise<Signature[]> {
+  const out: Signature[] = [];
+  for (const st of states) {
+    if (st.settled || st.rejected) continue;
+    if (st.held) {
+      await releaseHold(bank, st.row.details.account, st.row.details.deal_id);
+    }
+    const sig = await signAndStore(bank, st.hash, 'reject', undefined, reason);
+    st.rejected = true;
+    st.rejectSig = sig;
+    out.push(sig);
+  }
+  return out;
+}
+
+// Fan a reject out to every counter-side bank named by the deal's orders —
+// any bank with dependent records MUST reject them too (README §2.0).
+async function fanOutRejectSigs(
+  bank: Bank,
+  rejectSigs: Signature[],
+  resolved: Order[],
+  states: RecordState[],
+): Promise<void> {
+  const peers = new Set<Base58PubKey>();
+  for (let i = 0; i < states.length; i++) {
+    const order = resolved[i]!;
+    for (const side of [order.debit, order.credit]) {
+      if (side && side.bank !== bank.pubkey) peers.add(side.bank);
+    }
+  }
+  for (const target of peers) {
+    const addr = await getAddress(bank, target);
+    if (!addr) continue;
+    try {
+      await bankRpcCall(bank, addr.url, target, 'notify_signatures', {
+        signatures: rejectSigs,
+      });
+    } catch {
+      // Fire-and-forget; client relay is the recovery path.
+    }
+  }
 }
 
 async function fanOutSettleSigs(

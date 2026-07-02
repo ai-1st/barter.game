@@ -152,7 +152,7 @@ Public Offers for cheques make sense in airdrop scenarios; public Offers for inv
 4. If `R` is a debit, `R.details.account` equals `O.debit.account`.
 5. If `R` is a credit, `R.details.account` equals `O.credit.account`.
 6. `R.amount` is between the corresponding `min` and `max`.
-7. If `O` is two-sided, the bank verifies `debit_amount / credit_amount <= O.rate` (within the bank's rounding policy). When both sides of `O` are vouchers this bank issues, both amounts are local records. When `O` spans two banks, this bank holds only one side; the other side's amount is the `counter_amount` the coordinator supplied at `create_records`. The rate is therefore a **coordinator-asserted** check across banks; the holder's per-side `min`/`max` (enforced by whichever bank owns that side, since the holder submitted `O` to both) is the cryptographically hard guarantee.
+7. If `O` is two-sided, the bank verifies `debit_amount / credit_amount <= O.rate` (within the bank's rounding policy). When both sides of `O` are vouchers this bank issues, both amounts are local records. When `O` spans two banks, this bank holds only one side's records — but it holds **both Orders** of the pairing, so the counter amount is **bank-asserted**: at `create_records` it must lie inside both Orders' min/max windows for the foreign side and satisfy both rates (see `bank-rpc.md` §2.2). The holder's per-side `min`/`max`, enforced by whichever bank owns that side, remains the hard per-record bound.
 8. The cumulative debit amount across all Records already matched to `O` does not exceed `O.debit_order_limit` (if set).
 9. The cumulative credit amount across all Records already matched to `O` does not exceed `O.credit_order_limit` (if set).
 10. The resulting balance of the debit account does not fall below `O.debit_account_limit` (if set).
@@ -277,6 +277,8 @@ Each bank runs its own state machine over each record it owns. Records are creat
 
    Any pre-settled state can transition to rejected via a bank-issued `reject` signature on the record.
 ```
+
+**Reject semantics.** `reject` is a bank-issued `Signature` (`base.md` §3.1), created and propagated exactly like `ready`/`hold`/`settle` — holders and the coordinator play no role in settlement and MUST NOT be able to trigger a reject. A bank MUST issue `reject` on a mandated record whose precondition failure is **permanent** — order side/account mismatch, amount outside min/max, an uncovered debit with no in-deal credit that could still cover it, or a `Voucher.limit` violation. Transient shortfalls (coverage that a not-yet-held same-deal credit may provide, an aggregate rate that later records may satisfy) are not rejected; the engine waits. A reject on any record cascades: the bank rejects every remaining pre-settled record of the deal, releases its holds, and fans the reject Signatures out to the counter-side banks named by the deal's Orders. Settled records stay settled — there is no rollback.
 
 The coordinator is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders). The coordinator then sends a `Mandate` per Order per bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The coordinator **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
 
