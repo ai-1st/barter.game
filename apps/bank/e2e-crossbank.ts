@@ -18,6 +18,10 @@ import {
 } from '@barter.game/protocol';
 
 const BASE_URL = Deno.env.get('E2E_BASE_URL') ?? 'http://localhost:8000';
+// Federation mode: point the two banks at DIFFERENT deployments to exercise
+// the real HTTP bank-to-bank path (defaults keep the same-deployment test).
+const BANK_A_URL = Deno.env.get('E2E_BANK_A_URL') ?? `${BASE_URL}/alice`;
+const BANK_B_URL = Deno.env.get('E2E_BANK_B_URL') ?? `${BASE_URL}/bob`;
 
 type User = { privateKey: Uint8Array; pubkey: string };
 type BankRef = { name: string; url: string; pubkey: string };
@@ -27,10 +31,9 @@ function makeUser(): User {
   return { privateKey, pubkey: pubkeyBase58 };
 }
 
-async function discover(name: string): Promise<BankRef> {
-  const url = `${BASE_URL}/${name}`;
+async function discover(url: string): Promise<BankRef> {
   const info = await fetch(`${url}/barter-bank.json`).then((r) => r.json());
-  return { name, url, pubkey: info.pubkey };
+  return { name: info.name, url, pubkey: info.pubkey };
 }
 
 async function rpc(user: User, bank: BankRef, method: string, params: Record<string, unknown>) {
@@ -86,8 +89,8 @@ function sign<T extends Record<string, unknown>>(doc: T, user: User): T & { sig:
   return { ...doc, sig: signDoc(doc, user.privateKey) };
 }
 
-const alice = await discover('alice');
-const bob = await discover('bob');
+const alice = await discover(BANK_A_URL);
+const bob = await discover(BANK_B_URL);
 console.log('bank alice', alice.pubkey.slice(0, 12), '| bank bob', bob.pubkey.slice(0, 12));
 
 const t1 = makeUser(); // issues VX at bank alice, wants VY

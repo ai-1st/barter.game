@@ -65,6 +65,8 @@ The bank verifies:
 
 The bank rejects the request if any check fails.
 
+**Idempotency.** `create_records` MUST be idempotent on `(deal_id, giver, receiver)`: a repeated call with the same terms returns the originally minted record pair; a repeated call with **different** `amount`/`counter_amount` for the same key MUST be rejected (`-32000`), never mint a second pair. Distinct pairs within one deal (merge/branch, spread legs) differ in `giver` or `receiver` and are unaffected.
+
 **Same-bank deals.** When this bank issues **both** vouchers in the swap, the coordinator calls `create_records` **twice** — once per voucher — with `giver` and `receiver` swapped:
 
 ```ts
