@@ -2,6 +2,7 @@ import {
   getAccount,
   getAccountBalance,
   getAddress,
+  getDoc,
   getMandate,
   getOffer,
   getOrder,
@@ -310,32 +311,44 @@ async function readyCheck(
     }
   }
 
-  // Aggregate rate check for two-sided orders when both sides are local.
-  // More records for this deal may still arrive (a later create_records call
-  // adding the credit leg improves the ratio), so treat as transient.
-  const rateOk = await aggregateRateCheck(bank, row.details.deal_id, order);
-  if (!rateOk) return notReady(false, 'aggregate rate exceeded');
+  // Rate check for two-sided orders, computed over the Mandate's FULL record
+  // set — the Mandate lists every record satisfying the Order across all
+  // banks, and foreign bodies (bank-signed) were stored at submit_mandate.
+  // Both sides of the Order are therefore numerically checkable here. The
+  // Mandate for a (deal, order) is immutable, so a violating set can never
+  // improve → permanent.
+  const rate = await aggregateRateCheck(bank, row.details.deal_id, row.doc.order, order);
+  if (rate === 'wait') return notReady(false, 'awaiting mandated record bodies');
+  if (rate === 'violation') return notReady(true, 'order rate violated by mandated records');
 
   return { ok: true };
 }
 
+// Verify an Order's rate over the complete mandated record set (local records
+// plus bank-signed foreign bodies). 'wait' = a listed body is not yet
+// resolvable (transient); 'violation' = the immutable mandated set breaks the
+// rate — including a two-sided Order whose credit leg was never mandated (the
+// missing-leg attack) — which is permanent.
 async function aggregateRateCheck(
   bank: Bank,
   dealId: string,
+  orderHash: Base58SHA256,
   order: Order,
-): Promise<boolean> {
-  if (!order.debit || !order.credit) return true; // one-sided: no rate gate
-  const records = await listRecordsByDeal(bank, dealId);
+): Promise<'ok' | 'wait' | 'violation'> {
+  if (!order.debit || !order.credit) return 'ok'; // one-sided: no rate gate
+  const mandate = await getMandate(bank, dealId, orderHash);
+  if (!mandate) return 'wait';
   let debitAmount = 0;
   let creditAmount = 0;
-  for (const r of records) {
-    const ord = await resolveOrderForRecord(bank, r.doc);
-    if (hashDoc(ord) !== hashDoc(order)) continue;
-    if (r.doc.type === 'debit') debitAmount += r.doc.amount;
-    if (r.doc.type === 'credit') creditAmount += r.doc.amount;
+  for (const h of mandate.records) {
+    const local = await getRecord(bank, h);
+    const doc = local?.doc ?? (await getDoc<BankRecord>(bank, h));
+    if (!doc) return 'wait';
+    if (doc.type === 'debit') debitAmount += doc.amount;
+    if (doc.type === 'credit') creditAmount += doc.amount;
   }
-  if (creditAmount === 0) return true; // cannot check yet
-  return debitAmount / creditAmount <= order.rate + EPS;
+  if (creditAmount === 0) return 'violation';
+  return debitAmount / creditAmount <= order.rate + EPS ? 'ok' : 'violation';
 }
 
 async function acquireHoldsForDeal(

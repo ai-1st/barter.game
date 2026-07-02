@@ -760,6 +760,7 @@ async function handleProposeDeal(
   // receiver's Order clears the credit record). All signed by this bank as
   // coordinator.
   const records: Record<string, string[]> = {};
+  const allRecordBodies: Array<Record<string, unknown>> = [];
   for (const b of banks) {
     let giver: string, receiver: string, amount: number, counter: number;
     // counter_amount is only meaningful when a counter leg exists (the giver
@@ -783,25 +784,37 @@ async function handleProposeDeal(
     }
     const recs = (res.result?.records ?? []) as Array<Record<string, unknown>>;
     records[b.pubkey] = recs.map((r) => hashDoc(r));
+    allRecordBodies.push(...recs);
+  }
 
-    const debitRec = recs.find((r) => r.type === 'debit');
-    const creditRec = recs.find((r) => r.type === 'credit');
-    const mandates: Array<{ order: string; recordHash: string }> = [];
-    if (debitRec) mandates.push({ order: giver, recordHash: hashDoc(debitRec) });
-    if (creditRec) mandates.push({ order: receiver, recordHash: hashDoc(creditRec) });
-    for (const m of mandates) {
+  // One Mandate per (Order, bank), each listing EVERY record satisfying that
+  // Order across ALL banks (bank-rpc.md §2.1). The record bodies travel with
+  // the Mandate so the receiving bank can verify the foreign legs — bodies
+  // are bank-signed and their details stay an opaque hash.
+  for (const [orderHash, orderDoc] of [[order1Hash, order1], [order2Hash, order2]] as const) {
+    const orderBodies = allRecordBodies.filter((r) => r.order === orderHash);
+    const orderHashes = orderBodies.map((r) => hashDoc(r));
+    if (orderHashes.length === 0) continue;
+    // A Mandate goes to every bank the Order names a side at (only those banks
+    // hold the Order and records for it).
+    const orderBanks = banks.filter((b) =>
+      orderDoc.debit?.bank === b.pubkey || orderDoc.credit?.bank === b.pubkey);
+    for (const b of orderBanks) {
       const mandate = {
         type: 'mandate',
         pubkey: bank.pubkey,
         ulid: newUlid(),
         deal_id: dealId,
-        order: m.order,
+        order: orderHash,
         bank: b.pubkey,
-        records: [m.recordHash],
+        records: orderHashes,
         sig: '',
       };
       mandate.sig = signDoc(mandate, bank.privateKey);
-      await bankRpcCall(bank, b.url, b.pubkey, 'submit_mandate', { mandate });
+      await bankRpcCall(bank, b.url, b.pubkey, 'submit_mandate', {
+        mandate,
+        records: orderBodies,
+      });
     }
   }
 
