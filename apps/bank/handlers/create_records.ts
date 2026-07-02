@@ -1,8 +1,11 @@
 import {
   addOrderUsage,
+  getDealPair,
   getOffer,
   getOrder,
+  getRecord,
   getVoucher,
+  storeDealPair,
   storeRecord,
 } from '../db.ts';
 import {
@@ -58,6 +61,22 @@ export async function createRecords(
   }
   if (!Number.isFinite(counterAmount) || counterAmount < 0) {
     throw new RpcError(-32000, 'counter_amount must be non-negative');
+  }
+
+  // Idempotency: one record pair per (deal_id, giver, receiver). A repeated
+  // call with the same terms returns the original pair instead of minting a
+  // new one; a repeat with DIFFERENT terms is an error, never a second pair.
+  const existing = await getDealPair(bank, dealId, giverHash, receiverHash);
+  if (existing) {
+    if (existing.amount !== amount || existing.counter_amount !== counterAmount) {
+      throw new RpcError(-32000, 'create_records repeated with different terms for this (deal, giver, receiver)');
+    }
+    const records = [];
+    for (const h of existing.records) {
+      const row = await getRecord(bank, h);
+      if (row) records.push(row.doc);
+    }
+    return { records };
   }
 
   const giver = await resolveAuth(bank, giverHash);
@@ -150,8 +169,13 @@ export async function createRecords(
   };
   creditRecord.sig = signDoc(creditRecord, bank.privateKey);
 
-  await storeRecord(bank, debitRecord, debitDetails);
-  await storeRecord(bank, creditRecord, creditDetails);
+  const debitHash = await storeRecord(bank, debitRecord, debitDetails);
+  const creditHash = await storeRecord(bank, creditRecord, creditDetails);
+  await storeDealPair(bank, dealId, giverHash, receiverHash, {
+    records: [debitHash, creditHash],
+    amount,
+    counter_amount: counterAmount,
+  });
 
   await addOrderUsage(bank, giver.orderHash, amount, 0);
   await addOrderUsage(bank, receiver.orderHash, 0, amount);

@@ -82,10 +82,13 @@ invokes the registry handler directly and `fetchDiscovery` answers from memory
 instead of issuing an HTTP request. Any future change to bank fan-out must keep
 this in-process path, or co-located banks will 508.
 
-**Caveat (untested):** genuinely federated banks on **separate** deployments would
-exercise the real HTTP bank-to-bank path instead. That path exists but is not yet
-tested end-to-end (it needs a second deployment) — only the co-located in-process
-path is verified on production.
+**Status:** the real HTTP bank-to-bank path is now **verified cross-process**: a
+bilateral swap settled between two isolated local bank processes (separate ports
+and KV stores — topologically two deployments) via `E2E_BANK_A_URL`/`E2E_BANK_B_URL`
+in [`apps/bank/e2e-crossbank.ts`](apps/bank/e2e-crossbank.ts). A repeat across two
+real Deno Deploy apps still requires creating the second app in the dashboard.
+`BANK_KV_PATH` (in [`apps/bank/main.ts`](apps/bank/main.ts)) pins the KV file so
+isolated bank processes can share one machine.
 
 ---
 
@@ -94,5 +97,5 @@ path is verified on production.
 - Restore/expand the full screen inventory (§2).
 - Upgrade keystore encryption to Argon2id + XChaCha20-Poly1305 when a WASM build
   pipeline is added (§1).
-- Exercise the genuine cross-deployment HTTP bank-to-bank path with two separate
-  Deno Deploy apps; today only the co-located in-process path is tested (§4).
+- Repeat the (locally proven) cross-process federation test across two real Deno
+  Deploy apps once the second app exists in the dashboard (§4).

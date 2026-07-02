@@ -327,6 +327,37 @@ export type RecordRow = {
   };
 };
 
+// Idempotency marker for create_records: one record pair per
+// (deal_id, giver order, receiver order). A repeated call with identical
+// terms returns the original pair; different terms are rejected.
+export type DealPairRow = {
+  records: Base58SHA256[];
+  amount: number;
+  counter_amount: number;
+};
+
+export async function getDealPair(
+  bank: Bank,
+  dealId: ULID,
+  giver: Base58SHA256,
+  receiver: Base58SHA256,
+): Promise<DealPairRow | null> {
+  const r = await bank.kv.get<DealPairRow>(
+    k(bank, 'deal_pair', dealId, giver, receiver),
+  );
+  return r.value;
+}
+
+export async function storeDealPair(
+  bank: Bank,
+  dealId: ULID,
+  giver: Base58SHA256,
+  receiver: Base58SHA256,
+  row: DealPairRow,
+): Promise<void> {
+  await bank.kv.set(k(bank, 'deal_pair', dealId, giver, receiver), row);
+}
+
 export async function storeRecord(
   bank: Bank,
   record: BankRecord,

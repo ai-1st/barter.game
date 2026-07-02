@@ -241,7 +241,7 @@ async function renderWelcome(app) {
 function renderRegister(app) {
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
     ${card('Create account', `
-      <label>Handle</label><input id="r-handle" placeholder="alice">
+      <label>Handle <span class="small">(2–32 chars: a–z, 0–9, _ or -)</span></label><input id="r-handle" placeholder="alice">
       <label>Password</label><input id="r-pass" type="password" placeholder="••••••••">
       <label>Confirm password</label><input id="r-pass2" type="password" placeholder="••••••••">
       <label><input type="checkbox" id="r-ack"> I understand there is no password recovery</label>

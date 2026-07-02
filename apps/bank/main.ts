@@ -14,7 +14,10 @@ async function main() {
     Deno.exit(1);
   }
 
-  const kv = await Deno.openKv();
+  // BANK_KV_PATH pins the KV database file — used to run several isolated
+  // bank processes on one machine (federation testing). Unset on Deno Deploy,
+  // where openKv() resolves to the platform KV.
+  const kv = await Deno.openKv(Deno.env.get('BANK_KV_PATH') || undefined);
   const banks = new Map<string, Bank>();
   for (const l of loaded) {
     const envUrl = Deno.env.get(

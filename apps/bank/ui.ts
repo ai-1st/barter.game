@@ -48,7 +48,8 @@ class UiError extends RpcError {
   }
 }
 
-const HANDLE_RE = /^[a-z0-9_-]{3,32}$/;
+const HANDLE_RE = /^[a-z0-9_-]{2,32}$/;
+const HANDLE_RULE = 'handle must be 2-32 chars: lowercase letters, digits, _ or -';
 
 export async function handleUiRequest(
   bank: Bank,
@@ -204,7 +205,7 @@ export async function handlePublicUiRoute(
   if (handleMatch && request.method === 'GET') {
     const handle = handleMatch[1]!;
     if (!HANDLE_RE.test(handle)) {
-      return json(400, { code: -32600, message: 'invalid handle' });
+      return json(400, { code: -32600, message: HANDLE_RULE });
     }
     const info = await getHandleInfo(bank, handle);
     if (info.available) {
@@ -342,7 +343,7 @@ async function handleRegister(
     return json(400, { code: -32600, message: 'invalid register body' });
   }
   if (!HANDLE_RE.test(handle)) {
-    return json(400, { code: -32600, message: 'invalid handle' });
+    return json(400, { code: -32600, message: HANDLE_RULE });
   }
   if (!isValidBase58(pubkey)) {
     return json(422, { code: -32012, message: 'invalid pubkey' });
@@ -366,7 +367,7 @@ async function handleRegister(
 
 async function handleKeystoreGet(bank: Bank, handle: string): Promise<Response> {
   if (!HANDLE_RE.test(handle)) {
-    return json(400, { code: -32600, message: 'invalid handle' });
+    return json(400, { code: -32600, message: HANDLE_RULE });
   }
   // Simple rate limiter keyed by handle (5/min).
   const key: Deno.KvKey = [bank.pubkey, 'rl_keystore', handle];
