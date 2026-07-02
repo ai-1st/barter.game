@@ -87,3 +87,31 @@ label { display: block; margin: 0.75rem 0 0.25rem; color: var(--muted); font-siz
 .flex { display: flex; gap: 1rem; align-items: center; }
 .flex.col { flex-direction: column; align-items: stretch; }
 .scan { width: 100%; max-width: 320px; aspect-ratio: 1; background: white; padding: 0.5rem; border-radius: 0.5rem; }
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+.modal .qr {
+  width: 100%;
+  max-width: 320px;
+  image-rendering: pixelated;
+  background: white;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+}
+.modal .flex { justify-content: center; margin-top: 0.75rem; }

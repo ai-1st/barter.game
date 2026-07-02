@@ -13,6 +13,7 @@ import {
 import {
   emptyUiState,
   getAccountBalance,
+  getAddress,
   getHandleByPubkey,
   getHandleInfo,
   getKeystore,
@@ -237,6 +238,30 @@ export async function handlePublicUiRoute(
     });
   }
 
+  // Public issuer resolution — everything this bank knows about a pubkey:
+  // handle, newest Address doc, vouchers issued. Used by profile landing
+  // pages, the Network screen, and webapp QR scans. Read-only public data.
+  const resolveMatch = uiPath.match(/^\/resolve\/([^/]+)$/);
+  if (resolveMatch && request.method === 'GET') {
+    const pk = resolveMatch[1]!;
+    if (!isValidBase58(pk)) {
+      return json(400, { code: -32600, message: 'invalid pubkey' });
+    }
+    const [handle, address, vouchers] = await Promise.all([
+      getHandleByPubkey(bank, pk),
+      getAddress(bank, pk),
+      listVouchersByIssuer(bank, pk),
+    ]);
+    return json(200, {
+      pubkey: pk,
+      handle: handle ?? null,
+      address: address ?? null,
+      vouchers,
+      bank: bank.pubkey,
+      bank_url: bank.url,
+    });
+  }
+
   return null;
 }
 
@@ -270,7 +295,9 @@ async function requireAuth(
   if (authdoc.method !== request.method) {
     throw new UiError(400, -32001, 'method mismatch');
   }
-  const expectedPath = new URL(request.url).pathname;
+  // The client signs pathname + query so query params are tamper-proof too.
+  const reqUrl = new URL(request.url);
+  const expectedPath = reqUrl.pathname + reqUrl.search;
   if (authdoc.path !== expectedPath) {
     throw new UiError(400, -32001, 'path mismatch');
   }
@@ -850,51 +877,179 @@ function pathnameJson(pathname: string): boolean {
   return pathname.endsWith('.json');
 }
 
-async function barterJson(bank: Bank, match: BarterMatch): Promise<Response> {
+// Assemble the machine payload for a Barter Link. Every landing kind resolves
+// to an envelope { v, kind, pubkey?, bank, bank_url, docs[] } whose docs are
+// standard signed protocol documents the receiver verifies locally.
+async function barterEnvelope(
+  bank: Bank,
+  match: BarterMatch,
+): Promise<Record<string, unknown> | null> {
+  const base = { v: 1, bank: bank.pubkey, bank_url: bank.url };
   if (match.kind === 'i') {
-    const vouchers = await listVouchersByIssuer(bank, match.value);
-    return json(200, { kind: 'profile', pubkey: match.value, bank: bank.pubkey, docs: vouchers });
+    const [vouchers, address, handle] = await Promise.all([
+      listVouchersByIssuer(bank, match.value),
+      getAddress(bank, match.value),
+      getHandleByPubkey(bank, match.value),
+    ]);
+    return {
+      ...base,
+      kind: 'profile',
+      pubkey: match.value,
+      handle: handle ?? null,
+      docs: [...(address ? [address] : []), ...vouchers],
+    };
   }
   if (match.kind === 'o') {
     const offer = await getOffer(bank, match.value);
-    if (!offer) return notFound();
-    return json(200, { kind: 'offer', docs: [offer] });
+    if (!offer) return null;
+    return { ...base, kind: 'offer', docs: [offer] };
   }
   if (match.kind === 'v' || match.kind === 'q') {
     const order = await getOrder(bank, match.value);
-    if (!order) return notFound();
-    const kind = match.kind === 'v' ? 'invoice' : 'cheque';
-    return json(200, { kind, docs: [order] });
+    if (!order) return null;
+    // Enforce the specialization: /v is an invoice (credit-only), /q a cheque
+    // (debit-only). A two-sided Order is not addressable via these routes.
+    if (match.kind === 'v' && order.debit) return null;
+    if (match.kind === 'q' && order.credit) return null;
+    const handle = await getHandleByPubkey(bank, order.pubkey);
+    return {
+      ...base,
+      kind: match.kind === 'v' ? 'invoice' : 'cheque',
+      pubkey: order.pubkey,
+      handle: handle ?? null,
+      docs: [order],
+    };
   }
-  return json(200, { kind: 'invite', token: match.value });
+  return { ...base, kind: 'invite', token: match.value, docs: [] };
 }
 
+async function barterJson(bank: Bank, match: BarterMatch): Promise<Response> {
+  const envelope = await barterEnvelope(bank, match);
+  if (!envelope) return notFound();
+  return new Response(JSON.stringify(envelope), {
+    status: 200,
+    headers: { 'Content-Type': 'application/barter+json;v=1' },
+  });
+}
+
+// Human landing page. Serves a real page for camera-browser visitors (register
+// & trust / pay / claim CTAs into the SPA) while remaining a doc carrier: the
+// signed payload is embedded via <script type="application/barter+json">,
+// <link rel="alternate">, and flat barter:* meta tags, per the extraction
+// precedence in docs/ui/claude-ui.md §5.
 async function barterHtml(bank: Bank, match: BarterMatch): Promise<Response> {
-  const payload = await barterPayload(bank, match);
-  const html = `<!doctype html>
-<html>
+  const envelope = await barterEnvelope(bank, match);
+  if (!envelope) {
+    return new Response(landingShell(bank, 'Not found', '<p class="muted">This Barter Link does not resolve at this bank.</p>', '', ''), {
+      status: 404,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+  const payload = canonicalize(envelope);
+  const selfPath = `/${bank.name}/${match.kind}/${match.value}`;
+  const jsonHref = `${bank.url.replace(/\/[^/]+$/, '')}${selfPath}?format=json`;
+  const appBase = `${bank.url}/ui/app`;
+
+  let title = 'barter.game';
+  let body = '';
+  let cta = '';
+  const kind = envelope.kind as string;
+
+  if (kind === 'profile') {
+    const handle = (envelope.handle as string | null) ?? shorten(match.value);
+    const docs = envelope.docs as Array<Record<string, unknown>>;
+    const vouchers = docs.filter((d) => d.type === 'voucher');
+    title = `${handle} on barter.game`;
+    body = `
+      <h2>${escapeHtml(handle)}</h2>
+      <p class="mono muted">${escapeHtml(shorten(match.value))} @ ${escapeHtml(bank.name)}</p>
+      <p>invites you to barter. Their vouchers:</p>
+      ${vouchers.length === 0 ? '<p class="muted">No vouchers published yet.</p>' : ''}
+      ${vouchers.map((v) => `<div class="card"><b>${escapeHtml(String(v.name ?? ''))}</b>${v.description_md ? `<p class="muted">${escapeHtml(String(v.description_md))}</p>` : ''}</div>`).join('')}
+    `;
+    cta = `
+      <a class="btn primary" href="${appBase}#/land/i/${escapeHtml(match.value)}">Register &amp; trust ${escapeHtml(handle)}</a>
+      <a class="btn" href="${appBase}#/land/i/${escapeHtml(match.value)}">I already have an account</a>
+    `;
+  } else if (kind === 'invoice' || kind === 'cheque') {
+    const order = (envelope.docs as Array<Record<string, unknown>>)[0]!;
+    const side = (kind === 'invoice' ? order.credit : order.debit) as Record<string, unknown>;
+    const handle = (envelope.handle as string | null) ?? shorten(String(order.pubkey));
+    const verb = kind === 'invoice' ? 'Pay' : 'Claim';
+    title = `${verb} ${handle} · barter.game`;
+    body = `
+      <h2>${kind === 'invoice' ? `Pay ${escapeHtml(handle)}` : `A cheque from ${escapeHtml(handle)}`}</h2>
+      <p class="muted">${kind === 'invoice' ? 'This is a request for payment.' : 'You can claim voucher funds from this cheque.'}</p>
+      <div class="card">
+        <div>Amount: <b>${side.min === side.max ? escapeHtml(String(side.max)) : `${escapeHtml(String(side.min))}–${escapeHtml(String(side.max))}`}</b></div>
+        <div class="mono muted">voucher ${escapeHtml(shorten(String(side.voucher)))}</div>
+        <div class="mono muted">${kind === 'invoice' ? 'payee' : 'payer'} ${escapeHtml(shorten(String(order.pubkey)))}</div>
+      </div>
+    `;
+    cta = `
+      <a class="btn primary" href="${appBase}#/land/${match.kind}/${escapeHtml(match.value)}">${verb} with barter.game</a>
+      <a class="btn" href="${appBase}">What is this?</a>
+    `;
+  } else if (kind === 'offer') {
+    title = 'Offer · barter.game';
+    body = `<h2>A trade offer</h2><p class="muted">Open it in the app to see terms and accept.</p>`;
+    cta = `<a class="btn primary" href="${appBase}#/land/o/${escapeHtml(match.value)}">View offer</a>`;
+  } else {
+    title = 'Invite · barter.game';
+    body = `<h2>You are invited to barter</h2>`;
+    cta = `<a class="btn primary" href="${appBase}">Open barter.game</a>`;
+  }
+
+  const head = `
+  <title>${escapeHtml(title)}</title>
+  <link rel="alternate" type="application/barter+json;v=1" href="${escapeHtml(jsonHref)}">
+  <meta name="barter:version" content="1">
+  <meta name="barter:type" content="${escapeHtml(kind)}">
+  <meta name="barter:bank" content="${bank.pubkey}">
+  ${envelope.pubkey ? `<meta name="barter:pubkey" content="${escapeHtml(String(envelope.pubkey))}">` : ''}
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="Federated mutual-credit barter — verify, then trade.">
+  <meta property="og:type" content="website">
+  <script type="application/barter+json" id="barter-payload">${payload.replace(/</g, '\\u003c')}</script>`;
+
+  return new Response(landingShell(bank, title, body, cta, head), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
+}
+
+function landingShell(bank: Bank, title: string, body: string, cta: string, extraHead: string): string {
+  return `<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>barter.game · ${match.kind}</title>
-  <link rel="alternate" type="application/barter+json;v=1" href="?format=json">
-  <meta name="barter:version" content="1">
-  <meta name="barter:type" content="${match.kind}">
-  <meta name="barter:bank" content="${bank.pubkey}">
+  ${extraHead || `<title>${escapeHtml(title)}</title>`}
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #131722; color: #e6e9f0; font: 16px/1.5 system-ui, sans-serif; }
+    .wrap { max-width: 420px; margin: 0 auto; padding: 32px 20px; }
+    .brand { font-weight: 700; letter-spacing: .02em; color: #7cb9f2; margin-bottom: 24px; }
+    .card { background: #1b2130; border: 1px solid #2a3245; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+    .btn { display: block; text-align: center; margin: 10px 0; padding: 12px; border-radius: 10px; background: #232b3d; color: #e6e9f0; text-decoration: none; font-weight: 600; }
+    .btn.primary { background: #4da3ff; color: #0b1020; }
+    .muted { color: #8b93a7; }
+    .mono { font-family: ui-monospace, monospace; font-size: .85em; }
+    .foot { margin-top: 28px; font-size: .8em; color: #8b93a7; }
+  </style>
 </head>
 <body>
-  <h1>barter.game</h1>
-  <p>Kind: ${match.kind}</p>
-  <pre id="barter-payload" type="application/barter+json">${escapeHtml(payload)}</pre>
+  <div class="wrap">
+    <div class="brand">barter.game</div>
+    ${body}
+    <div class="cta">${cta}</div>
+    <p class="foot">Signatures are verified in your browser before anything is trusted. Bank: <span class="mono">${escapeHtml(shorten(bank.pubkey))}</span> · ${escapeHtml(bank.name)}</p>
+  </div>
 </body>
 </html>`;
-  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
-async function barterPayload(bank: Bank, match: BarterMatch): Promise<string> {
-  const j = await barterJson(bank, match);
-  const body = await j.json();
-  return canonicalize(body);
+function shorten(s: string): string {
+  return s.length > 16 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
 }
 
 function escapeHtml(s: string): string {

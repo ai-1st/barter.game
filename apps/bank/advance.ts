@@ -96,8 +96,14 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
     }
   }
 
-  // 2. Hold
-  const notHeld = states.filter((s) => !s.held && !s.settled && s.ready);
+  // 2. Hold — only when EVERY owned record of the deal is ready (README §2.0:
+  // "A bank holds its own records in a deal when all of its records are
+  // `ready`"). Holding or settling a subset would let one half of a
+  // debit/credit pair apply without the other, breaking the sum invariant.
+  const allReady = states.every((s) => s.ready || s.settled);
+  if (!allReady) return;
+
+  const notHeld = states.filter((s) => !s.held && !s.settled);
   if (notHeld.length > 0) {
     const holdOk = await acquireHoldsForDeal(bank, dealId, notHeld);
     if (holdOk) {
@@ -109,12 +115,16 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
     }
   }
 
-  // 3. Settle
-  const held = states.filter((s) => s.held && !s.settled);
-  if (held.length === 0) return;
+  // 3. Settle — pair each held record with ITS resolved order (indexes into
+  // `states`/`resolved` stay aligned via zip; a filtered array must not be
+  // indexed against the unfiltered `resolved`).
+  const heldPairs = states
+    .map((st, i) => ({ st, order: resolved[i]! }))
+    .filter(({ st }) => st.held && !st.settled);
+  if (heldPairs.length === 0) return;
 
-  const ownLeadStates = held.filter((_, i) => resolved[i]!.lead);
-  const ownFollowStates = held.filter((_, i) => !resolved[i]!.lead);
+  const ownLeadStates = heldPairs.filter(({ order }) => order.lead).map(({ st }) => st);
+  const ownFollowStates = heldPairs.filter(({ order }) => !order.lead).map(({ st }) => st);
 
   // Settle this bank's lead records first.
   const thisBankSettleSigs: Signature[] = [];

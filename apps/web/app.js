@@ -10,6 +10,7 @@ import {
   signDoc,
   verifyDoc,
 } from './protocol.js';
+import { qrDataUrl, startScanner } from './qr.js';
 
 // ---------------- key encryption (PBKDF2 + AES-GCM) ----------------
 
@@ -145,10 +146,15 @@ function route() {
   const [p, ...rest] = hash.split('/').filter(Boolean);
   const app = document.getElementById('app');
   app.innerHTML = '';
+  stopActiveScanner();
+
+  // Landing routes work logged-out (they carry the register CTA themselves).
+  if (p === 'land' && rest[0] && rest[1]) return renderLanding(app, rest[0], rest[1]);
 
   if (!state.user) {
     if (p === 'register') return renderRegister(app);
     if (p === 'connect') return renderConnect(app);
+    if (p === 'unlock') return renderUnlock(app);
     return renderWelcome(app);
   }
 
@@ -163,6 +169,9 @@ function route() {
   if (p === 'cheques') return renderCheques(app);
   if (p === 'discover') return renderDiscover(app);
   if (p === 'deal' && rest[0]) return renderDeal(app, rest[0]);
+  if (p === 'activity') return renderActivity(app);
+  if (p === 'network') return renderNetwork(app);
+  if (p === 'scan') return renderScan(app);
   if (p === 'settings') return renderSettings(app);
   return renderDashboard(app);
 }
@@ -181,6 +190,9 @@ function header(title) {
       <a href="#/invoices" ${title==='Invoices'?'class="active"':''}>Invoices</a>
       <a href="#/cheques" ${title==='Cheques'?'class="active"':''}>Cheques</a>
       <a href="#/discover" ${title==='Discover'?'class="active"':''}>Discover</a>
+      <a href="#/activity" ${title==='Activity'?'class="active"':''}>Activity</a>
+      <a href="#/network" ${title==='Network'?'class="active"':''}>Network</a>
+      <a href="#/scan" ${title==='Scan'?'class="active"':''}>Scan</a>
       <a href="#/settings">Settings</a>
     </nav>
     <button class="btn secondary" onclick="lock()">Lock</button>
@@ -263,9 +275,10 @@ window.doRegister = async function() {
     if (data.code) throw new Error(`${data.code}: ${data.message}`);
     state.user = { handle, pubkey: pubkeyBase58, privateKey };
     state.uiState = await uiGet('/state');
+    toast(`Welcome, ${handle}`);
+    if (resumePendingAction()) return;
     location.hash = '#/';
     route();
-    toast(`Welcome, ${handle}`);
   } catch (e) {
     err.textContent = e.message;
   }
@@ -326,6 +339,7 @@ window.doUnlock = async function() {
     if (pubkeyBase58 !== data.pubkey) throw new Error('wrong password');
     state.user = { handle, pubkey: pubkeyBase58, privateKey: seed };
     state.uiState = await uiGet('/state').catch(() => ({ pubkey: pubkeyBase58, trusted: [], contacts: [], banks: [], catalog: [], drafts: [], prefs: {}, rev: 0 }));
+    if (resumePendingAction()) return;
     location.hash = '#/';
     route();
   } catch (e) {
@@ -366,12 +380,16 @@ async function renderVouchers(app) {
   const vouchers = await rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []);
   let body = header('Vouchers');
   body += `<div class="container">`;
-  body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/vouchers/new">Create voucher</a></div>`;
+  body += `<div class="flex" style="margin-bottom:1rem">
+    <a class="btn" href="#/vouchers/new">Create voucher</a>
+    <button class="btn secondary" onclick="showShare('i', '${escapeHtml(state.user.pubkey)}', 'My issuer profile')">Share my profile QR</button>
+  </div>`;
   body += `<div class="grid">${vouchers.map(v => `
     <div class="card">
       <div><strong>${escapeHtml(v.name)}</strong></div>
       <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
       <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
+      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(v.pubkey)}', '${escapeHtml(v.name)}')">Share QR</button>
     </div>
   `).join('') || '<p class="small">No vouchers</p>'}</div>`;
   body += `</div>`;
@@ -428,6 +446,7 @@ async function renderInvoices(app) {
       <div>Receive ${o.credit.max} of ${escapeHtml(o.credit.voucher.slice(0,12))}…</div>
       <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
       <div class="small">state: ${o.state}</div>
+      <button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>
     </div>
   `).join('') || '<p class="small">No invoices</p>';
   body += `</div>`;
@@ -517,6 +536,8 @@ async function renderOrders(app) {
         <div>${o.kind === 'two-sided' ? 'Swap' : o.kind} · rate ${o.rate} · lead ${o.lead}</div>
         <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
         <div class="small">${o.debit ? `give ${o.debit.min}-${o.debit.max}` : ''} ${o.credit ? `· get ${o.credit.min}-${o.credit.max}` : ''}</div>
+        ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
+        ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${escapeHtml(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
       </div>
     `).join('') || '<p class="small">No orders</p>'}
   </div>`;
@@ -656,17 +677,429 @@ async function renderSettings(app) {
     ${card('Identity', `
       <p>Handle: ${escapeHtml(state.user.handle || '')}</p>
       <p class="mono small">${escapeHtml(state.user.pubkey)}</p>
+      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(state.user.pubkey)}', 'My issuer profile')">My profile QR</button>
     `)}
     ${card('Bank', `
       <p>${escapeHtml(state.bankName)}</p>
       <p class="mono small">${escapeHtml(state.bankPubkey)}</p>
       <p class="small">${escapeHtml(state.bankUrl)}</p>
     `)}
+    ${card('Recovery kit', `
+      <p class="small">Download your encrypted keystore. Together with your password it restores this account anywhere; without the password it is useless — and there is no password recovery.</p>
+      <button class="btn secondary" onclick="downloadBackup()">Download encrypted backup</button>
+    `)}
     ${card('Actions', `
       <button class="btn danger" onclick="lock()">Lock</button>
     `)}
   </div>`;
 }
+
+window.downloadBackup = async function() {
+  try {
+    const res = await fetch(`${state.basePath}/ui/keystore/${state.user.handle}`);
+    const data = await res.json();
+    if (data.code) throw new Error(data.message || 'no server keystore for this handle');
+    const kit = {
+      barter_recovery_kit: 1,
+      handle: state.user.handle,
+      pubkey: state.user.pubkey,
+      bank: { name: state.bankName, pubkey: state.bankPubkey, url: state.bankUrl },
+      keystore: data.keystore,
+      exported_at: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(kit, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `barter-recovery-${state.user.handle}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+};
+
+// ---------------- share modal (QR) ----------------
+
+// Build the public Barter Link for a kind/value at this bank and show it as a
+// QR + copyable link. REFERENCE mode links per the spec's QR byte budget.
+window.showShare = function(kind, value, title) {
+  const link = `${state.bankUrl}/${kind}/${value}`;
+  let dataUrl = '';
+  try { dataUrl = qrDataUrl(link); } catch (e) { toast(e.message, 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${escapeHtml(title || 'Share')}</h3>
+      <img class="qr" src="${dataUrl}" alt="QR code">
+      <div class="mono small" style="word-break:break-all;margin:0.5rem 0">${escapeHtml(link)}</div>
+      <div class="flex">
+        <button class="btn" id="share-copy">Copy link</button>
+        <button class="btn secondary" id="share-close">Close</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#share-close').onclick = () => overlay.remove();
+  overlay.querySelector('#share-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); toast('Link copied'); }
+    catch { toast('Copy failed — select the text manually', 'error'); }
+  };
+  document.body.appendChild(overlay);
+};
+
+// ---------------- scanning + Barter Link handling ----------------
+
+let activeScannerStop = null;
+function stopActiveScanner() {
+  if (activeScannerStop) { try { activeScannerStop(); } catch {} activeScannerStop = null; }
+}
+
+async function renderScan(app) {
+  app.innerHTML = header('Scan') + `<div class="container" style="max-width:480px">
+    ${card('Scan a Barter QR', `
+      <video id="scan-video" style="width:100%;border-radius:0.5rem;background:#000"></video>
+      <p class="small" id="scan-status">Requesting camera…</p>
+      <label>…or paste a Barter Link</label>
+      <input id="scan-manual" placeholder="https://…/alice/i/PUBKEY">
+      <button class="btn" style="width:100%;margin-top:0.5rem" onclick="handleScanned(document.getElementById('scan-manual').value.trim())">Open link</button>
+    `)}
+  </div>`;
+  const video = document.getElementById('scan-video');
+  const status = document.getElementById('scan-status');
+  try {
+    activeScannerStop = await startScanner(video, (text) => {
+      activeScannerStop = null;
+      window.handleScanned(text);
+    });
+    status.textContent = 'Point the camera at a barter QR code.';
+  } catch (e) {
+    status.textContent = `Camera unavailable (${e.message}). Paste a link below instead.`;
+  }
+}
+
+// Parse a scanned/pasted Barter Link and dispatch to the landing handler.
+window.handleScanned = function(text) {
+  if (!text) return;
+  try {
+    const u = new URL(text);
+    const m = u.pathname.match(/\/(i|v|q|o|x)\/([^/]+?)(?:\.json)?$/);
+    if (!m) { toast('Not a Barter Link', 'error'); return; }
+    // Same bank origin → in-app landing; foreign bank → carry the origin+path.
+    sessionStorage.setItem('barter_scan_origin', `${u.origin}${u.pathname.replace(/\/(i|v|q|o|x)\/.*$/, '')}`);
+    location.hash = `#/land/${m[1]}/${m[2]}`;
+    route();
+  } catch {
+    toast('Not a valid URL', 'error');
+  }
+};
+
+// Fetch the machine payload for a landing target. Prefers the scanned bank
+// base (may be a foreign bank), falls back to this SPA's own bank.
+async function fetchBarterEnvelope(kind, value) {
+  const scanBase = sessionStorage.getItem('barter_scan_origin');
+  const bases = [];
+  if (scanBase) bases.push(scanBase);
+  bases.push(state.bankUrl || state.basePath);
+  for (const base of bases) {
+    try {
+      const res = await fetch(`${base}/${kind}/${value}?format=json`);
+      if (!res.ok) continue;
+      const env = await res.json();
+      if (env && Array.isArray(env.docs)) return { env, base };
+    } catch { /* try next base */ }
+  }
+  throw new Error('could not fetch the signed documents');
+}
+
+// Verify every doc in the envelope client-side before trusting anything.
+function verifyEnvelope(env) {
+  for (const doc of env.docs) {
+    if (!doc.sig || !verifyDoc(doc, doc.sig, doc.pubkey)) {
+      throw new Error(`signature check failed on a ${doc.type} document`);
+    }
+  }
+  return true;
+}
+
+// ---------------- landing journeys ----------------
+
+async function renderLanding(app, kind, value) {
+  let env, base;
+  try {
+    ({ env, base } = await fetchBarterEnvelope(kind, value));
+    verifyEnvelope(env);
+  } catch (e) {
+    app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
+      ${card('Barter Link', `<p class="error">${escapeHtml(e.message)}</p><p><a href="#/">Home</a></p>`)}</div>`;
+    return;
+  }
+
+  const verified = `<p class="small success">✓ Signatures verified in this browser</p>`;
+
+  if (env.kind === 'profile') {
+    const handle = env.handle || (env.pubkey || value).slice(0, 12) + '…';
+    const vouchers = env.docs.filter(d => d.type === 'voucher');
+    const body = `
+      <h2>${escapeHtml(handle)}</h2>
+      <p class="mono small">${escapeHtml(env.pubkey || value)}</p>
+      ${verified}
+      ${vouchers.map(v => `<div class="card"><strong>${escapeHtml(v.name)}</strong>${v.description_md ? `<p class="small">${escapeHtml(v.description_md)}</p>` : ''}</div>`).join('') || '<p class="small">No vouchers published yet.</p>'}
+    `;
+    if (!state.user) {
+      sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'trust', pubkey: env.pubkey || value, handle: env.handle, bank: env.bank, bank_url: env.bank_url }));
+      app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card('Issuer profile', body + `
+        <p class="small">Registering will add <b>${escapeHtml(handle)}</b> to your trusted issuers.</p>
+        <a class="btn" style="display:block;text-align:center" href="#/register">Register &amp; trust ${escapeHtml(handle)}</a>
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in &amp; trust</a>
+      `)}</div>`;
+    } else {
+      app.innerHTML = header('Profile') + `<div class="container" style="max-width:480px">${card('Issuer profile', body + `
+        <button class="btn" style="width:100%" onclick="applyTrust('${escapeHtml(env.pubkey || value)}', '${escapeHtml(env.handle || '')}')">Trust ${escapeHtml(handle)}</button>
+      `)}</div>`;
+    }
+    return;
+  }
+
+  if (env.kind === 'invoice' || env.kind === 'cheque') {
+    const order = env.docs.find(d => d.type === 'order');
+    const side = env.kind === 'invoice' ? order.credit : order.debit;
+    const who = env.handle || order.pubkey.slice(0, 12) + '…';
+    const amount = side.min === side.max ? String(side.max) : `${side.min}–${side.max}`;
+    const verb = env.kind === 'invoice' ? 'Pay' : 'Claim';
+    const body = `
+      <h2>${env.kind === 'invoice' ? `Pay ${escapeHtml(who)}` : `Cheque from ${escapeHtml(who)}`}</h2>
+      ${verified}
+      <div class="card">
+        <div>Amount: <strong>${escapeHtml(amount)}</strong></div>
+        <div class="mono small">voucher ${escapeHtml(side.voucher.slice(0, 16))}…</div>
+      </div>`;
+    sessionStorage.setItem('barter_pending', JSON.stringify({ action: env.kind, orderHash: hashDoc(order), kind, value, base }));
+    if (!state.user) {
+      app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card(env.kind, body + `
+        <a class="btn" style="display:block;text-align:center" href="#/register">Register &amp; ${verb.toLowerCase()}</a>
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in &amp; ${verb.toLowerCase()}</a>
+      `)}</div>`;
+    } else {
+      app.innerHTML = header(verb) + `<div class="container" style="max-width:480px">${card(env.kind, body + `
+        <label>Amount</label><input id="act-amount" type="number" value="${escapeHtml(String(side.max))}" min="${escapeHtml(String(side.min))}" max="${escapeHtml(String(side.max))}">
+        <button class="btn" style="width:100%;margin-top:0.5rem" onclick="actOnOrder('${env.kind}')">${verb} now</button>
+        <p class="small error" id="act-err"></p>
+      `)}</div>`;
+    }
+    return;
+  }
+
+  app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
+    ${card('Barter Link', `<p>Kind: ${escapeHtml(env.kind)}</p>${verified}<p><a href="#/">Home</a></p>`)}</div>`;
+}
+
+// Add an issuer to the trusted list (+ their bank to known banks) with Undo.
+window.applyTrust = async function(pubkey, handle) {
+  try {
+    await uiPost('/trusted', { pubkey });
+    const pending = JSON.parse(sessionStorage.getItem('barter_pending') || '{}');
+    if (pending.bank && pending.bank_url && pending.bank !== state.bankPubkey) {
+      await uiPost('/banks', { pubkey: pending.bank, url: pending.bank_url }).catch(() => {});
+    }
+    sessionStorage.removeItem('barter_pending');
+    toast(`You now trust ${handle || pubkey.slice(0, 12)}`);
+    location.hash = '#/network';
+    route();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+};
+
+// Execute a scanned invoice (pay it) or cheque (claim it): build the matching
+// one-sided Order, submit it, and propose the deal at this bank.
+window.actOnOrder = async function(kind) {
+  const err = document.getElementById('act-err');
+  try {
+    const pending = JSON.parse(sessionStorage.getItem('barter_pending') || '{}');
+    const { env } = await fetchBarterEnvelope(pending.kind, pending.value);
+    verifyEnvelope(env);
+    const theirOrder = env.docs.find(d => d.type === 'order');
+    const theirHash = hashDoc(theirOrder);
+    const side = kind === 'invoice' ? theirOrder.credit : theirOrder.debit;
+    const amount = Number(document.getElementById('act-amount').value) || side.max;
+
+    // My side mirrors theirs: pay an invoice with a debit-only (cheque) Order;
+    // claim a cheque with a credit-only (receiving) Order.
+    // Reuse an existing account on this voucher when possible — paying MUST
+    // debit a funded account, and scattering balance across per-deal accounts
+    // would strand it.
+    let accountHash = null;
+    const docs = [];
+    try {
+      const pf = await uiGet('/portfolio');
+      const candidates = (pf.holdings || []).filter(h => h.voucher === side.voucher);
+      if (kind === 'invoice') {
+        const funded = candidates.find(h => (h.current - h.pending) >= amount);
+        if (!funded) throw new Error(`insufficient balance: you need ${amount} of this voucher to pay`);
+        accountHash = funded.account;
+      } else if (candidates.length > 0) {
+        accountHash = candidates[0].account;
+      }
+    } catch (e) {
+      if (String(e.message).includes('insufficient balance')) throw e;
+      /* portfolio unavailable — fall through to a fresh account */
+    }
+    if (!accountHash) {
+      const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: kind === 'invoice' ? 'paying' : 'receiving', voucher: side.voucher };
+      account.sig = signDoc(account, state.user.privateKey);
+      accountHash = hashDoc(account);
+      docs.push(account);
+    }
+    const mySide = { account: accountHash, voucher: side.voucher, bank: side.bank, min: amount, max: amount };
+    const order = kind === 'invoice'
+      ? { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate: 1, debit: mySide, lead: true }
+      : { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate: 1, credit: mySide, lead: false };
+    order.sig = signDoc(order, state.user.privateKey);
+    const myHash = hashDoc(order);
+    docs.push(order);
+    await rpcCall('submit_docs', { docs });
+
+    // giver = the debit-only order, receiver = the credit-only order.
+    const giver = kind === 'invoice' ? myHash : theirHash;
+    const receiver = kind === 'invoice' ? theirHash : myHash;
+    const res = await uiPost('/propose_deal', {
+      offer1: { hash: giver, debit_amount: amount, credit_amount: amount },
+      offer2: { hash: receiver, debit_amount: amount, credit_amount: amount },
+      banks: [{ pubkey: state.bankPubkey, url: state.bankUrl }],
+    });
+    sessionStorage.removeItem('barter_pending');
+    location.hash = `#/deal/${res.deal_id}`;
+    route();
+  } catch (e) {
+    if (err) err.textContent = e.message; else toast(e.message, 'error');
+  }
+};
+
+// After register/unlock, resume whatever the landing page wanted to do.
+function resumePendingAction() {
+  const raw = sessionStorage.getItem('barter_pending');
+  if (!raw) return false;
+  try {
+    const pending = JSON.parse(raw);
+    if (pending.action === 'trust') {
+      window.applyTrust(pending.pubkey, pending.handle);
+      return true;
+    }
+    if (pending.action === 'invoice' || pending.action === 'cheque') {
+      location.hash = `#/land/${pending.kind}/${pending.value}`;
+      route();
+      return true;
+    }
+  } catch { sessionStorage.removeItem('barter_pending'); }
+  return false;
+}
+
+// ---------------- activity ----------------
+
+async function renderActivity(app) {
+  const history = await uiGet('/history?limit=100').catch(() => ({ events: [] }));
+  app.innerHTML = header('Activity') + `<div class="container">
+    ${card('Transaction history', history.events.map(e => `
+      <div class="flex" style="justify-content:space-between;margin:0.4rem 0;align-items:center">
+        <a class="mono small" href="#/deal/${escapeHtml(e.deal_id)}">${escapeHtml(e.deal_id.slice(0, 12))}…</a>
+        <span>${e.direction === 'in' ? '↓' : '↑'} ${e.amount} ${escapeHtml(e.voucher_name || e.voucher.slice(0, 8))}</span>
+        <span class="chip state-${escapeHtml(e.state)}">${escapeHtml(e.state)}</span>
+      </div>
+    `).join('') || '<p class="small">No activity yet</p>')}
+  </div>`;
+}
+
+// ---------------- network (banks + trusted issuers + contacts) --------------
+
+async function renderNetwork(app) {
+  const [banks, trusted, contacts] = await Promise.all([
+    uiGet('/banks').catch(() => []),
+    uiGet('/trusted').catch(() => []),
+    uiGet('/contacts').catch(() => []),
+  ]);
+  // Resolve handles for trusted issuers (public endpoint, no auth needed).
+  const resolved = await Promise.all(trusted.map(pk =>
+    fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json()).catch(() => ({ pubkey: pk }))));
+
+  app.innerHTML = header('Network') + `<div class="container">
+    ${card('Trusted issuers', resolved.map(r => `
+      <div class="flex" style="justify-content:space-between;align-items:center;margin:0.4rem 0">
+        <span>${escapeHtml(r.handle || '')} <span class="mono small">${escapeHtml(r.pubkey.slice(0, 16))}…</span>
+          <span class="small">${(r.vouchers || []).length} voucher(s)</span></span>
+        <span>
+          <button class="btn secondary" onclick="showShare('i', '${escapeHtml(r.pubkey)}', 'Issuer profile')">QR</button>
+          <button class="btn danger" onclick="untrust('${escapeHtml(r.pubkey)}')">Remove</button>
+        </span>
+      </div>
+    `).join('') || '<p class="small">Nobody trusted yet. Scan a friend&#39;s profile QR to start.</p>')}
+    ${card('Add trusted issuer', `
+      <label>Issuer pubkey</label><input id="n-trust-pk" placeholder="base58 pubkey">
+      <button class="btn" onclick="addTrusted()">Trust</button>
+    `)}
+    ${card('Known banks', `
+      <div class="small" style="margin-bottom:0.5rem">This bank: <span class="mono">${escapeHtml(state.bankPubkey.slice(0, 16))}…</span> ${escapeHtml(state.bankUrl)}</div>
+      ${banks.map(b => `
+        <div class="flex" style="justify-content:space-between;align-items:center;margin:0.4rem 0">
+          <span class="mono small">${escapeHtml(b.pubkey.slice(0, 16))}… · ${escapeHtml(b.url)}</span>
+          <button class="btn danger" onclick="removeBank('${escapeHtml(b.pubkey)}')">Remove</button>
+        </div>
+      `).join('') || '<p class="small">No peer banks pinned</p>'}
+      <label>Bank URL</label><input id="n-bank-url" placeholder="https://…/bankname">
+      <button class="btn" onclick="addBank()">Pin bank</button>
+      <p class="small error" id="n-bank-err"></p>
+    `)}
+    ${card('Contacts', contacts.map(c => `
+      <div class="flex" style="justify-content:space-between;margin:0.4rem 0">
+        <span>${escapeHtml(c.handle || '')} <span class="mono small">${escapeHtml((c.pubkey || '').slice(0, 16))}…</span></span>
+        <button class="btn danger" onclick="removeContact('${escapeHtml(c.pubkey)}')">Remove</button>
+      </div>
+    `).join('') || '<p class="small">No contacts</p>')}
+  </div>`;
+}
+
+window.untrust = async function(pk) {
+  try { await uiDelete(`/trusted/${pk}`); toast('Removed'); route(); }
+  catch (e) { toast(e.message, 'error'); }
+};
+window.addTrusted = async function() {
+  const pk = document.getElementById('n-trust-pk').value.trim();
+  if (!pk) return;
+  try { await uiPost('/trusted', { pubkey: pk }); toast('Trusted'); route(); }
+  catch (e) { toast(e.message, 'error'); }
+};
+window.removeBank = async function(pk) {
+  try { await uiDelete(`/banks/${pk}`); toast('Removed'); route(); }
+  catch (e) { toast(e.message, 'error'); }
+};
+window.addBank = async function() {
+  const url = document.getElementById('n-bank-url').value.trim().replace(/\/$/, '');
+  const err = document.getElementById('n-bank-err');
+  try {
+    // Pin pubkey+url together: fetch the bank's discovery doc first.
+    const disc = await fetch(`${url}/barter-bank.json`).then(r => r.json());
+    if (!disc.pubkey) throw new Error('not a barter bank');
+    await uiPost('/banks', { pubkey: disc.pubkey, url });
+    toast(`Pinned ${disc.name || 'bank'}`);
+    route();
+  } catch (e) { err.textContent = e.message; }
+};
+window.removeContact = async function(pk) {
+  try { await uiDelete(`/contacts/${pk}`); toast('Removed'); route(); }
+  catch (e) { toast(e.message, 'error'); }
+};
+
+// ---------------- auto-lock ----------------
+
+let lastActivity = Date.now();
+const AUTOLOCK_MS = 10 * 60 * 1000;
+['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+  document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
+setInterval(() => {
+  if (state.user && Date.now() - lastActivity > AUTOLOCK_MS) {
+    toast('Locked after inactivity');
+    window.lock();
+  }
+}, 30000);
 
 // ---------------- boot ----------------
 
