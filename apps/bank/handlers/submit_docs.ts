@@ -38,7 +38,15 @@ export async function submitDocs(
   const stored: string[] = [];
   const offers: string[] = [];
 
-  for (const raw of docsRaw) {
+  // Process docs in dependency order regardless of array order: an Order in
+  // the same batch may reference an Account (which may reference a Voucher)
+  // that appears after it. Callers shouldn't have to know the topology.
+  const typeRank = (t: unknown): number =>
+    t === 'voucher' ? 0 : t === 'account' ? 1 : t === 'address' ? 2 : 3;
+  const docsOrdered = [...docsRaw].sort((a, b) =>
+    typeRank((a as Record<string, unknown>)?.type) - typeRank((b as Record<string, unknown>)?.type));
+
+  for (const raw of docsOrdered) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new RpcError(-32600, 'invalid doc');
     }
