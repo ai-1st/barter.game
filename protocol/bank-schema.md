@@ -210,22 +210,26 @@ Mandate: BaseDoc & {
   deal_id: ULID;            // deal-wide id supplied by the coordinator (secret; sealed in RecordDetails)
   order: Base58SHA256;      // the Order whose conditions these records satisfy
   bank: Base58PubKey;       // the bank this Mandate is addressed to
-  records: Base58SHA256[];  // this bank's records (for `order`, in this deal) the bank should act on
+  records: Base58SHA256[];  // EVERY record satisfying `order` in this deal — across ALL banks
 }
 ```
 
-`Mandate.pubkey` is the coordinator; `Mandate.sig` is the coordinator's signature over the canonical unsigned doc. The coordinator submits the signed Mandate **together with the Record bodies** it lists (see `bank-rpc.md` §2.1), so the request is self-contained.
+`Mandate.pubkey` is the coordinator; `Mandate.sig` is the coordinator's signature over the canonical unsigned doc. The coordinator submits the signed Mandate **together with all the Record bodies** it lists (see `bank-rpc.md` §2.1), so the request is self-contained. Record bodies are safe to share across banks: they are bank-signed, content-addressed, and their `details` (holder, account, pair, deal binding) stay behind an opaque hash — so the bank checking an Order sees the *amounts and sides* of the Order's foreign legs without learning anything about foreign holders or accounts.
 
 When a bank receives a Mandate:
 
 1. Verify the coordinator's signature.
 2. Verify `Mandate.bank` equals the bank's own pubkey.
-3. Resolve `Mandate.order` to a stored holder Order, and verify every hash in `Mandate.records` is a record this bank created for `deal_id` whose `details.coordinator` equals `Mandate.pubkey` (the anti-hijack binding — a Mandate signed by anyone else is rejected) and whose `Record.order` is `Mandate.order`.
-4. Validate the Order's conditions (rate, `min`/`max`, cumulative and account limits, balance) against the listed records, using the counterparty amount supplied at `create_records` for the cross-bank rate check (see §1.4).
-5. Reject a **duplicate** Mandate for the same `(deal_id, order)` — the unit of work is accepted at most once.
-6. Only then may the bank advance those records out of `created`.
+3. Resolve `Mandate.order` to a stored holder Order.
+4. For each hash in `Mandate.records`:
+   - **Local record** (minted by this bank): verify it was created for `deal_id`, that `details.coordinator` equals `Mandate.pubkey` (the anti-hijack binding — a Mandate signed by anyone else is rejected), and that `Record.order` is `Mandate.order`.
+   - **Foreign record**: the supplied body must hash to the listed value, be signed by its minting bank, reference `Mandate.order`, and be minted by a bank one of the Order's sides names. The bank stores the body.
+5. Verify **local completeness**: every record this bank minted for `(deal_id, order)` is listed — a Mandate cannot silently drop legs.
+6. Validate the Order's conditions against the FULL listed set: per-record `min`/`max` and account bindings on the local side (the foreign bank enforces its own side), cumulative and account limits, balance coverage, and — for a two-sided Order — the rate `total_debit / total_credit <= rate` computed over **all** listed records, local and foreign alike. A two-sided Order whose Mandate lists no credit-side records fails the rate check outright (this closes the missing-leg attack).
+7. Reject a **duplicate** Mandate for the same `(deal_id, order)` — the unit of work is accepted at most once.
+8. Only then may the bank advance its own records out of `created`.
 
-The coordinator sends a Mandate per Order per bank. A bank never sees another bank's record bodies — only its own slice — preserving the visibility boundary (`README.md` §2.3).
+The coordinator sends a Mandate per Order per bank; the `records` list is identical across the addressed banks (it is the Order's whole-deal footprint), so every bank checks the same set and a split-brain coordinator is caught by the bank whose slice disagrees.
 
 ### 1.7 Subscription
 

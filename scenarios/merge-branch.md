@@ -270,10 +270,11 @@ coordinator pubkey.
 
 A Mandate is scoped **per (Order, bank)**, not per-bank: a deal produces one
 Mandate for each Order at each bank that holds records for that Order. The
-Coordinator builds each Mandate naming the Order it satisfies and listing only
-that bank's records for that Order, signs it, and submits it with
-`submit_mandate(mandate, records)` — the signed Mandate plus the record bodies
-it lists.
+Coordinator builds each Mandate naming the Order it satisfies and listing
+every record satisfying that Order in the deal — here each Order's records all
+live at a single bank, so each list is that bank's slice — signs it, and
+submits it with `submit_mandate(mandate, records)` — the signed Mandate plus
+the record bodies it lists.
 
 The bank rejects a duplicate Mandate for the same `(deal_id, order)`, and
 verifies that every listed record has `details.coordinator == mandate.pubkey`
