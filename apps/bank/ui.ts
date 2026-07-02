@@ -762,10 +762,15 @@ async function handleProposeDeal(
   const records: Record<string, string[]> = {};
   for (const b of banks) {
     let giver: string, receiver: string, amount: number, counter: number;
+    // counter_amount is only meaningful when a counter leg exists (the giver
+    // receives something back / the receiver gives something back); for
+    // one-sided pairings (invoice/cheque) the bank requires 0.
     if (order1.debit && order1.debit.bank === b.pubkey) {
-      giver = order1Hash; receiver = order2Hash; amount = amount1; counter = amount2;
+      giver = order1Hash; receiver = order2Hash; amount = amount1;
+      counter = (order1.credit || order2.debit) ? amount2 : 0;
     } else if (order2.debit && order2.debit.bank === b.pubkey) {
-      giver = order2Hash; receiver = order1Hash; amount = amount2; counter = amount1;
+      giver = order2Hash; receiver = order1Hash; amount = amount2;
+      counter = (order2.credit || order1.debit) ? amount1 : 0;
     } else {
       return json(422, { code: -32000, message: `bank ${b.pubkey} issues neither voucher` });
     }

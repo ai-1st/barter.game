@@ -102,17 +102,43 @@ export async function createRecords(
     throw new RpcError(-32000, 'amount outside receiver credit min/max');
   }
 
-  // Rate check for two-sided Orders. amount is this bank's voucher (the giver's
-  // debit / receiver's credit); counter_amount is the other voucher (the
-  // giver's credit / receiver's debit). One-sided Orders (invoice/cheque) have
-  // no opposite side here, so the rate is informational and skipped.
-  if (counterAmount > 0) {
-    if (giver.order.credit && amount / counterAmount > giver.order.rate + RATE_EPS) {
+  // Counter-amount validation is BANK-ASSERTED: this bank holds BOTH Orders
+  // (each holder submits their Order to every bank a side touches), so the
+  // counterparty leg is validated against the signed Orders themselves —
+  // never trusted from the caller.
+  //
+  // amount is this bank's voucher (giver's debit / receiver's credit);
+  // counter_amount is the opposite voucher (giver's credit / receiver's
+  // debit), transacted at the counterparty bank. When either Order carries
+  // that opposite side, the coordinator's counter_amount must (a) reference
+  // the SAME foreign voucher on both Orders, (b) sit inside BOTH Orders'
+  // min/max windows for that side, and (c) satisfy both rates. One-sided
+  // pairings (invoice/cheque) have no opposite side; counter_amount must be 0.
+  const giverCounter = giver.order.credit ?? null;
+  const receiverCounter = receiver.order.debit ?? null;
+  if (giverCounter && receiverCounter) {
+    if (giverCounter.voucher !== receiverCounter.voucher || giverCounter.bank !== receiverCounter.bank) {
+      throw new RpcError(-32000, 'giver credit and receiver debit reference different counter vouchers');
+    }
+  }
+  if (giverCounter || receiverCounter) {
+    if (!(counterAmount > 0)) {
+      throw new RpcError(-32000, 'counter_amount required for two-sided orders');
+    }
+    if (giverCounter && (counterAmount < giverCounter.min || counterAmount > giverCounter.max)) {
+      throw new RpcError(-32000, 'counter_amount outside giver credit min/max');
+    }
+    if (receiverCounter && (counterAmount < receiverCounter.min || counterAmount > receiverCounter.max)) {
+      throw new RpcError(-32000, 'counter_amount outside receiver debit min/max');
+    }
+    if (giverCounter && amount / counterAmount > giver.order.rate + RATE_EPS) {
       throw new RpcError(-32000, 'giver rate exceeded');
     }
-    if (receiver.order.debit && counterAmount / amount > receiver.order.rate + RATE_EPS) {
+    if (receiverCounter && counterAmount / amount > receiver.order.rate + RATE_EPS) {
       throw new RpcError(-32000, 'receiver rate exceeded');
     }
+  } else if (counterAmount !== 0) {
+    throw new RpcError(-32000, 'counter_amount must be 0 for one-sided pairings');
   }
 
   const voucher = await getVoucher(bank, voucherHash);
