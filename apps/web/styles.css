@@ -52,6 +52,7 @@ input, textarea, select {
   font: inherit;
 }
 label { display: block; margin: 0.75rem 0 0.25rem; color: var(--muted); font-size: 0.875rem; }
+label input[type="checkbox"] { width: auto; margin-right: 0.5rem; vertical-align: middle; }
 .header {
   display: flex;
   align-items: center;
