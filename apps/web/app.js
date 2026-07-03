@@ -139,6 +139,108 @@ async function uiPost(path, body) { return signedRequest('POST', path, body); }
 async function uiPut(path, body) { return signedRequest('PUT', path, body); }
 async function uiDelete(path) { return signedRequest('DELETE', path, null); }
 
+// ---------------- voucher catalog (form pickers) ----------------
+
+const handleCache = new Map();
+
+// Resolve issuer handles via the public /ui/resolve endpoint (cached).
+async function resolveHandles(pubkeys) {
+  const unique = [...new Set(pubkeys)].filter((pk) => pk && !handleCache.has(pk)).slice(0, 25);
+  await Promise.all(unique.map((pk) =>
+    fetch(`${state.basePath}/ui/resolve/${pk}`).then((r) => r.json())
+      .then((d) => handleCache.set(pk, d.handle || null))
+      .catch(() => handleCache.set(pk, null))));
+  return handleCache;
+}
+
+// Everything pickable in a voucher dropdown: vouchers known at this bank
+// merged with the user's balances, plus held vouchers the bank no longer lists.
+async function loadVoucherCatalog() {
+  const [vouchers, portfolio] = await Promise.all([
+    rpcCall('list_vouchers', {}).catch(() => []),
+    uiGet('/portfolio').catch(() => ({ holdings: [] })),
+  ]);
+  const spendable = new Map();
+  for (const h of portfolio.holdings || []) {
+    spendable.set(h.voucher, (spendable.get(h.voucher) || 0) + (h.current - h.pending));
+  }
+  const catalog = vouchers.map((v) => {
+    const hash = hashDoc(v);
+    return { hash, name: v.name, issuer: v.pubkey, mine: v.pubkey === state.user.pubkey, spendable: spendable.get(hash) || 0 };
+  });
+  for (const h of portfolio.holdings || []) {
+    if (!catalog.some((c) => c.hash === h.voucher)) {
+      catalog.push({ hash: h.voucher, name: h.name || `${h.voucher.slice(0, 8)}…`, issuer: h.issuer || '', mine: false, spendable: spendable.get(h.voucher) || 0 });
+    }
+  }
+  await resolveHandles(catalog.filter((c) => !c.mine).map((c) => c.issuer));
+  for (const c of catalog) c.issuerHandle = c.mine ? null : (handleCache.get(c.issuer) || null);
+  return catalog;
+}
+
+function voucherOptionLabel(c) {
+  const parts = [c.name];
+  if (c.mine) parts.push('you issue');
+  else if (c.issuerHandle) parts.push(`by ${c.issuerHandle}`);
+  if (c.spendable > 0) parts.push(`balance ${c.spendable}`);
+  return parts.join(' · ');
+}
+
+// 'give' surfaces funded vouchers first; 'receive' surfaces your own first.
+function voucherSelect(id, catalog, mode) {
+  const sorted = [...catalog].sort((a, b) => {
+    if (mode === 'give' && b.spendable !== a.spendable) return b.spendable - a.spendable;
+    if (a.mine !== b.mine) return a.mine ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const options = sorted.map((c) =>
+    `<option value="${escapeHtml(c.hash)}">${escapeHtml(voucherOptionLabel(c))}</option>`).join('');
+  return `<select id="${id}" onchange="toggleManualVoucher('${id}')">
+      <option value="" disabled selected>Select a voucher…</option>
+      ${options}
+      <option value="__manual__">Other — paste a voucher hash…</option>
+    </select>
+    <input id="${id}-manual" class="mono" placeholder="base58 voucher hash" style="display:none;margin-top:0.5rem">`;
+}
+
+window.toggleManualVoucher = function(id) {
+  const manual = document.getElementById(`${id}-manual`);
+  manual.style.display = document.getElementById(id).value === '__manual__' ? '' : 'none';
+};
+
+function selectedVoucher(id) {
+  const v = document.getElementById(id).value;
+  if (v === '__manual__') return document.getElementById(`${id}-manual`).value.trim();
+  return v;
+}
+
+// Reuse an existing account on this voucher when possible — scattering balance
+// across per-form accounts would strand it (same rule as actOnOrder). Appends
+// a fresh signed account doc to `docs` only when none exists yet.
+async function accountForVoucher(voucherHash, fallbackName, docs) {
+  try {
+    const pf = await uiGet('/portfolio');
+    const existing = (pf.holdings || []).find((h) => h.voucher === voucherHash);
+    if (existing) return existing.account;
+  } catch { /* portfolio unavailable — create a fresh account */ }
+  const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: fallbackName, voucher: voucherHash };
+  account.sig = signDoc(account, state.user.privateKey);
+  docs.push(account);
+  return hashDoc(account);
+}
+
+// hash → display name for lists that only carry voucher hashes.
+async function voucherNames() {
+  const vouchers = await rpcCall('list_vouchers', {}).catch(() => []);
+  const map = new Map();
+  for (const v of vouchers) map.set(hashDoc(v), v.name);
+  return map;
+}
+
+function voucherLabel(names, hash) {
+  return names.get(hash) || `${(hash || '').slice(0, 12)}…`;
+}
+
 // ---------------- router ----------------
 
 function route() {
@@ -377,21 +479,31 @@ async function renderDashboard(app) {
 }
 
 async function renderVouchers(app) {
-  const vouchers = await rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []);
+  const vouchers = await rpcCall('list_vouchers', {}).catch(() => []);
+  const mine = vouchers.filter(v => v.pubkey === state.user.pubkey);
+  const others = vouchers.filter(v => v.pubkey !== state.user.pubkey);
+  await resolveHandles(others.map(v => v.pubkey));
+  const voucherCard = (v, issuerLine) => `
+    <div class="card">
+      <div><strong>${escapeHtml(v.name)}</strong></div>
+      ${issuerLine}
+      <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
+      <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
+      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(v.pubkey)}', '${escapeHtml(v.name)}')">Share QR</button>
+    </div>`;
   let body = header('Vouchers');
   body += `<div class="container">`;
   body += `<div class="flex" style="margin-bottom:1rem">
     <a class="btn" href="#/vouchers/new">Create voucher</a>
     <button class="btn secondary" onclick="showShare('i', '${escapeHtml(state.user.pubkey)}', 'My issuer profile')">Share my profile QR</button>
   </div>`;
-  body += `<div class="grid">${vouchers.map(v => `
-    <div class="card">
-      <div><strong>${escapeHtml(v.name)}</strong></div>
-      <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
-      <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
-      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(v.pubkey)}', '${escapeHtml(v.name)}')">Share QR</button>
-    </div>
-  `).join('') || '<p class="small">No vouchers</p>'}</div>`;
+  body += `<h3>My vouchers</h3>`;
+  body += `<div class="grid">${mine.map(v => voucherCard(v, '')).join('') || '<p class="small">You have not issued any vouchers yet</p>'}</div>`;
+  if (others.length) {
+    body += `<h3 style="margin-top:1.5rem">Other vouchers at this bank</h3>`;
+    body += `<div class="grid">${others.map(v => voucherCard(v,
+      `<div class="small">by ${escapeHtml(handleCache.get(v.pubkey) || v.pubkey.slice(0, 12) + '…')}</div>`)).join('')}</div>`;
+  }
   body += `</div>`;
   app.innerHTML = body;
 }
@@ -437,13 +549,16 @@ window.doCreateVoucher = async function() {
 };
 
 async function renderInvoices(app) {
-  const orders = await uiGet('/orders?kind=invoice').catch(() => ({ orders: [] }));
+  const [orders, names] = await Promise.all([
+    uiGet('/orders?kind=invoice').catch(() => ({ orders: [] })),
+    voucherNames(),
+  ]);
   let body = header('Invoices');
   body += `<div class="container">`;
   body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/invoices/new">New invoice</a></div>`;
   body += orders.orders.map(o => `
     <div class="card">
-      <div>Receive ${o.credit.max} of ${escapeHtml(o.credit.voucher.slice(0,12))}…</div>
+      <div>Receive <strong>${o.credit.max}</strong> ${escapeHtml(voucherLabel(names, o.credit.voucher))}</div>
       <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
       <div class="small">state: ${o.state}</div>
       <button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>
@@ -453,33 +568,36 @@ async function renderInvoices(app) {
   app.innerHTML = body;
 }
 
-function renderCreateInvoice(app) {
+async function renderCreateInvoice(app) {
+  app.innerHTML = header('New invoice') + `<div class="container"><p class="small">Loading vouchers…</p></div>`;
+  const catalog = await loadVoucherCatalog();
   app.innerHTML = header('New invoice') + `<div class="container">
     ${card('Invoice (credit-only order)', `
-      <label>Voucher hash</label><input id="i-voucher" placeholder="paste voucher hash">
-      <label>Account name</label><input id="i-acct" value="receiving">
-      <label>Amount</label><input id="i-amount" type="number" value="10">
+      <label>Voucher to receive</label>${voucherSelect('i-voucher', catalog, 'receive')}
+      <label>Amount</label><input id="i-amount" type="number" value="10" min="0">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice()">Create invoice</button>
       <p class="small error" id="i-err"></p>
     `)}
+    ${catalog.length ? '' : `<p class="small">No vouchers known at this bank yet — <a href="#/vouchers/new">create one</a> or pick “Other” and paste a hash.</p>`}
   </div>`;
 }
 
 window.doCreateInvoice = async function() {
-  const voucherHash = document.getElementById('i-voucher').value.trim();
-  const acctName = document.getElementById('i-acct').value.trim();
+  const voucherHash = selectedVoucher('i-voucher');
   const amount = Number(document.getElementById('i-amount').value);
   const err = document.getElementById('i-err');
+  if (!voucherHash) { err.textContent = 'Pick a voucher'; return; }
+  if (!(amount > 0)) { err.textContent = 'Amount must be positive'; return; }
   try {
-    const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
-    account.sig = signDoc(account, state.user.privateKey);
-    const accountHash = hashDoc(account);
+    const docs = [];
+    const accountHash = await accountForVoucher(voucherHash, 'receiving', docs);
     const order = { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate: 1,
       credit: { account: accountHash, voucher: voucherHash, bank: state.bankPubkey, min: amount, max: amount },
       lead: false };
     order.sig = signDoc(order, state.user.privateKey);
     const orderHash = hashDoc(order);
-    const res = await rpcCall('submit_docs', { docs: [order, account], publish_offers: [orderHash] });
+    docs.push(order);
+    const res = await rpcCall('submit_docs', { docs, publish_offers: [orderHash] });
     location.hash = '#/invoices';
     route();
     toast('Invoice created. Offer: ' + (res.offers[0] || '').slice(0,12));
@@ -492,12 +610,13 @@ function renderCheques(app) {
   app.innerHTML = header('Cheques') + `<div class="container"><p class="small">Cheques are debit-only orders. Use the Orders tab to view.</p></div>`;
 }
 
-function renderCreateCheque(app) {
+async function renderCreateCheque(app) {
+  app.innerHTML = header('New cheque') + `<div class="container"><p class="small">Loading vouchers…</p></div>`;
+  const catalog = await loadVoucherCatalog();
   app.innerHTML = header('New cheque') + `<div class="container">
     ${card('Cheque (debit-only order)', `
-      <label>Voucher hash</label><input id="q-voucher" placeholder="paste voucher hash">
-      <label>Account name</label><input id="q-acct" value="spending">
-      <label>Amount</label><input id="q-amount" type="number" value="10">
+      <label>Voucher to give</label>${voucherSelect('q-voucher', catalog, 'give')}
+      <label>Amount</label><input id="q-amount" type="number" value="10" min="0">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque()">Create cheque</button>
       <p class="small error" id="q-err"></p>
     `)}
@@ -505,20 +624,21 @@ function renderCreateCheque(app) {
 }
 
 window.doCreateCheque = async function() {
-  const voucherHash = document.getElementById('q-voucher').value.trim();
-  const acctName = document.getElementById('q-acct').value.trim();
+  const voucherHash = selectedVoucher('q-voucher');
   const amount = Number(document.getElementById('q-amount').value);
   const err = document.getElementById('q-err');
+  if (!voucherHash) { err.textContent = 'Pick a voucher'; return; }
+  if (!(amount > 0)) { err.textContent = 'Amount must be positive'; return; }
   try {
-    const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
-    account.sig = signDoc(account, state.user.privateKey);
-    const accountHash = hashDoc(account);
+    const docs = [];
+    const accountHash = await accountForVoucher(voucherHash, 'spending', docs);
     const order = { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate: 1,
       debit: { account: accountHash, voucher: voucherHash, bank: state.bankPubkey, min: amount, max: amount },
       lead: true };
     order.sig = signDoc(order, state.user.privateKey);
     const orderHash = hashDoc(order);
-    await rpcCall('submit_docs', { docs: [order, account], publish_offers: [orderHash] });
+    docs.push(order);
+    await rpcCall('submit_docs', { docs, publish_offers: [orderHash] });
     location.hash = '#/cheques';
     route();
     toast('Cheque created');
@@ -528,14 +648,17 @@ window.doCreateCheque = async function() {
 };
 
 async function renderOrders(app) {
-  const orders = await uiGet('/orders').catch(() => ({ orders: [] }));
+  const [orders, names] = await Promise.all([
+    uiGet('/orders').catch(() => ({ orders: [] })),
+    voucherNames(),
+  ]);
   app.innerHTML = header('Orders') + `<div class="container">
     <div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/orders/new">New order</a></div>
     ${orders.orders.map(o => `
       <div class="card">
         <div>${o.kind === 'two-sided' ? 'Swap' : o.kind} · rate ${o.rate} · lead ${o.lead}</div>
         <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
-        <div class="small">${o.debit ? `give ${o.debit.min}-${o.debit.max}` : ''} ${o.credit ? `· get ${o.credit.min}-${o.credit.max}` : ''}</div>
+        <div class="small">${o.debit ? `give ${o.debit.min}–${o.debit.max} ${escapeHtml(voucherLabel(names, o.debit.voucher))}` : ''} ${o.credit ? `· get ${o.credit.min}–${o.credit.max} ${escapeHtml(voucherLabel(names, o.credit.voucher))}` : ''}</div>
         ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
         ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${escapeHtml(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
       </div>
@@ -543,16 +666,16 @@ async function renderOrders(app) {
   </div>`;
 }
 
-function renderCreateOrder(app) {
+async function renderCreateOrder(app) {
+  app.innerHTML = header('New order') + `<div class="container"><p class="small">Loading vouchers…</p></div>`;
+  const catalog = await loadVoucherCatalog();
   app.innerHTML = header('New order') + `<div class="container">
     ${card('Two-sided swap order', `
-      <label>Debit voucher hash</label><input id="o-dv" placeholder="voucher you give">
-      <label>Debit account name</label><input id="o-da" value="selling">
-      <label>Debit max</label><input id="o-dmax" type="number" value="100">
-      <label>Credit voucher hash</label><input id="o-cv" placeholder="voucher you receive">
-      <label>Credit account name</label><input id="o-ca" value="buying">
-      <label>Credit max</label><input id="o-cmax" type="number" value="90">
-      <label>Rate (debit/credit max)</label><input id="o-rate" type="number" value="1.111">
+      <label>Voucher you give</label>${voucherSelect('o-dv', catalog, 'give')}
+      <label>Max amount you give</label><input id="o-dmax" type="number" value="100" min="0" oninput="syncOrderRate()">
+      <label>Voucher you receive</label>${voucherSelect('o-cv', catalog, 'receive')}
+      <label>Max amount you receive</label><input id="o-cmax" type="number" value="90" min="0" oninput="syncOrderRate()">
+      <label>Rate (give ÷ receive)</label><input id="o-rate" type="number" value="1.1111">
       <label><input type="checkbox" id="o-lead"> Lead (settle first)</label>
       <label><input type="checkbox" id="o-pub" checked> Publish as offer</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder()">Create order</button>
@@ -561,35 +684,37 @@ function renderCreateOrder(app) {
   </div>`;
 }
 
+window.syncOrderRate = function() {
+  const d = Number(document.getElementById('o-dmax').value);
+  const c = Number(document.getElementById('o-cmax').value);
+  if (d > 0 && c > 0) document.getElementById('o-rate').value = Number((d / c).toFixed(6));
+};
+
 window.doCreateOrder = async function() {
-  const dv = document.getElementById('o-dv').value.trim();
-  const da = document.getElementById('o-da').value.trim();
+  const dv = selectedVoucher('o-dv');
   const dmax = Number(document.getElementById('o-dmax').value);
-  const cv = document.getElementById('o-cv').value.trim();
-  const ca = document.getElementById('o-ca').value.trim();
+  const cv = selectedVoucher('o-cv');
   const cmax = Number(document.getElementById('o-cmax').value);
   const rate = Number(document.getElementById('o-rate').value);
   const lead = document.getElementById('o-lead').checked;
   const pub = document.getElementById('o-pub').checked;
   const err = document.getElementById('o-err');
+  if (!dv || !cv) { err.textContent = 'Pick both vouchers'; return; }
+  if (dv === cv) { err.textContent = 'Give and receive vouchers must differ'; return; }
+  if (!(dmax > 0) || !(cmax > 0)) { err.textContent = 'Amounts must be positive'; return; }
   try {
-    const dAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: da, voucher: dv };
-    dAccount.sig = signDoc(dAccount, state.user.privateKey);
-    const cAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: ca, voucher: cv };
-    cAccount.sig = signDoc(cAccount, state.user.privateKey);
-    const dHash = hashDoc(dAccount), cHash = hashDoc(cAccount);
+    const docs = [];
+    const dHash = await accountForVoucher(dv, 'selling', docs);
+    const cHash = await accountForVoucher(cv, 'buying', docs);
     const order = { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate,
       debit: { account: dHash, voucher: dv, bank: state.bankPubkey, min: 0, max: dmax },
       credit: { account: cHash, voucher: cv, bank: state.bankPubkey, min: 0, max: cmax },
       lead };
     order.sig = signDoc(order, state.user.privateKey);
     const oHash = hashDoc(order);
-    const docs = [order, dAccount, cAccount];
+    docs.push(order);
     // Cross-bank: also submit to credit voucher's bank if different.
     await rpcCall('submit_docs', { docs, publish_offers: pub ? [oHash] : [] });
-    if (cv !== dv) {
-      // Need credit bank pubkey. For now assume same bank; UI lets user add banks later.
-    }
     location.hash = '#/orders';
     route();
     toast('Order created');
@@ -599,11 +724,14 @@ window.doCreateOrder = async function() {
 };
 
 async function renderDiscover(app) {
-  const offers = await uiPost('/discover', { vouchers: [], intentions: ['sell','buy'] }).catch(e => ({ offers: [], error: e.message }));
+  const [offers, names] = await Promise.all([
+    uiPost('/discover', { vouchers: [], intentions: ['sell','buy'] }).catch(e => ({ offers: [], error: e.message })),
+    voucherNames(),
+  ]);
   app.innerHTML = header('Discover') + `<div class="container">
     ${card('Offers', (offers.offers || []).map(o => `
       <div class="card">
-        <div>${o.debit ? `give ${o.debit.min}-${o.debit.max}` : ''} ${o.credit ? `· get ${o.credit.min}-${o.credit.max}` : ''}</div>
+        <div>${o.debit ? `give ${o.debit.min}–${o.debit.max} ${escapeHtml(voucherLabel(names, o.debit.voucher))}` : ''} ${o.credit ? `· get ${o.credit.min}–${o.credit.max} ${escapeHtml(voucherLabel(names, o.credit.voucher))}` : ''}</div>
         <div class="small">rate ${o.rate} · lead ${o.lead} · bank ${escapeHtml(o.bank.slice(0,12))}…</div>
         <div class="mono small">${escapeHtml(o.offer.slice(0,16))}…</div>
         <button class="btn" onclick="acceptOffer('${o.order}', ${o.debit?.max||0}, ${o.credit?.max||0}, '${o.bank}', '${o.bank_url}')">Accept</button>
