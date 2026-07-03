@@ -711,31 +711,28 @@ export async function getHandleByPubkey(
   return r.value;
 }
 
-// --- peer settle signatures (foreign lead-bank settles we observed) -------
+// --- foreign record → deal index ------------------------------------------
+// When a Mandate lists a record minted at ANOTHER bank, we store its body
+// (submit_mandate) and remember which deal it belongs to. This lets
+// notify_signatures route a peer's signature on that foreign record to the
+// right deal — and, because we only ever gather signatures for records in a
+// deal's known set, every peer artifact is deal-scoped (no by-signer,
+// cross-deal reuse). Replaces the old by-signer `peer_settle` store.
 
-export async function storePeerSettleSig(
+export async function storeForeignRecordDeal(
   bank: Bank,
-  sig: Signature,
-): Promise<Base58SHA256> {
-  const h = await storeDoc(bank, sig);
-  await bank.kv.set(k(bank, 'peer_settle', sig.pubkey, h), { at: sig.ulid });
-  return h;
+  recordHash: Base58SHA256,
+  dealId: ULID,
+): Promise<void> {
+  await bank.kv.set(k(bank, 'foreign_record_deal', recordHash), dealId);
 }
 
-export async function listPeerSettleSigs(
+export async function getForeignRecordDeal(
   bank: Bank,
-  signerPubkey: Base58PubKey,
-): Promise<Signature[]> {
-  const iter = bank.kv.list<{ at: string }>({
-    prefix: k(bank, 'peer_settle', signerPubkey),
-  });
-  const out: Signature[] = [];
-  for await (const entry of iter) {
-    const h = entry.key[entry.key.length - 1] as string;
-    const s = await getDoc<unknown>(bank, h);
-    if (s) out.push(s as Signature);
-  }
-  return out.sort((a, b) => b.ulid.localeCompare(a.ulid));
+  recordHash: Base58SHA256,
+): Promise<ULID | null> {
+  const r = await bank.kv.get<ULID>(k(bank, 'foreign_record_deal', recordHash));
+  return r.value;
 }
 
 // --- active deal enumeration ----------------------------------------------

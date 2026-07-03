@@ -89,9 +89,27 @@ Signature: BaseDoc & {
 
 A holder's signature on an Order (no `action`) is the holder's authorization for the transfers described in that Order. A bank's signature on an Offer or Address (no `action`) is a pure attestation that the bank has stored/derived the doc.
 
-`seen` is the load-bearing field for multi-party settlement: a follow bank's `settle` on a record lists the hashes of the upstream `settle` Signature docs it verified before applying its own record. That turns the lead→follow handoff into a verifiable settle chain — every link proves the prior link committed.
+#### `seen` is a causal chain that binds the cascade to one deal
 
-> **Invariant:** `Signature.seen` carries the cascade proof. A follower MUST verify its predecessors' settle signatures before applying balances and MUST cite them in `seen`. The exactly-one-target rule for actioned signatures is protocol.
+`seen` is the load-bearing field for multi-party settlement. Each `hold`/`settle` a bank issues lists the hashes of the **prior signatures it verified** before advancing — so the signatures of a deal form a causal chain rooted in `ready` sigs, and every `ready` anchors (via its `hash`) to a **record**, whose hash is unique to the deal (records carry ULIDs). A later signature that transitively cites a set of `ready` sigs is therefore committing to *those specific records* — i.e. to *this* deal — and nothing else.
+
+This is what makes a signature **non-replayable across deals without a public deal tag.** A bank never advances on "any settle from that signer"; it advances only when the upstream signature it received *cites this deal's own signatures in its `seen`*. A `hold`/`settle` minted in a different deal carries that deal's hashes and fails the containment check below. (There is no `deal_id` in a Signature — the binding is the chain, so topology stays private.)
+
+##### The two-bank settlement handshake
+
+For a bilateral deal across two banks, one bank hosts the **lead** transfer and the other the **follow** transfer. (A *transfer* is a debit/credit pair of one voucher, both records at that voucher's issuing bank; it is *lead* iff its debit-side `Order.lead` is `true`.) Let `R` be the deal's full record set — every bank can enumerate `R` from the Mandates it holds (`bank-schema.md` §1.6) and gather each record's signatures from the peers' fan-out.
+
+1. **ready** — each bank validates each of its own records against that record's Order (`bank-schema.md` §1.6) and issues `ready(r)` with `seen = []`. Banks fan `ready` sigs out to the peer.
+2. **hold** —
+   - **lead**: once *every* record in `R` carries a `ready` (its own plus the peer's), it locks its debit accounts and issues `hold(r)` for each own `r` with `seen =` the hashes of **all `ready` sigs over `R`**. Fans out.
+   - **follow**: on the lead's `hold`, it verifies the lead `hold` is validly signed **and every one of its own `ready` hashes is present in that `hold`'s `seen`** (this proves the lead is holding *this* deal). It then locks and issues `hold(r)` with `seen =` **all `ready` hashes + the lead `hold` hashes**. Fans out.
+3. **settle** —
+   - **lead**: once every record in `R` carries a `hold`, it verifies each follow `hold`'s `seen` **contains its own `ready`+`hold` hashes**, then settles each of its transfers atomically and issues `settle(r)` with `seen =` **all `hold` hashes over `R`**. Fans out.
+   - **follow**: on the lead's `settle`, it verifies the `settle` is validly signed **and its `seen` contains the follower's own `hold` hashes**, then settles its transfers atomically and issues `settle(r)` with `seen =` **all `hold` hashes + the lead `settle` hashes**. Terminal.
+
+The lead settles first, so a cautious holder can `follow` (receive before giving) to bound counterparty risk. The containment checks are **fail-closed**: an unverifiable or missing predecessor never advances a record — the engine waits (and `reject` is the only abort; there is no rollback, `bank-schema.md` §2). N-party (≥3 bank) deals generalize the same rule over each transfer's predecessor set; that DAG is out of scope for v1 (see `docs/design/mandate-validation.md` §5).
+
+> **Invariant:** `Signature.seen` carries the cascade proof. A bank MUST NOT issue `hold`/`settle` for a record until it has verified that the upstream signature it depends on **cites this deal's own signatures in its `seen`** (own `ready` ⊆ lead `hold.seen` before follow-hold; own `hold` ⊆ lead `settle.seen` before follow-settle; and the symmetric lead-side checks). Advancing on a signature not so bound — e.g. the newest `settle` from a signer regardless of deal — is a protocol violation. The exactly-one-target rule for actioned signatures is protocol.
 
 ### 3.2 Address
 
