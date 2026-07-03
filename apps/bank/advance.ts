@@ -2,13 +2,11 @@ import {
   getAccount,
   getAccountBalance,
   getAddress,
-  getDoc,
   getMandate,
   getOffer,
   getOrder,
   getRecord,
   getSignaturesForRecord,
-  listPeerSettleSigs,
   listRecordsByDeal,
   releaseHold,
   storeSignature,
@@ -30,153 +28,231 @@ import type { Bank } from './types.ts';
 
 const EPS = 1e-9;
 
-type RecordState = {
+// Per-record view: the record, its Order, whether the coordinator has mandated
+// it, and this bank's OWN ready/hold/settle/reject signatures on it. Cross-bank
+// gates are evaluated over the full record set R (below), not this struct.
+type OwnState = {
   hash: Base58SHA256;
   row: RecordRow;
+  order: Order;
   mandated: boolean;
+  ownReady: Signature | null;
+  ownHold: Signature | null;
+  ownSettle: Signature | null;
   ready: boolean;
   held: boolean;
   settled: boolean;
-  rejected: boolean;
-  readySig: Signature | null;
-  holdSig: Signature | null;
-  settleSig: Signature | null;
-  rejectSig: Signature | null;
+  rejected: boolean; // reject on this record by ANYONE (ours or a peer's)
 };
 
-export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
-  const records = await listRecordsByDeal(bank, dealId);
-  if (records.length === 0) return;
+// `seen` containment: does `seen` include every hash in `needed`? Fail-closed —
+// a missing or absent `seen` never satisfies the gate.
+function seenContains(seen: Base58SHA256[] | undefined, needed: Base58SHA256[]): boolean {
+  if (needed.length === 0) return true;
+  const s = new Set(seen ?? []);
+  return needed.every((n) => s.has(n));
+}
 
-  const states: RecordState[] = [];
-  for (const row of records) {
-    const h = hashDoc(row.doc);
-    const sigs = await getSignaturesForRecord(bank, h);
-    states.push({
-      hash: h,
+export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
+  const ownRows = await listRecordsByDeal(bank, dealId);
+  if (ownRows.length === 0) return;
+
+  // Resolve each own record's Order and mandate status, and load this bank's
+  // own signatures on it.
+  const own: OwnState[] = [];
+  for (const row of ownRows) {
+    const hash = hashDoc(row.doc);
+    let order: Order;
+    try {
+      order = await resolveOrderForRecord(bank, row.doc);
+    } catch {
+      continue; // Order not yet bound; nothing to advance for this record
+    }
+    const sigs = await getSignaturesForRecord(bank, hash);
+    const ownReady = sigs.find((s) => s.action === 'ready' && s.pubkey === bank.pubkey) ?? null;
+    const ownHold = sigs.find((s) => s.action === 'hold' && s.pubkey === bank.pubkey) ?? null;
+    const ownSettle = sigs.find((s) => s.action === 'settle' && s.pubkey === bank.pubkey) ?? null;
+    own.push({
+      hash,
       row,
-      // A record is mandated when a Mandate exists for its (deal, order),
-      // lists this record, and was signed by the coordinator sealed into the
-      // record. Only mandated records may advance.
-      mandated: await isMandated(bank, dealId, row, h),
-      ready: sigs.some((s) => s.action === 'ready'),
-      held: sigs.some((s) => s.action === 'hold'),
-      settled: sigs.some((s) => s.action === 'settle'),
+      order,
+      mandated: await isMandated(bank, dealId, row, hash),
+      ownReady,
+      ownHold,
+      ownSettle,
+      ready: !!ownReady,
+      held: !!ownHold,
+      settled: !!ownSettle,
       rejected: sigs.some((s) => s.action === 'reject'),
-      readySig: sigs.find((s) => s.action === 'ready') ?? null,
-      holdSig: sigs.find((s) => s.action === 'hold') ?? null,
-      settleSig: sigs.find((s) => s.action === 'settle') ?? null,
-      rejectSig: sigs.find((s) => s.action === 'reject') ?? null,
     });
   }
+  if (own.length === 0 || !own.some((o) => o.mandated)) return; // awaiting coordinator
 
-  if (!states.some((s) => s.mandated)) return; // still awaiting coordinator clearance
+  const ownHashes = new Set(own.map((o) => o.hash));
 
-  // Resolve underlying orders.
-  const resolved = await Promise.all(
-    states.map((s) => resolveOrderForRecord(bank, s.row.doc)),
-  );
+  // Full record set R = own records ∪ every foreign record named by this deal's
+  // Mandates (the union of a bank's Mandates' record lists is the deal footprint
+  // that entangles its records). Gather signatures for every record in R by its
+  // hash — own signatures plus peers' signatures delivered via notify_signatures
+  // (record_sig index). Because R is the deal's own record set, every gathered
+  // signature is deal-scoped: no by-signer, cross-deal reuse.
+  const foreignHashes = new Set<Base58SHA256>();
+  const orderSeen = new Set<string>();
+  for (const o of own) {
+    if (orderSeen.has(o.row.doc.order)) continue;
+    orderSeen.add(o.row.doc.order);
+    const m = await getMandate(bank, dealId, o.row.doc.order);
+    if (!m) continue;
+    for (const h of m.records) if (!ownHashes.has(h)) foreignHashes.add(h);
+  }
+  const foreignSigs = new Map<Base58SHA256, Signature[]>();
+  for (const h of foreignHashes) foreignSigs.set(h, await getSignaturesForRecord(bank, h));
+  const foreignAction = (h: Base58SHA256, action: Signature['action']) =>
+    (foreignSigs.get(h) ?? []).filter((s) => s.action === action);
+  const allHashes = [...ownHashes, ...foreignHashes];
 
-  // Reject cascade (README §2.0): a reject on ANY record — issued here or
-  // received from a peer via notify_signatures — aborts the whole deal at
-  // this bank. Reject every remaining pre-settled record, release holds,
-  // fan out, stop advancing.
-  if (states.some((s) => s.rejected)) {
-    const sigs = await rejectDeal(bank, states, 'rejected counterpart record');
-    if (sigs.length > 0) await fanOutRejectSigs(bank, sigs, resolved, states);
+  const resolvedOwn = own.map((o) => o.order);
+  const issued: Signature[] = [];
+
+  // Reject cascade: a reject on ANY record in R (ours or a peer's, e.g. delivered
+  // to a foreign record) aborts the whole deal here.
+  const anyReject = own.some((o) => o.rejected) ||
+    [...foreignHashes].some((h) => foreignAction(h, 'reject').length > 0);
+  if (anyReject) {
+    const sigs = await rejectDeal(bank, own, 'rejected counterpart record');
+    if (sigs.length > 0) await fanOutSigs(bank, sigs, resolvedOwn);
     return;
   }
 
-  // Determine the lead bank set for this deal from the orders.
-  const leadBanks = new Set<Base58PubKey>();
-  for (let i = 0; i < states.length; i++) {
-    const lb = await determineLeadBank(bank, states[i]!.row, resolved[i]!);
-    if (lb) leadBanks.add(lb);
+  // The deal must be strictly bilateral for the v1 seen-handshake (one lead
+  // transfer, one follow transfer). ≥3-bank DAGs need a predecessor graph
+  // (docs/design/mandate-validation.md §5.4) — fail closed past `ready`.
+  const bankSet = new Set<Base58PubKey>();
+  for (const o of resolvedOwn) {
+    for (const side of [o.debit, o.credit]) if (side) bankSet.add(side.bank);
   }
 
-  // 1. Ready — a PERMANENT precondition failure (bad side/account, min/max,
-  // uncovered debit with no in-deal credit, voucher limit) MUST reject the
-  // record and, by cascade, the deal. Transient shortfalls (coverage that a
-  // not-yet-held same-deal credit could still provide) just wait.
-  for (let i = 0; i < states.length; i++) {
-    const st = states[i]!;
+  // 1. READY — validate each own mandated record against its Order. A permanent
+  //    precondition failure rejects the record and cascades; a transient one
+  //    just waits.
+  for (const st of own) {
     if (st.ready || st.held || st.settled || !st.mandated) continue;
-    const verdict = await readyCheck(bank, st.row, resolved[i]!, states);
+    const verdict = await readyCheck(bank, st.row, st.order, own);
     if (verdict.ok) {
-      await signAndStore(bank, st.hash, 'ready');
+      const sig = await signAndStore(bank, st.hash, 'ready');
+      st.ownReady = sig;
       st.ready = true;
+      issued.push(sig);
     } else if (verdict.permanent) {
-      const sigs = await rejectDeal(bank, states, verdict.reason);
-      if (sigs.length > 0) await fanOutRejectSigs(bank, sigs, resolved, states);
+      const sigs = await rejectDeal(bank, own, verdict.reason);
+      const all = [...sigs, ...issued];
+      if (all.length > 0) await fanOutSigs(bank, all, resolvedOwn);
       return;
     }
   }
 
-  // 2. Hold — only when EVERY owned record of the deal is ready (README §2.0:
-  // "A bank holds its own records in a deal when all of its records are
-  // `ready`"). Holding or settling a subset would let one half of a
-  // debit/credit pair apply without the other, breaking the sum invariant.
-  const allReady = states.every((s) => s.ready || s.settled);
-  if (!allReady) return;
+  const proceed = bankSet.size <= 2;
 
-  const notHeld = states.filter((s) => !s.held && !s.settled);
-  if (notHeld.length > 0) {
-    const holdOk = await acquireHoldsForDeal(bank, dealId, notHeld);
-    if (holdOk) {
-      for (const st of notHeld) {
-        const sig = await signAndStore(bank, st.hash, 'hold');
-        st.held = true;
-        st.holdSig = sig;
+  // Signature-hash sets, computed from FRESH state: own signatures from `own`
+  // (may have just been issued this pass), foreign signatures from the map.
+  const ownReadyHashes = own.filter((o) => o.ownReady).map((o) => hashDoc(o.ownReady!));
+  const foreignReadyHashes = [...foreignHashes].flatMap((h) => foreignAction(h, 'ready')).map(hashDoc);
+  const allReadyHashes = [...ownReadyHashes, ...foreignReadyHashes];
+
+  const everyReady = proceed && allHashes.every((h) =>
+    ownHashes.has(h) ? own.find((o) => o.hash === h)!.ready : foreignAction(h, 'ready').length > 0
+  );
+
+  // A transfer (debit/credit pair, both records local) is LEAD iff its debit
+  // record's Order.lead is true.
+  const transferIsLead = (st: OwnState): boolean => {
+    if (st.row.doc.type === 'debit') return st.order.lead;
+    const sib = own.find(
+      (o) => o.row.details.pair === st.row.details.pair && o.hash !== st.hash && o.row.doc.type === 'debit',
+    );
+    return sib ? sib.order.lead : st.order.lead;
+  };
+
+  // 2. HOLD — LEAD holds once every record in R is `ready`, citing all `ready`
+  //    sigs. FOLLOW holds only after the lead's holds arrive AND cite the
+  //    follower's own `ready` sigs (proving the lead is holding THIS deal).
+  if (everyReady) {
+    const everyForeignHoldBound = (needed: Base58SHA256[]) =>
+      [...foreignHashes].every((h) => foreignAction(h, 'hold').some((s) => seenContains(s.seen, needed)));
+
+    const toHold: OwnState[] = [];
+    for (const st of own) {
+      if (st.held || st.settled || !st.mandated) continue;
+      if (transferIsLead(st)) {
+        toHold.push(st);
+      } else if (foreignHashes.size > 0 && everyForeignHoldBound(ownReadyHashes)) {
+        toHold.push(st);
+      }
+    }
+    if (toHold.length > 0) {
+      const holdOk = await acquireHoldsForDeal(bank, dealId, toHold);
+      if (holdOk) {
+        const foreignHoldHashes = [...foreignHashes].flatMap((h) => foreignAction(h, 'hold')).map(hashDoc);
+        for (const st of toHold) {
+          const seen = transferIsLead(st)
+            ? allReadyHashes
+            : [...allReadyHashes, ...foreignHoldHashes];
+          const sig = await signAndStore(bank, st.hash, 'hold', seen);
+          st.ownHold = sig;
+          st.held = true;
+          issued.push(sig);
+        }
       }
     }
   }
 
-  // 3. Settle — pair each held record with ITS resolved order (indexes into
-  // `states`/`resolved` stay aligned via zip; a filtered array must not be
-  // indexed against the unfiltered `resolved`).
-  const heldPairs = states
-    .map((st, i) => ({ st, order: resolved[i]! }))
-    .filter(({ st }) => st.held && !st.settled);
-  if (heldPairs.length === 0) return;
+  // 3. SETTLE — LEAD settles once every record in R is `held` AND each follow
+  //    hold cites the lead's own `ready`+`hold` (proving the follow is bound to
+  //    THIS deal). FOLLOW settles once the lead's settle arrives AND cites the
+  //    follower's own `hold`. Each transfer settles atomically (both halves).
+  const ownHoldHashes = own.filter((o) => o.ownHold).map((o) => hashDoc(o.ownHold!));
+  const everyHeld = proceed && allHashes.every((h) =>
+    ownHashes.has(h) ? own.find((o) => o.hash === h)!.held : foreignAction(h, 'hold').length > 0
+  );
 
-  const ownLeadStates = heldPairs.filter(({ order }) => order.lead).map(({ st }) => st);
-  const ownFollowStates = heldPairs.filter(({ order }) => !order.lead).map(({ st }) => st);
+  if (everyHeld) {
+    const everyForeignHoldBound = (needed: Base58SHA256[]) =>
+      [...foreignHashes].every((h) => foreignAction(h, 'hold').some((s) => seenContains(s.seen, needed)));
 
-  // Settle this bank's lead records first.
-  const thisBankSettleSigs: Signature[] = [];
-  for (const st of ownLeadStates) {
-    const sig = await settleRecord(bank, st);
-    if (sig) thisBankSettleSigs.push(sig);
-  }
-
-  // Collect upstream settle signatures from every lead bank.
-  const leadBankSigs = new Map<Base58PubKey, Signature[]>();
-  if (thisBankSettleSigs.length > 0) {
-    leadBankSigs.set(bank.pubkey, thisBankSettleSigs);
-  }
-
-  let canSettleFollow = true;
-  for (const leadBank of leadBanks) {
-    if (leadBank === bank.pubkey) continue;
-    const peerSigs = await listPeerSettleSigs(bank, leadBank);
-    if (peerSigs.length === 0) {
-      canSettleFollow = false;
-      break;
+    const toSettle: OwnState[] = [];
+    for (const st of own) {
+      if (!st.held || st.settled) continue;
+      if (transferIsLead(st)) {
+        // Lead: every follow (foreign) hold must cite our ready+hold.
+        if (foreignHashes.size > 0 && everyForeignHoldBound([...ownReadyHashes, ...ownHoldHashes])) {
+          toSettle.push(st);
+        }
+      } else {
+        // Follow: a lead (foreign) settle must cite THIS record's own hold.
+        const myHold = st.ownHold ? [hashDoc(st.ownHold)] : null;
+        const bound = myHold !== null &&
+          [...foreignHashes].every((h) => foreignAction(h, 'settle').some((s) => seenContains(s.seen, myHold)));
+        if (bound) toSettle.push(st);
+      }
     }
-    leadBankSigs.set(leadBank, [peerSigs[0]!]);
-  }
 
-  if (canSettleFollow) {
-    const seen = [...leadBankSigs.values()].flat().map((s) => hashDoc(s));
-    for (const st of ownFollowStates) {
-      await settleRecord(bank, st, seen);
+    if (toSettle.length > 0) {
+      const allHoldHashes = [
+        ...ownHoldHashes,
+        ...[...foreignHashes].flatMap((h) => foreignAction(h, 'hold')).map(hashDoc),
+      ];
+      const foreignSettleHashes = [...foreignHashes].flatMap((h) => foreignAction(h, 'settle')).map(hashDoc);
+      for (const st of toSettle) {
+        const seen = transferIsLead(st)
+          ? allHoldHashes
+          : [...allHoldHashes, ...foreignSettleHashes];
+        const sig = await applySettle(bank, st, seen);
+        issued.push(sig);
+      }
     }
   }
 
-  // Fan out this bank's settle signatures to peer banks that need them.
-  if (thisBankSettleSigs.length > 0) {
-    await fanOutSettleSigs(bank, dealId, thisBankSettleSigs, resolved, states);
-  }
+  if (issued.length > 0) await fanOutSigs(bank, issued, resolvedOwn);
 }
 
 export async function advanceRecord(
@@ -214,27 +290,10 @@ async function resolveOrderForRecord(
   throw new Error('order/offer not found');
 }
 
-async function determineLeadBank(
-  bank: Bank,
-  record: RecordRow,
-  order: Order,
-): Promise<Base58PubKey | null> {
-  if (order.lead) return bank.pubkey;
-  // Follow: the lead bank is the bank on the opposite side of this transfer.
-  if (record.doc.type === 'debit' && order.credit) {
-    return order.credit.bank;
-  }
-  if (record.doc.type === 'credit' && order.debit) {
-    return order.debit.bank;
-  }
-  // One-sided at this bank (e.g. invoice lead by the paying cheque side).
-  return bank.pubkey;
-}
-
 // Verdict of a ready-time precondition check. `permanent: true` means nothing
 // within this deal can ever satisfy the precondition — the record MUST be
-// rejected (README §2.0). `permanent: false` means a later event (e.g. an
-// in-deal credit being held) may still cover it, so the engine just waits.
+// rejected. `permanent: false` means a later event may still cover it, so the
+// engine just waits.
 type ReadyVerdict =
   | { ok: true }
   | { ok: false; permanent: boolean; reason: string };
@@ -246,7 +305,7 @@ async function readyCheck(
   bank: Bank,
   row: RecordRow,
   order: Order,
-  dealStates: RecordState[],
+  dealStates: { row: RecordRow; rejected: boolean }[],
 ): Promise<ReadyVerdict> {
   const account = await getAccount(bank, row.details.account);
   if (!account) return notReady(true, 'account unknown');
@@ -279,8 +338,8 @@ async function readyCheck(
     const free = bal.current - bal.pending;
     if (!isIssuer && free < amount) {
       // Uncovered debit. Coverage may still arrive from a credit record in
-      // THIS deal targeting the same account (README §2.0 hold coverage);
-      // only when no such credit exists is the shortfall unrecoverable.
+      // THIS deal targeting the same account; only when no such credit exists
+      // is the shortfall unrecoverable.
       const inDealCredit = dealStates.some((s) =>
         s.row.doc.type === 'credit' &&
         s.row.details.account === row.details.account &&
@@ -312,11 +371,7 @@ async function readyCheck(
   }
 
   // Rate check for two-sided orders, computed over the Mandate's FULL record
-  // set — the Mandate lists every record satisfying the Order across all
-  // banks, and foreign bodies (bank-signed) were stored at submit_mandate.
-  // Both sides of the Order are therefore numerically checkable here. The
-  // Mandate for a (deal, order) is immutable, so a violating set can never
-  // improve → permanent.
+  // set. A violating (immutable) set can never improve → permanent.
   const rate = await aggregateRateCheck(bank, row.details.deal_id, row.doc.order, order);
   if (rate === 'wait') return notReady(false, 'awaiting mandated record bodies');
   if (rate === 'violation') return notReady(true, 'order rate violated by mandated records');
@@ -338,6 +393,7 @@ async function aggregateRateCheck(
   if (!order.debit || !order.credit) return 'ok'; // one-sided: no rate gate
   const mandate = await getMandate(bank, dealId, orderHash);
   if (!mandate) return 'wait';
+  const { getDoc } = await import('./db.ts');
   let debitAmount = 0;
   let creditAmount = 0;
   for (const h of mandate.records) {
@@ -354,7 +410,7 @@ async function aggregateRateCheck(
 async function acquireHoldsForDeal(
   bank: Bank,
   dealId: string,
-  states: RecordState[],
+  states: OwnState[],
 ): Promise<boolean> {
   const { acquireHold } = await import('./db.ts');
   const byAccount = new Map<Base58SHA256, number>();
@@ -370,18 +426,20 @@ async function acquireHoldsForDeal(
   return true;
 }
 
-async function settleRecord(
+// Apply a settled record's delta, release its hold, and issue the `settle`
+// signature. Both halves of a transfer are settled in the same advance pass
+// (their gate is identical), so the per-bank sum invariant is preserved.
+async function applySettle(
   bank: Bank,
-  st: RecordState,
-  seen?: Base58SHA256[],
-): Promise<Signature | null> {
-  if (st.settled) return st.settleSig;
+  st: OwnState,
+  seen: Base58SHA256[],
+): Promise<Signature> {
   const delta = st.row.doc.type === 'credit' ? st.row.doc.amount : -st.row.doc.amount;
   await updateAccountBalance(bank, st.row.details.account, delta);
   await releaseHold(bank, st.row.details.account, st.row.details.deal_id);
   const sig = await signAndStore(bank, st.hash, 'settle', seen);
+  st.ownSettle = sig;
   st.settled = true;
-  st.settleSig = sig;
   return sig;
 }
 
@@ -409,38 +467,42 @@ async function signAndStore(
 
 // Abort the deal at this bank: issue a reject Signature on every pre-settled
 // record that doesn't have one, releasing any holds. Settled records stay
-// settled — there is no rollback (README §2.2). Returns the newly issued
-// reject signatures for fan-out.
+// settled — there is no rollback. Returns the newly issued reject signatures.
 async function rejectDeal(
   bank: Bank,
-  states: RecordState[],
+  states: OwnState[],
   reason: string,
 ): Promise<Signature[]> {
   const out: Signature[] = [];
   for (const st of states) {
-    if (st.settled || st.rejected) continue;
+    if (st.settled) continue;
+    // Idempotent: skip if we already issued our own reject on this record.
+    const existing = (await getSignaturesForRecord(bank, st.hash)).some(
+      (s) => s.action === 'reject' && s.pubkey === bank.pubkey,
+    );
+    if (existing) continue;
     if (st.held) {
       await releaseHold(bank, st.row.details.account, st.row.details.deal_id);
     }
     const sig = await signAndStore(bank, st.hash, 'reject', undefined, reason);
     st.rejected = true;
-    st.rejectSig = sig;
     out.push(sig);
   }
   return out;
 }
 
-// Fan a reject out to every counter-side bank named by the deal's orders —
-// any bank with dependent records MUST reject them too (README §2.0).
-async function fanOutRejectSigs(
+// Fan newly-issued signatures out to every counter-side bank named by the
+// deal's Orders. `ready`, `hold`, `settle` and `reject` all fan out — the
+// seen-handshake requires each side to see the others' records advance. Only
+// sigs minted THIS pass are sent (no re-emission of already-delivered sigs).
+async function fanOutSigs(
   bank: Bank,
-  rejectSigs: Signature[],
+  sigs: Signature[],
   resolved: Order[],
-  states: RecordState[],
 ): Promise<void> {
+  if (sigs.length === 0) return;
   const peers = new Set<Base58PubKey>();
-  for (let i = 0; i < states.length; i++) {
-    const order = resolved[i]!;
+  for (const order of resolved) {
     for (const side of [order.debit, order.credit]) {
       if (side && side.bank !== bank.pubkey) peers.add(side.bank);
     }
@@ -450,43 +512,7 @@ async function fanOutRejectSigs(
     if (!addr) continue;
     try {
       await bankRpcCall(bank, addr.url, target, 'notify_signatures', {
-        signatures: rejectSigs,
-      });
-    } catch {
-      // Fire-and-forget; client relay is the recovery path.
-    }
-  }
-}
-
-async function fanOutSettleSigs(
-  bank: Bank,
-  dealId: string,
-  settleSigs: Signature[],
-  resolved: Order[],
-  states: RecordState[],
-): Promise<void> {
-  // Find follow banks: counter-side banks of our lead records.
-  const followBanks = new Set<Base58PubKey>();
-  for (let i = 0; i < states.length; i++) {
-    const st = states[i]!;
-    if (!resolved[i]!.lead) continue;
-    const order = resolved[i]!;
-    const counterBank =
-      st.row.doc.type === 'debit'
-        ? order.credit?.bank
-        : order.debit?.bank;
-    if (counterBank && counterBank !== bank.pubkey) {
-      followBanks.add(counterBank);
-    }
-  }
-  if (followBanks.size === 0) return;
-
-  for (const target of followBanks) {
-    const addr = await getAddress(bank, target);
-    if (!addr) continue;
-    try {
-      await bankRpcCall(bank, addr.url, target, 'notify_signatures', {
-        signatures: settleSigs,
+        signatures: sigs,
       });
     } catch {
       // Fire-and-forget; client relay is the recovery path.

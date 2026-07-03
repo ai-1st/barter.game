@@ -262,25 +262,35 @@ Each bank runs its own state machine over each record it owns. Records are creat
         │
         ▼
    ┌──────────┐
-   │ approved │  every owned Record has a valid Order bound,
-   └────┬─────┘  the Mandate for its Order is received, and records are `ready`
-        │        (if `lead` or no predecessors, advance engine runs immediately)
-        │ advance engine
-        │ all records ready, no lock conflict
+   │ approved │  every owned Record has a valid Order bound and the Mandate
+   └────┬─────┘  for its Order is received. The bank now knows the deal's FULL
+        │        record set R (union of its Mandates' record lists) and
+        │ advance │ gathers each record's signatures — its own, plus peers'
+        │ engine  │ signatures delivered by fan-out (indexed by record hash).
+        │        │ `ready` issued per record after Order validation; fanned out.
         ▼
-   ┌──────────┐
-   │  held    │  debit accounts locked; `hold` signatures issued and fanned out
-   └────┬─────┘
-        │ advance engine
-        │ for `follow` records: predecessor `settle` signatures present
-        │ for `lead` records: no predecessor dependency
+   ┌──────────┐   HOLD is a cross-bank handshake carried by `seen` (`base.md` §3.1):
+   │  held    │   • LEAD holds once EVERY record in R is `ready`; its `hold.seen`
+   └────┬─────┘     = all `ready` hashes over R.
+        │         • FOLLOW holds only after the lead's `hold` arrives AND its own
+        │ advance   `ready` hashes are contained in that `hold.seen`; its
+        │ engine    `hold.seen` = all `ready` hashes + the lead `hold` hashes.
         ▼
-   ┌──────────┐
-   │ settled  │  deltas applied, holds released, `settle` signed
-   └──────────┘   (seen = upstream record-level settles for follower records)
+   ┌──────────┐   SETTLE is gated the same way:
+   │ settled  │   • LEAD settles once EVERY record in R is `held` and each follow
+   └──────────┘     `hold.seen` contains the lead's own `ready`+`hold` hashes;
+        │           `settle.seen` = all `hold` hashes over R. Settles first.
+        │         • FOLLOW settles once the lead's `settle` arrives AND its own
+        │           `hold` hashes are contained in that `settle.seen`.
+        ▼         A bank settles each of its TRANSFERS (debit/credit pair)
+   (deltas applied, atomically — never one half of a pair — preserving the per-bank
+    holds released,  sum invariant (§3.2).
+    `settle` signed)
 
    Any pre-settled state can transition to rejected via a bank-issued `reject` signature on the record.
 ```
+
+**Why the handshake, not "newest settle from that signer".** Each `hold`/`settle` transitively cites this deal's `ready` sigs, and every `ready` anchors to a **record whose hash is unique to the deal**. So the containment checks above bind every advance to *this* deal's specific records. A `hold`/`settle` replayed from a **different** deal (same banks, same voucher, even the same Order) carries that deal's hashes in `seen` and fails the check — a follow bank therefore never releases the follower's "give" unless a genuine lead bank actually participated **in this deal**. This closes the settle-replay / cross-leg-reuse attack without putting any `deal_id` on the wire (topology stays private). The checks are fail-closed: a missing or unverifiable predecessor waits; the only abort is `reject`; there is no rollback.
 
 **Reject semantics.** `reject` is a bank-issued `Signature` (`base.md` §3.1), created and propagated exactly like `ready`/`hold`/`settle` — holders and the coordinator play no role in settlement and MUST NOT be able to trigger a reject. A bank MUST issue `reject` on a mandated record whose precondition failure is **permanent** — order side/account mismatch, amount outside min/max, an uncovered debit with no in-deal credit that could still cover it, or a `Voucher.limit` violation. Transient shortfalls (coverage that a not-yet-held same-deal credit may provide, an aggregate rate that later records may satisfy) are not rejected; the engine waits. A reject on any record cascades: the bank rejects every remaining pre-settled record of the deal, releases its holds, and fans the reject Signatures out to the counter-side banks named by the deal's Orders. Settled records stay settled — there is no rollback.
 

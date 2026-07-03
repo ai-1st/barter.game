@@ -1,4 +1,4 @@
-import { getMandate, getRecord, listRecordsByDeal, storeDoc, storeMandate } from '../db.ts';
+import { getMandate, getRecord, listRecordsByDeal, storeDoc, storeForeignRecordDeal, storeMandate } from '../db.ts';
 import {
   hashDoc,
   validateMandate,
@@ -92,6 +92,9 @@ export async function submitMandate(
       throw new RpcError(-32000, `foreign record ${h} minted by a bank the order does not name`);
     }
     await storeDoc(bank, body);
+    // Remember this foreign record's deal so notify_signatures can route a
+    // peer's signature on it to the right deal (and only that deal).
+    await storeForeignRecordDeal(bank, h, mandate.deal_id);
   }
 
   // Completeness of the local slice: every record this bank minted for
