@@ -231,10 +231,11 @@ async function renderWelcome(app) {
     <p class="small">Federated mutual-credit ledger</p>
     ${cfg ? `<p class="mono small">${escapeHtml(cfg.pubkey.slice(0,16))}… @ ${escapeHtml(cfg.name)}</p>` : ''}
     <div style="margin-top:2rem;display:flex;gap:1rem;justify-content:center">
-      <a class="btn" href="#/register">Create account</a>
-      <a class="btn secondary" href="#/connect">I have a key</a>
+      <a class="btn" href="#/unlock">Log in</a>
+      <a class="btn secondary" href="#/register">Create account</a>
     </div>
-    <p class="small" style="margin-top:2rem">Your private key is encrypted in the browser before touching the server.</p>
+    <p class="small" style="margin-top:1rem"><a href="#/connect">I have a raw key instead</a></p>
+    <p class="small" style="margin-top:2rem">Log in with your handle and password. Your key is encrypted in the browser before it ever touches the server.</p>
   </div>`;
 }
 
@@ -243,7 +244,7 @@ function renderRegister(app) {
     ${card('Create account', `
       <label>Handle <span class="small">(2–32 chars: a–z, 0–9, _ or -)</span></label><input id="r-handle" placeholder="alice">
       <label>Password</label><input id="r-pass" type="password" placeholder="••••••••">
-      <label>Confirm password</label><input id="r-pass2" type="password" placeholder="••••••••">
+      <label>Confirm password</label><input id="r-pass2" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doRegister()">
       <label><input type="checkbox" id="r-ack"> I understand there is no password recovery</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doRegister()">Create</button>
       <p class="small error" id="r-err"></p>
@@ -273,6 +274,7 @@ window.doRegister = async function() {
     });
     const data = await res.json();
     if (data.code) throw new Error(`${data.code}: ${data.message}`);
+    rememberHandle(handle);
     state.user = { handle, pubkey: pubkeyBase58, privateKey };
     state.uiState = await uiGet('/state');
     toast(`Welcome, ${handle}`);
@@ -315,37 +317,58 @@ window.doConnect = async function() {
 };
 
 function renderUnlock(app) {
+  const last = rememberedHandle();
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
-    ${card('Unlock', `
-      <label>Handle</label><input id="u-handle" placeholder="alice">
-      <label>Password</label><input id="u-pass" type="password" placeholder="••••••••">
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doUnlock()">Unlock</button>
+    ${card('Log in', `
+      <label>Handle</label><input id="u-handle" placeholder="alice" autocomplete="username" value="${escapeHtml(last)}">
+      <label>Password</label><input id="u-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doUnlock()">
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="doUnlock()">Log in</button>
       <p class="small error" id="u-err"></p>
       <p class="small">No password recovery. Lost password = lost account.</p>
     `)}
+    <p style="text-align:center" class="small">New here? <a href="#/register">Create account</a> · <a href="#/">Back</a></p>
   </div>`;
+  const h = document.getElementById('u-handle');
+  if (last) document.getElementById('u-pass').focus(); else h.focus();
 }
 
 window.doUnlock = async function() {
   const handle = document.getElementById('u-handle').value.trim();
   const pass = document.getElementById('u-pass').value;
   const err = document.getElementById('u-err');
+  if (!handle || !pass) { err.textContent = 'Enter your handle and password'; return; }
   try {
-    const res = await fetch(`${state.basePath}/ui/keystore/${handle}`);
+    const res = await fetch(`${state.basePath}/ui/keystore/${encodeURIComponent(handle)}`);
     const data = await res.json();
-    if (data.code) throw new Error('could not unlock');
-    const seed = await decryptSeed(data.keystore, pass);
+    if (data.code || !data.keystore) {
+      err.textContent = res.status === 404 ? 'No account with that handle at this bank' : 'Could not log in — try again';
+      return;
+    }
+    let seed;
+    try {
+      seed = await decryptSeed(data.keystore, pass);
+    } catch { err.textContent = 'Wrong password'; return; }
     const { pubkeyBase58 } = publicKeyOf(seed);
-    if (pubkeyBase58 !== data.pubkey) throw new Error('wrong password');
+    if (pubkeyBase58 !== data.pubkey) { err.textContent = 'Wrong password'; return; }
+    rememberHandle(handle);
     state.user = { handle, pubkey: pubkeyBase58, privateKey: seed };
     state.uiState = await uiGet('/state').catch(() => ({ pubkey: pubkeyBase58, trusted: [], contacts: [], banks: [], catalog: [], drafts: [], prefs: {}, rev: 0 }));
     if (resumePendingAction()) return;
     location.hash = '#/';
     route();
   } catch (e) {
-    err.textContent = 'Could not unlock. Wrong password or missing backup.';
+    err.textContent = 'Could not log in — network error';
   }
 };
+
+// Remember the last handle used at this bank (handle only — never the key or
+// password) so the login form can prefill it for returning users.
+function rememberHandle(handle) {
+  try { localStorage.setItem(`barter.handle.${state.bankName}`, handle); } catch { /* ignore */ }
+}
+function rememberedHandle() {
+  try { return localStorage.getItem(`barter.handle.${state.bankName}`) || ''; } catch { return ''; }
+}
 
 async function renderDashboard(app) {
   const portfolio = await uiGet('/portfolio').catch(() => ({ holdings: [] }));
