@@ -603,7 +603,10 @@ export async function claimReplayId(
 
 export type UiState = {
   pubkey: Base58PubKey;
-  trusted: Base58PubKey[];
+  // Trusted issuers. Legacy entries may be bare pubkey strings; current entries
+  // carry an optional user note ("met at the train station, seemed OK"). Read
+  // through normTrustedIssuers() in the UI layer, which normalizes both shapes.
+  trusted: (Base58PubKey | { pubkey: Base58PubKey; note?: string; at?: number })[];
   contacts: { pubkey: Base58PubKey; handle?: string; note?: string }[];
   banks: { pubkey: Base58PubKey; url: string }[];
   catalog: unknown[];
