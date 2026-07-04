@@ -476,15 +476,54 @@ async function renderInvoices(app) {
   app.innerHTML = body;
 }
 
-function renderCreateInvoice(app) {
+// Vouchers the user can pick when authoring orders/invoices/cheques: their own
+// issued vouchers plus those of issuers they trust (resolved at this bank). This
+// replaces pasting raw voucher hashes.
+async function knownVouchers() {
+  const out = [];
+  const seen = new Set();
+  const add = (v, issuer) => {
+    if (!v || typeof v.name !== 'string') return;
+    const hash = hashDoc(v);
+    if (seen.has(hash)) return;
+    seen.add(hash);
+    out.push({ hash, name: v.name, issuer });
+  };
+  const [mine, trusted] = await Promise.all([
+    rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []),
+    uiGet('/trusted').catch(() => []),
+  ]);
+  (mine || []).forEach(v => add(v, 'you'));
+  const resolved = await Promise.all((trusted || []).map(t => {
+    const pk = typeof t === 'string' ? t : t.pubkey;
+    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json()).catch(() => null);
+  }));
+  resolved.forEach(r => {
+    if (!r || !Array.isArray(r.vouchers)) return;
+    const who = r.handle || (r.pubkey || '').slice(0, 8) + '…';
+    r.vouchers.forEach(v => add(v, who));
+  });
+  return out;
+}
+function voucherChooser(id, vouchers, selected) {
+  return `<select id="${id}">${vouchers.map(v =>
+    `<option value="${escapeHtml(v.hash)}"${v.hash === selected ? ' selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.issuer)}</option>`
+  ).join('')}</select>`;
+}
+function noVouchersNotice() {
+  return `<p class="small">No vouchers to choose from yet. <a href="#/vouchers/new">Create one</a> or <a href="#/network">trust an issuer</a> first.</p>`;
+}
+
+async function renderCreateInvoice(app) {
+  const vouchers = await knownVouchers();
   app.innerHTML = header('New invoice') + `<div class="container">
-    ${card('Invoice (credit-only order)', `
-      <label>Voucher hash</label><input id="i-voucher" placeholder="paste voucher hash">
+    ${card('Invoice (credit-only order)', vouchers.length ? `
+      <label>Voucher</label>${voucherChooser('i-voucher', vouchers)}
       <label>Account name</label><input id="i-acct" value="receiving">
       <label>Amount</label><input id="i-amount" type="number" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice()">Create invoice</button>
       <p class="small error" id="i-err"></p>
-    `)}
+    ` : noVouchersNotice())}
   </div>`;
 }
 
@@ -515,15 +554,16 @@ function renderCheques(app) {
   app.innerHTML = header('Cheques') + `<div class="container"><p class="small">Cheques are debit-only orders. Use the Orders tab to view.</p></div>`;
 }
 
-function renderCreateCheque(app) {
+async function renderCreateCheque(app) {
+  const vouchers = await knownVouchers();
   app.innerHTML = header('New cheque') + `<div class="container">
-    ${card('Cheque (debit-only order)', `
-      <label>Voucher hash</label><input id="q-voucher" placeholder="paste voucher hash">
+    ${card('Cheque (debit-only order)', vouchers.length ? `
+      <label>Voucher</label>${voucherChooser('q-voucher', vouchers)}
       <label>Account name</label><input id="q-acct" value="spending">
       <label>Amount</label><input id="q-amount" type="number" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque()">Create cheque</button>
       <p class="small error" id="q-err"></p>
-    `)}
+    ` : noVouchersNotice())}
   </div>`;
 }
 
@@ -566,13 +606,14 @@ async function renderOrders(app) {
   </div>`;
 }
 
-function renderCreateOrder(app) {
+async function renderCreateOrder(app) {
+  const vouchers = await knownVouchers();
   app.innerHTML = header('New order') + `<div class="container">
-    ${card('Two-sided swap order', `
-      <label>Debit voucher hash</label><input id="o-dv" placeholder="voucher you give">
+    ${card('Two-sided swap order', vouchers.length ? `
+      <label>You give (voucher)</label>${voucherChooser('o-dv', vouchers)}
       <label>Debit account name</label><input id="o-da" value="selling">
       <label>Debit max</label><input id="o-dmax" type="number" value="100">
-      <label>Credit voucher hash</label><input id="o-cv" placeholder="voucher you receive">
+      <label>You receive (voucher)</label>${voucherChooser('o-cv', vouchers)}
       <label>Credit account name</label><input id="o-ca" value="buying">
       <label>Credit max</label><input id="o-cmax" type="number" value="90">
       <label>Rate (debit/credit max)</label><input id="o-rate" type="number" value="1.111">
@@ -580,7 +621,7 @@ function renderCreateOrder(app) {
       <label><input type="checkbox" id="o-pub" checked> Publish as offer</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder()">Create order</button>
       <p class="small error" id="o-err"></p>
-    `)}
+    ` : noVouchersNotice())}
   </div>`;
 }
 
