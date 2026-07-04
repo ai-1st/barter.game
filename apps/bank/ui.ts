@@ -60,7 +60,7 @@ export async function handleUiRequest(
     const url = new URL(request.url);
     const uiPath = url.pathname.slice(basePath.length);
     if (uiPath === '/' || uiPath === '' || uiPath.startsWith('/app/')) {
-      return serveSpa(request, uiPath);
+      return serveSpa(request, uiPath, basePath);
     }
 
     // Auth-required UI routes
@@ -1081,13 +1081,24 @@ function escapeHtml(s: string): string {
 
 // --- SPA static ------------------------------------------------------------
 
-async function serveSpa(_request: Request, _uiPath: string): Promise<Response> {
+async function serveSpa(
+  _request: Request,
+  _uiPath: string,
+  basePath: string,
+): Promise<Response> {
+  // Inject a <base> so the SPA's relative `app/…` asset refs resolve correctly
+  // whether the URL has a trailing slash or not: both `/alice/ui` and
+  // `/alice/ui/` must load `/alice/ui/app/app.js`. app.js itself uses
+  // root-absolute API paths, so it is unaffected by <base>.
+  const baseTag = `<base href="${basePath}/">`;
   try {
     const file = await Deno.readTextFile('./apps/web/index.html');
-    return new Response(file, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    return new Response(file.replace('<head>', `<head>\n  ${baseTag}`), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
   } catch {
     return new Response(
-      '<!doctype html><html><head><meta charset="utf-8"><title>barter</title></head><body><div id="app"></div></body></html>',
+      `<!doctype html><html><head><meta charset="utf-8">${baseTag}<title>barter</title></head><body><div id="app"></div></body></html>`,
       { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
     );
   }
