@@ -51,6 +51,23 @@ class UiError extends RpcError {
 const HANDLE_RE = /^[a-z0-9_-]{2,32}$/;
 const HANDLE_RULE = 'handle must be 2-32 chars: lowercase letters, digits, _ or -';
 
+type TrustedIssuer = { pubkey: Base58PubKey; note?: string; at?: number };
+
+// Trusted-issuer entries may be legacy bare pubkey strings or {pubkey,note,at}
+// objects. Normalize to objects so a user note can be added/edited uniformly.
+function normTrustedIssuers(list: unknown): TrustedIssuer[] {
+  if (!Array.isArray(list)) return [];
+  const out: TrustedIssuer[] = [];
+  for (const e of list) {
+    if (typeof e === 'string') out.push({ pubkey: e });
+    else if (e && typeof e === 'object' && typeof (e as TrustedIssuer).pubkey === 'string') {
+      const t = e as TrustedIssuer;
+      out.push({ pubkey: t.pubkey, note: t.note, at: t.at });
+    }
+  }
+  return out;
+}
+
 export async function handleUiRequest(
   bank: Bank,
   request: Request,
@@ -85,22 +102,31 @@ export async function handleUiRequest(
 
     if (uiPath === '/trusted') {
       if (request.method === 'POST') {
-        const body = await request.json() as { pubkey: string };
+        const body = await request.json() as { pubkey: string; note?: string };
         if (!isValidBase58(body.pubkey)) throw new UiError(422, -32012, 'invalid pubkey');
+        const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) : undefined;
         const state = await getUiState(bank, authPubkey);
-        if (!state.trusted.includes(body.pubkey)) state.trusted.push(body.pubkey);
+        const trusted = normTrustedIssuers(state.trusted);
+        const existing = trusted.find((t) => t.pubkey === body.pubkey);
+        if (existing) {
+          // Re-trusting an existing issuer updates its note (edit path).
+          if (note !== undefined) existing.note = note || undefined;
+        } else {
+          trusted.push({ pubkey: body.pubkey, note: note || undefined, at: Date.now() });
+        }
+        state.trusted = trusted;
         const rev = await putUiState(bank, state);
-        return json(200, { trusted: state.trusted, rev });
+        return json(200, { trusted, rev });
       }
       if (request.method === 'GET') {
-        return json(200, (await getUiState(bank, authPubkey)).trusted);
+        return json(200, normTrustedIssuers((await getUiState(bank, authPubkey)).trusted));
       }
     }
     const trustedDelete = uiPath.match(/^\/trusted\/([^/]+)$/);
     if (trustedDelete && request.method === 'DELETE') {
       const pk = trustedDelete[1]!;
       const state = await getUiState(bank, authPubkey);
-      state.trusted = state.trusted.filter((p) => p !== pk);
+      state.trusted = normTrustedIssuers(state.trusted).filter((t) => t.pubkey !== pk);
       const rev = await putUiState(bank, state);
       return json(200, { trusted: state.trusted, rev });
     }

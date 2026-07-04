@@ -877,6 +877,8 @@ async function renderLanding(app, kind, value) {
       `)}</div>`;
     } else {
       app.innerHTML = header('Profile') + `<div class="container" style="max-width:480px">${card('Issuer profile', body + `
+        <label>Note <span class="small">(optional)</span></label>
+        <textarea id="trust-note" rows="2" placeholder="e.g. met at the train station, seemed OK"></textarea>
         <button class="btn" style="width:100%" onclick="applyTrust('${escapeHtml(env.pubkey || value)}', '${escapeHtml(env.handle || '')}')">Trust ${escapeHtml(handle)}</button>
       `)}</div>`;
     }
@@ -919,7 +921,9 @@ async function renderLanding(app, kind, value) {
 // Add an issuer to the trusted list (+ their bank to known banks) with Undo.
 window.applyTrust = async function(pubkey, handle) {
   try {
-    await uiPost('/trusted', { pubkey });
+    const noteEl = document.getElementById('trust-note');
+    const note = noteEl ? noteEl.value.trim() : '';
+    await uiPost('/trusted', { pubkey, note });
     const pending = JSON.parse(sessionStorage.getItem('barter_pending') || '{}');
     if (pending.bank && pending.bank_url && pending.bank !== state.bankPubkey) {
       await uiPost('/banks', { pubkey: pending.bank, url: pending.bank_url }).catch(() => {});
@@ -1041,22 +1045,34 @@ async function renderNetwork(app) {
     uiGet('/contacts').catch(() => []),
   ]);
   // Resolve handles for trusted issuers (public endpoint, no auth needed).
-  const resolved = await Promise.all(trusted.map(pk =>
-    fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json()).catch(() => ({ pubkey: pk }))));
+  // Entries are {pubkey, note} (legacy bare strings still tolerated).
+  const resolved = await Promise.all(trusted.map(t => {
+    const pk = typeof t === 'string' ? t : t.pubkey;
+    const note = typeof t === 'string' ? '' : (t.note || '');
+    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json())
+      .then(r => ({ ...r, pubkey: pk, note }))
+      .catch(() => ({ pubkey: pk, note }));
+  }));
 
   app.innerHTML = header('Network') + `<div class="container">
     ${card('Trusted issuers', resolved.map(r => `
-      <div class="flex" style="justify-content:space-between;align-items:center;margin:0.4rem 0">
-        <span>${escapeHtml(r.handle || '')} <span class="mono small">${escapeHtml(r.pubkey.slice(0, 16))}…</span>
-          <span class="small">${(r.vouchers || []).length} voucher(s)</span></span>
-        <span>
-          <button class="btn secondary" onclick="showShare('i', '${escapeHtml(r.pubkey)}', 'Issuer profile')">QR</button>
-          <button class="btn danger" onclick="untrust('${escapeHtml(r.pubkey)}')">Remove</button>
-        </span>
+      <div style="margin:0.5rem 0;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+        <div class="flex" style="justify-content:space-between;align-items:center">
+          <span>${escapeHtml(r.handle || '')} <span class="mono small">${escapeHtml(r.pubkey.slice(0, 16))}…</span>
+            <span class="small">${(r.vouchers || []).length} voucher(s)</span></span>
+          <span>
+            <button class="btn secondary" data-pk="${escapeHtml(r.pubkey)}" data-note="${escapeHtml(r.note || '')}" onclick="editTrustNote(this)">Note</button>
+            <button class="btn secondary" onclick="showShare('i', '${escapeHtml(r.pubkey)}', 'Issuer profile')">QR</button>
+            <button class="btn danger" onclick="untrust('${escapeHtml(r.pubkey)}')">Remove</button>
+          </span>
+        </div>
+        ${r.note ? `<p class="small" style="margin:0.3rem 0 0;font-style:italic">&ldquo;${escapeHtml(r.note)}&rdquo;</p>` : ''}
       </div>
     `).join('') || '<p class="small">Nobody trusted yet. Scan a friend&#39;s profile QR to start.</p>')}
     ${card('Add trusted issuer', `
       <label>Issuer pubkey</label><input id="n-trust-pk" placeholder="base58 pubkey">
+      <label>Note <span class="small">(optional)</span></label>
+      <textarea id="n-trust-note" rows="2" placeholder="e.g. met at the train station, seemed OK"></textarea>
       <button class="btn" onclick="addTrusted()">Trust</button>
     `)}
     ${card('Known banks', `
@@ -1086,8 +1102,20 @@ window.untrust = async function(pk) {
 };
 window.addTrusted = async function() {
   const pk = document.getElementById('n-trust-pk').value.trim();
+  const noteEl = document.getElementById('n-trust-note');
+  const note = noteEl ? noteEl.value.trim() : '';
   if (!pk) return;
-  try { await uiPost('/trusted', { pubkey: pk }); toast('Trusted'); route(); }
+  try { await uiPost('/trusted', { pubkey: pk, note }); toast('Trusted'); route(); }
+  catch (e) { toast(e.message, 'error'); }
+};
+// Edit (or clear) the note on an already-trusted issuer. The pubkey and current
+// note ride on the button's data-* attributes (safely escaped at render time).
+window.editTrustNote = async function(btn) {
+  const pubkey = btn.dataset.pk;
+  const cur = btn.dataset.note || '';
+  const next = window.prompt('Note about this issuer (why do you trust them?)', cur);
+  if (next === null) return; // cancelled
+  try { await uiPost('/trusted', { pubkey, note: next }); toast('Note saved'); route(); }
   catch (e) { toast(e.message, 'error'); }
 };
 window.removeBank = async function(pk) {
