@@ -51,7 +51,25 @@ input, textarea, select {
   color: var(--fg);
   font: inherit;
 }
+/* Checkboxes and radios must not stretch to full width — otherwise the box
+   centers itself and its label wraps to the next line. Keep them inline with
+   their label text. */
+input[type="checkbox"], input[type="radio"] {
+  width: auto;
+  margin: 0 0.5rem 0 0;
+  padding: 0;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
 label { display: block; margin: 0.75rem 0 0.25rem; color: var(--muted); font-size: 0.875rem; }
+/* A label that wraps a checkbox/radio reads as a single inline row. */
+label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: var(--fg);
+  cursor: pointer;
+}
 .header {
   display: flex;
   align-items: center;
