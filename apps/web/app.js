@@ -182,7 +182,10 @@ window.addEventListener('hashchange', route);
 
 function header(title) {
   return `<div class="header">
-    <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>
+    <div class="brand">
+      <div class="logo-mark"><span></span></div>
+      <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>
+    </div>
     <nav class="nav">
       <a href="#/" ${title==='Dashboard'?'class="active"':''}>Home</a>
       <a href="#/vouchers" ${title==='Vouchers'?'class="active"':''}>Vouchers</a>
@@ -226,16 +229,23 @@ window.lock = function() {
 
 async function renderWelcome(app) {
   const cfg = await fetchConfig().catch(() => null);
-  app.innerHTML = `<div class="container" style="text-align:center;padding-top:15vh">
-    <h1>barter.game</h1>
-    <p class="small">Federated mutual-credit ledger</p>
-    ${cfg ? `<p class="mono small">${escapeHtml(cfg.pubkey.slice(0,16))}… @ ${escapeHtml(cfg.name)}</p>` : ''}
-    <div style="margin-top:2rem;display:flex;gap:1rem;justify-content:center">
-      <a class="btn" href="#/unlock">Log in</a>
-      <a class="btn secondary" href="#/register">Create account</a>
+  app.innerHTML = `<div class="container welcome">
+    <div class="logo-mark large"><span></span></div>
+    <h1>Be your own<br>bank.</h1>
+    <p class="lede">Mint a currency only you can issue — <b>1 logo</b>, <b>1 hour of consulting</b>, <b>1 home-cooked dinner</b> — and settle it with people who already trust you.</p>
+    ${cfg ? `<div class="bank-pill">
+      <div class="ic">◈</div>
+      <div>
+        <div style="font-size:0.87rem;font-weight:600">Connected to ${escapeHtml(cfg.name)}</div>
+        <div class="mono" style="font-size:0.7rem;color:var(--faint)">${escapeHtml(cfg.pubkey.slice(0,16))}… · protocol v1</div>
+      </div>
+    </div>` : ''}
+    <div class="stack">
+      <a class="btn" href="#/register">Create an identity</a>
+      <a class="btn secondary" href="#/unlock">Log in</a>
+      <a href="#/connect" style="text-align:center;font-size:0.87rem;color:var(--muted);padding:0.3rem">I have a raw key instead</a>
     </div>
-    <p class="small" style="margin-top:1rem"><a href="#/connect">I have a raw key instead</a></p>
-    <p class="small" style="margin-top:2rem">Log in with your handle and password. Your key is encrypted in the browser before it ever touches the server.</p>
+    <p class="footnote" style="margin-top:1.6rem">handle + password login · key encrypted in this browser · never sent to the bank</p>
   </div>`;
 }
 
@@ -382,10 +392,10 @@ async function renderDashboard(app) {
       <div class="mono small">${escapeHtml(h.account.slice(0,12))}…</div>
     </div>
   `).join('') || '<p class="small">No balances yet</p>'}</div>`);
-  body += card('Quick actions', `<div class="flex">
+  body += card('Quick actions', `<div class="flex" style="flex-wrap:wrap;gap:0.6rem">
     <a class="btn" href="#/vouchers/new">Create voucher</a>
-    <a class="btn" href="#/invoices/new">New invoice</a>
-    <a class="btn" href="#/cheques/new">New cheque</a>
+    <a class="btn secondary" href="#/invoices/new">New invoice</a>
+    <a class="btn secondary" href="#/cheques/new">New cheque</a>
     <a class="btn secondary" href="#/discover">Discover</a>
   </div>`);
   body += card('Recent activity', history.events.map(e => `

@@ -1,56 +1,97 @@
+/* barter.game — clean-neobank skin
+   Space Grotesk (display) / Hanken Grotesk (body) / JetBrains Mono (data) */
+
 :root {
-  --bg: #0f172a;
-  --fg: #e2e8f0;
-  --muted: #94a3b8;
-  --accent: #38bdf8;
-  --accent2: #22c55e;
-  --danger: #ef4444;
-  --card: #1e293b;
-  --border: #334155;
+  --bg: #F3F1EC;
+  --fg: #1A1712;
+  --muted: #78736A;
+  --faint: #A8A399;
+  --accent: #3D34D6;
+  --accent-soft: #ECEBFB;
+  --accent2: #1C7C54;
+  --green-soft: #E6F1EA;
+  --danger: #C0492E;
+  --danger-soft: #F7E9E3;
+  --amber: #A9761A;
+  --amber-soft: #F5EDDB;
+  --card: #FFFFFF;
+  --border: #EAE7DF;
+  --hair: #F1EEE7;
+  --display: 'Space Grotesk', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg);
+  font-family: 'Hanken Grotesk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: radial-gradient(120% 100% at 50% -10%, #F6F4EF 0%, #F3F1EC 55%, #EDEAE2 100%) fixed;
   color: var(--fg);
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+::selection { background: #d7d4f7; }
 #app { min-height: 100vh; }
-.container { max-width: 900px; margin: 0 auto; padding: 1rem; }
+.container { max-width: 900px; margin: 0 auto; padding: 1.25rem 1rem; }
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+h1 { font-size: 2.1rem; line-height: 1.1; letter-spacing: -0.03em; }
+h3 { font-size: 1.05rem; margin: 0 0 0.6rem; }
+a { color: var(--accent); font-weight: 600; text-decoration: none; }
+a:hover { text-decoration: underline; }
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 1rem;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
   margin-bottom: 1rem;
+  box-shadow: 0 1px 2px rgba(20, 18, 12, 0.04);
 }
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.6rem 1rem;
+  padding: 0.65rem 1rem;
   border: none;
-  border-radius: 0.5rem;
+  border-radius: 12px;
   background: var(--accent);
-  color: #0f172a;
+  color: #fff;
+  font: inherit;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
+  box-shadow: 0 12px 26px -12px rgba(61, 52, 214, 0.8);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
-.btn.secondary { background: var(--border); color: var(--fg); }
-.btn.danger { background: var(--danger); color: white; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:hover { background: #332BB8; text-decoration: none; }
+.btn.secondary {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(20, 18, 12, 0.04);
+}
+.btn.secondary:hover { background: #FAF9F6; }
+.btn.danger { background: var(--danger-soft); color: var(--danger); box-shadow: none; }
+.btn.danger:hover { background: #F2DDD4; }
+.btn:disabled { background: #CFCBF3; color: #fff; cursor: not-allowed; box-shadow: none; }
 input, textarea, select {
   width: 100%;
-  padding: 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--bg);
+  padding: 0.7rem 0.85rem;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
   color: var(--fg);
   font: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.15s ease;
 }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
 /* Checkboxes and radios must not stretch to full width — otherwise the box
    centers itself and its label wraps to the next line. Keep them inline with
    their label text. */
@@ -61,54 +102,93 @@ input[type="checkbox"], input[type="radio"] {
   vertical-align: middle;
   accent-color: var(--accent);
 }
-label { display: block; margin: 0.75rem 0 0.25rem; color: var(--muted); font-size: 0.875rem; }
+label { display: block; margin: 0.85rem 0 0.35rem; color: var(--muted); font-size: 0.83rem; font-weight: 600; }
 /* A label that wraps a checkbox/radio reads as a single inline row. */
 label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
   display: flex;
   align-items: center;
   gap: 0.15rem;
   color: var(--fg);
+  font-weight: 500;
   cursor: pointer;
 }
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem;
-  background: var(--card);
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 1rem;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 10;
 }
-.nav { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.nav a { color: var(--muted); text-decoration: none; font-size: 0.875rem; }
-.nav a.active { color: var(--accent); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size: 0.85rem; }
-.small { font-size: 0.875rem; color: var(--muted); }
+.brand { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.brand strong { font-family: var(--display); font-size: 1rem; letter-spacing: -0.02em; }
+.logo-mark {
+  width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 14px -4px rgba(61, 52, 214, 0.6);
+}
+.logo-mark span {
+  width: 11px; height: 11px;
+  border: 2.2px solid #fff; border-radius: 3px;
+  transform: rotate(45deg); display: block;
+}
+.logo-mark.large { width: 60px; height: 60px; border-radius: 17px; box-shadow: 0 14px 30px -10px rgba(61, 52, 214, 0.6); }
+.logo-mark.large span { width: 22px; height: 22px; border-width: 3.4px; border-radius: 6px; }
+.brand { flex: 1; }
+/* Below the one-row breakpoint the nav drops to its own full-width row,
+   keeping brand + Lock together on the first row. */
+.nav { display: flex; gap: 0.15rem; flex-wrap: wrap; order: 3; flex-basis: 100%; }
+@media (min-width: 1100px) {
+  .nav { order: 0; flex: 1; flex-basis: auto; justify-content: flex-end; }
+  .brand { flex: 0 1 auto; }
+}
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.35rem 0.6rem;
+  border-radius: 9px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.nav a:hover { color: var(--fg); text-decoration: none; }
+.nav a.active { color: var(--accent); background: var(--accent-soft); }
+.mono { font-family: var(--mono); font-size: 0.8rem; }
+.small { font-size: 0.85rem; color: var(--muted); }
 .error { color: var(--danger); }
 .success { color: var(--accent2); }
 .chip {
   display: inline-block;
-  padding: 0.15rem 0.5rem;
+  padding: 0.18rem 0.55rem;
   border-radius: 9999px;
-  background: var(--border);
-  font-size: 0.75rem;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
   margin-right: 0.5rem;
 }
-.chip.state-created { background: #475569; }
-.chip.state-ready { background: #2563eb; }
-.chip.state-held { background: #d97706; }
-.chip.state-settled { background: var(--accent2); }
-.chip.state-rejected { background: var(--danger); }
+.chip.state-created { background: var(--bg); color: var(--muted); }
+.chip.state-ready { background: var(--accent-soft); color: var(--accent); }
+.chip.state-held { background: var(--amber-soft); color: var(--amber); }
+.chip.state-settled { background: var(--green-soft); color: var(--accent2); }
+.chip.state-rejected { background: var(--danger-soft); color: var(--danger); }
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 .flex { display: flex; gap: 1rem; align-items: center; }
 .flex.col { flex-direction: column; align-items: stretch; }
-.scan { width: 100%; max-width: 320px; aspect-ratio: 1; background: white; padding: 0.5rem; border-radius: 0.5rem; }
+.scan { width: 100%; max-width: 320px; aspect-ratio: 1; background: white; padding: 0.5rem; border-radius: 12px; }
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(14, 13, 11, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -116,13 +196,14 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
   padding: 1rem;
 }
 .modal {
-  background: var(--card);
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border-radius: 20px;
   padding: 1.25rem;
   max-width: 420px;
   width: 100%;
   text-align: center;
+  box-shadow: 0 40px 80px -40px rgba(20, 18, 12, 0.4);
 }
 .modal .qr {
   width: 100%;
@@ -130,6 +211,29 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
   image-rendering: pixelated;
   background: white;
   padding: 0.75rem;
-  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
 }
 .modal .flex { justify-content: center; margin-top: 0.75rem; }
+
+/* welcome hero */
+.welcome { max-width: 420px; padding-top: 10vh; text-align: left; }
+.welcome h1 { margin: 1.4rem 0 0; }
+.welcome .lede { font-size: 0.97rem; color: var(--muted); line-height: 1.55; margin: 0.9rem 0 0; }
+.welcome .lede b { color: var(--fg); }
+.bank-pill {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.85rem 1rem; margin-top: 1.5rem;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 15px; box-shadow: 0 1px 2px rgba(20, 18, 12, 0.04);
+  text-align: left;
+}
+.bank-pill .ic {
+  width: 34px; height: 34px; flex-shrink: 0;
+  border-radius: 9px; background: var(--accent-soft);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent); font-weight: 700; font-family: var(--display);
+}
+.stack { display: flex; flex-direction: column; gap: 0.7rem; margin-top: 1.6rem; }
+.stack .btn { width: 100%; padding: 0.95rem; font-size: 1rem; border-radius: 14px; }
+.footnote { font-family: var(--mono); font-size: 0.68rem; color: var(--faint); line-height: 1.5; }
