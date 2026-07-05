@@ -6,54 +6,52 @@ A barter.game trade is a cascade of signed documents across independent banks. H
 
 ## The setup
 
-**Alice** runs `bank-alice`. She mints "1 logo" — a voucher to design one logo.
-**Bob** runs `bank-bob`. He mints "1 hour" — a voucher to do one hour of consulting.
+**Alice** runs `bank-alice`. She issues "1 logo" — a voucher to design one logo.
+**Bob** runs `bank-bob`. He issues "1 hour" — a voucher to do one hour of consulting.
 
 Alice and Bob already know each other. They agree to trade 1 logo for 1 hour.
 
-## Step 1: Mint
+## Step 1: Publish intent
 
-A mint is just the first ledger record pair. Alice presents her signed Voucher plus two Account docs — on two **distinct Account hashes** — to bank-alice. The bank creates a debit on her issue account (it goes negative) and a credit on her holding account (it goes positive). There is no special mint logic: the same mechanism that moves value in trades creates it at mint. One signer, one bank, so the bank settles it immediately.
+There is no mint step. Alice presents her signed Voucher doc plus two Account docs to bank-alice via `submit_docs` — one account for the "1 logo" voucher she gives, one for the "1 hour" voucher she wants. Then she signs an **Order**: debit 1 logo from her issuer account, credit 1 hour to her receiving account, at rate 1:1. Because she is the issuer, her Order is allowed to drive the issuer account **negative** — that negative balance is how vouchers come into existence. The same mechanism that moves value creates it.
 
-Bob does the same on bank-bob.
+She submits the same signed Order to both banks (each bank checks only the side whose voucher it issues) and asks bank-alice to publish a discovery **Offer** — a bank-signed derivation of the Order that exposes its terms while hiding her identity and account hashes.
 
-There is no "open account" call anywhere in the protocol. Accounts are implicit — they come into existence the first time an Account doc is presented to a bank. And Account bodies never leave the holder; banks only ever see Account hashes.
+Bob does the mirror image: his Order gives 1 hour, gets 1 logo.
 
-## Step 2: The invite
+There is no "open account" call anywhere in the protocol. Accounts come into existence the first time an Account doc is presented to a bank; the bank stores the doc by hash after verifying the holder's signature. Account names stay private to the holder.
 
-Bob offers the swap: `barter invite --give <1 hour>:1 --get <1 logo>:1`. This prints a signed `barter://` string carrying his offer, his account hashes, and the doc bodies Alice will need. He hands it to Alice — QR code, chat message, whatever.
+## Step 2: Discovery
 
-## Step 3: Records and the lead Tx
+A **coordinator** finds the match. A coordinator is any keypair — often just the web app of one of the traders, here Alice's. It scans `list_offers` on the banks, finds two Offers on opposite sides of the same trade, and reads each Offer's `order` field to obtain the two holder **Order hashes**. Those hashes — never the Offers — are what the rest of the deal is built on.
 
-Alice runs `barter trade --invite "<barter://...>"`. Her client:
+## Step 3: Records
 
-1. Calls `create_records` on **bank-alice** ("1 logo: debit Alice, credit Bob") and on **bank-bob** ("1 hour: debit Bob, credit Alice"). New Account docs travel with the call. Each bank creates a debit/credit record pair — each record carries the mandatory `pair` ULID of its twin — and returns the bodies.
-2. Builds one **Tx per holder**. **ATx** binds the records on Alice's accounts (the debit of 1 logo, the credit of 1 hour). **BTx** binds the records on Bob's accounts (the credit of 1 logo, the debit of 1 hour). Each holder authorizes only what touches their own accounts.
-3. Signs ATx with action `lead` and submits it to both banks via `submit_tx`. As the lead she settles first — she carries the risk (more below).
-4. Sends Subscription docs cross-subscribing the banks to each other's deal signatures, so every new signature is pushed to whoever needs it. No polling.
-5. Prints a `barterdeal:` **deal token** for Bob.
+The coordinator asks each bank to create the records that connect the Orders:
 
-On each `submit_tx`, a bank checks limits and balances and issues an `approve` or `reject` signature **per ledger record** it owns. After ATx: bank-alice approves the debit of 1 logo; bank-bob approves the credit of 1 hour.
+1. It calls `create_records` on **bank-alice** (`giver`: Alice's Order, `receiver`: Bob's Order, `amount: 1`, `counter_amount: 1`, plus a fresh `deal_id`). Bank-alice mints one debit/credit record pair for "1 logo" — debit Alice, credit Bob — each record carrying the mandatory `pair` ULID of its twin, with the `deal_id` and the coordinator's pubkey sealed inside the record details.
+2. It calls `create_records` on **bank-bob** with `giver`/`receiver` swapped, minting the "1 hour" pair — debit Bob, credit Alice.
+3. Each bank validates the amounts against **both** Orders' `min`/`max` windows and rates before minting, and returns the record bodies. The records sit in state `created`.
 
-## Step 4: The deal token and the follow Tx
+## Step 4: The Mandate
 
-Alice sends Bob the deal token. It carries his unsigned BTx and the record bodies. Bob's client verifies it against the banks directly (`get_deal`) — the records must match the invite he signed, nothing more, nothing less.
+Records don't move until the coordinator clears them. For each Order at each bank, the coordinator signs a **Mandate** — "here is every record in this deal that satisfies this Order, across all banks" — and sends it with the record bodies via `submit_mandate`.
 
-Satisfied, he runs `barter accept "<barterdeal:...>"`: his client signs BTx with action `follow` and submits it to both banks. The follow signature doubles as receipt confirmation — there is no separate confirm step. The banks issue the remaining per-record approvals.
+Each bank verifies the coordinator's signature, checks that its own records were created for this `deal_id` by this coordinator, verifies the foreign record bodies against their minting banks' signatures, and validates the Order's conditions — including the rate — over the **full** record set. Only a Mandate signed by the same coordinator that created the records is accepted: knowing a `deal_id` is not enough to hijack a deal.
 
-## Step 5: Holds
+## Step 5: Ready and hold
 
 From here, **the banks advance on their own** — nobody runs a hold or settle command.
 
-Once every record a bank owns under the deal is bound to a holder-signed Tx and approved, its leg is `approved`. The bank locks the debit accounts and signs a `hold` for the deal. A held account cannot be debited by another deal until the hold is released by settlement or rejection. (A hold conflict just blocks quietly; the bank retries on the next incoming signature.)
+Once a bank has a valid Order bound to its records and the Mandate for that Order, it issues a `ready` signature per record — checking that the debit account has enough free balance (or that the holder is the issuer authorizing a negative balance). Ready signatures travel bank-to-bank via `notify_signatures`; banks find each other through the `bank` fields in the Orders and the Address registry.
 
-Each `hold` signature fans out to the subscribers Alice registered.
+Then the holds. Alice's Order carries `lead: true`, so **bank-alice** is the lead: it locks its debit accounts and signs `hold` once every record in the deal is `ready`. **bank-bob** is a follower: it holds only after verifying the lead's `hold` signature. A held account cannot be debited by another deal until the hold is released by settlement or rejection. (A hold conflict just blocks quietly; the bank retries on the next incoming signature.)
 
 ## Step 6: Settle (the cascade)
 
-Settlement follows the lead/follow order. **bank-alice** is the lead: once it has seen `hold` signatures from every other bank in the deal, it applies its record pair to the balances, releases its holds, and signs `settle`.
+Settlement follows the lead/follow order. **bank-alice** settles first: once it has seen `hold` signatures from every other bank in the deal, it applies its record pair to the balances, releases its holds, and signs `settle`.
 
-**bank-bob** settles after observing bank-alice's settle signature — delivered by fan-out, or relayed by either party with `barter nudge` if a push got lost. Its own settle signature cites the upstream one's hash in `Signature.seen`: a verifiable proof chain that the upstream leg settled first.
+**bank-bob** settles after observing bank-alice's settle signature — delivered bank-to-bank via `notify_signatures`, or relayed by hand (`get_record_signatures` on one bank, `notify_signatures` on the other) if a direct call got lost. Its own settle signature cites the upstream one's hash in `Signature.seen`: a verifiable proof chain that the upstream leg settled first.
 
 The deal is done.
 
@@ -61,12 +59,10 @@ The deal is done.
 
 | Account | Voucher | Bank | Balance |
 | --- | --- | --- | --- |
-| Alice (issue)   | "1 logo" | bank-alice | **-1** (created at mint) |
-| Alice (holding) | "1 logo" | bank-alice | **0** (minted +1, gave 1) |
-| Bob             | "1 logo" | bank-alice | **+1** (he received) |
-| Bob (issue)     | "1 hour" | bank-bob   | **-1** (created at mint) |
-| Bob (holding)   | "1 hour" | bank-bob   | **0** (minted +1, gave 1) |
-| Alice           | "1 hour" | bank-bob   | **+1** (she received) |
+| Alice (issuer) | "1 logo" | bank-alice | **-1** (issued by her own Order) |
+| Bob            | "1 logo" | bank-alice | **+1** (he received) |
+| Bob (issuer)   | "1 hour" | bank-bob   | **-1** (issued by his own Order) |
+| Alice          | "1 hour" | bank-bob   | **+1** (she received) |
 
 Sum per Voucher = 0. The cryptographic version of "we're even."
 
@@ -74,4 +70,4 @@ Sum per Voucher = 0. The cryptographic version of "we're even."
 
 What if bank-bob refuses to settle after bank-alice already did? Alice's logo moved; Bob's hour didn't. This is the **lead/follow risk**, and it is **accepted by design**. The protocol has no rollback. In our trust model, Alice knows Bob (or his bank operator) personally. She yells at him. The protocol records the deal; it does not arbitrate it.
 
-For multi-party rings and complex graphs, the same machinery scales: the initiator's client creates the records, every holder signs their own Tx, and the banks settle themselves in topological order — leads first, then followers, each citing upstream proof in `Signature.seen`. The initiating client is the only party that knows the full graph; the banks each see only their own voucher's records.
+For multi-party rings and complex graphs, the same machinery scales: every holder signs their own Order, the coordinator creates the records and clears each Order with a Mandate, and the banks settle themselves in topological order — leads first, then followers, each citing upstream proof in `Signature.seen`. The coordinator is the only party that knows the full graph; the banks each see only their own voucher's records.

@@ -7,7 +7,7 @@ This file defines the bank's public interface:
 - Orchestration recipe
 - Bank discovery
 
-For document schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the envelope, signatures, and base types, see [`base.md`](./base.md). For the trust and settlement narrative, see [`README.md`](./README.md).
+For document schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the envelope, signatures, and base types, see [`base.md`](./base.md). For discovery surfaces, see [`discovery.md`](./discovery.md); for voucher post feeds, [`post-feed.md`](./post-feed.md). For the trust and settlement narrative, see [`README.md`](./README.md).
 
 ---
 
@@ -27,7 +27,7 @@ The API surface below is intentionally small. Wave 1 (ready) is driven by coordi
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `submit_docs(docs, publish_offers?)` | any → bank | Validate and store each BaseDoc in `docs`. The bank routes by `type`: Vouchers must have `pubkey == bank`; Accounts must reference a known Voucher and be signed by the holder; Orders must reference known Accounts signed by the same holder and have a valid, positive `rate`; Addresses update the address directory if newer by ULID. Optionally derive and publish discovery Offers for any Order hashes listed in `publish_offers`. Return the hashes of stored docs and any derived Offers. |
+| `submit_docs(docs, publish_offers?)` | any → bank | Validate and store each BaseDoc in `docs`. The bank routes by `type`: Vouchers must name this bank in their `bank` field (any issuer may sign them); Accounts must reference a known Voucher and be signed by the holder; Orders must reference known Accounts signed by the same holder and have a valid, positive `rate`; Addresses update the address directory if newer by ULID; Posts must reference a Voucher this bank issues and are accepted per bank policy ([`post-feed.md`](./post-feed.md) §2). Optionally derive and publish discovery Offers for any Order hashes listed in `publish_offers`. Return the hashes of stored docs and any derived Offers. |
 | `submit_mandate(mandate, records)` | coordinator → each participating bank | Validate and execute one [`Mandate`](bank-schema.md#16-mandate) as a unit of work. `mandate.records` lists **every record satisfying `mandate.order` in the deal, across all banks**; the coordinator passes all the record **bodies** alongside. The bank verifies the coordinator signature and `mandate.bank`; checks each **local** record (created for `mandate.deal_id`, `details.coordinator == mandate.pubkey`, `Record.order == mandate.order`) and each **foreign** body (hashes to the listed value, signed by its minting bank, references the order, minted by a bank the Order names); verifies its local slice is complete; then validates BOTH sides of the Order — including the rate over the full local+foreign set. Duplicate `(deal_id, order)` Mandates are rejected. Only then may the bank advance its records out of `created`. |
 
 ### 2.2 Record creation
@@ -89,16 +89,37 @@ Across two banks, the coordinator makes one call to each bank, with `giver`/`rec
 
 ### 2.4 Read
 
+> **Pagination.** Methods marked *paginated* accept optional `cursor` (an
+> opaque, bank-issued continuation token) and `limit` (advisory; banks MAY cap
+> it) parameters, and return `{ items, next_cursor? }` — an absent
+> `next_cursor` means the listing is exhausted. Ordering is **newest-first by
+> ULID**. The convention applies equally to the paginated methods in
+> [`discovery.md`](./discovery.md) and [`post-feed.md`](./post-feed.md).
+
+> **Privacy default.** Balances and record history are private to the account
+> holder: a bank MUST NOT disclose them to third parties unless the account is
+> marked public (`Account.public`, [`bank-schema.md`](./bank-schema.md) §1.2).
+> One carve-out: the **Voucher's issuer** reads all records of their own
+> voucher via `list_voucher_records` — the protocol-mandated backup path. The
+> issuer's bank necessarily sees every position in the voucher it settles;
+> the issuer is the party accountable for it.
+
 | Method | Caller | Side effect |
 |---|---|---|
 | `get_record_signatures(record_hash)` | any → bank | Return the record body and every signature anchored to this record hash. Used by follow parties verifying a deal, by watchers, and by relaying clients. |
 | `get_address(pubkey)` | any → bank | Return the newest signed `Address` doc for the given pubkey, or an error if none is known. Equivalent to `GET /address/<pubkey>`. |
 | `get_voucher(voucher_hash)` | any → bank | Return the Voucher doc body. |
-| `get_account_balance(account_hash)` | holder → issuer bank | Return current and pending balance. |
+| `get_account_balance(account_hash)` | holder → issuer bank | Return current and pending balance as plain numbers — the holder's lightweight read. |
+| `get_balance(account_hash)` | holder → issuer bank | Return a bank-signed [`Balance`](bank-schema.md#18-balance) document attesting the account's current position. The sender MUST be the account's holder unless the account is public. |
 | `list_accounts()` | holder → bank | Return all accounts owned by the sender at this bank, with Voucher bodies. |
+| `list_account_records({ account, cursor?, limit? })` | holder → bank | *Paginated.* Return the records that touch the given account — bodies plus every signature anchored to them. The sender MUST be the account's holder unless the account is public. This is the holder's record-history query. |
+| `list_voucher_records({ voucher, cursor?, limit? })` | issuer → issuing bank | *Paginated.* Return **all** records for the given Voucher — record bodies, their `RecordDetails`, and every signature anchored to them. Banks **MUST** provide this to the Voucher's issuer to comply with the protocol; serving other callers is bank policy. This is the issuer's backup path: with the full record and signature set, an issuer can prove every holder's position and re-create holder balances at another bank (with new Vouchers) if this bank disappears. |
+| `list_public_balances({ holder?, voucher?, cursor?, limit? })` | any → bank | *Paginated.* Return bank-signed [`Balance`](bank-schema.md#18-balance) docs for **public** accounts, filtered by holder pubkey and/or Voucher hash. Non-public accounts MUST NOT appear. See [`discovery.md`](./discovery.md) §6. |
 | `list_offers(voucher_hash, intention)` | any → bank | Return Offers for the given Voucher and intention (`sell` or `buy`). |
 | `get_invoice(hash)` / `get_cheque(hash)` | any → bank | Return the Order or Offer at `hash` if it has the invoice (`debit` omitted) or cheque (`credit` omitted) specialization. |
-| `list_vouchers(filter)` | any → bank | Return Vouchers the bank chooses to expose (e.g., public, discoverable, or all known). Exact filters are bank policy; the method shape is protocol. |
+| `list_vouchers({ issuer?, cursor?, limit? })` | any → bank | *Paginated.* Return Vouchers from the bank's public registry. The `issuer` filter is protocol: given an issuer pubkey, return every registry-published Voucher signed by it. Which Vouchers enter the registry is bank policy ([`discovery.md`](./discovery.md) §2). |
+| `list_posts({ voucher, author?, cursor?, limit? })` | any → bank | *Paginated.* Return stored Post docs anchored to the Voucher, optionally filtered by author ([`post-feed.md`](./post-feed.md) §3). |
+| `get_post(post_hash)` | any → bank | Return the Post doc body. |
 
 ### 2.5 Address directory (REST)
 

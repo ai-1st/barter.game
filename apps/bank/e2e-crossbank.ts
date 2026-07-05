@@ -2,7 +2,7 @@
 //
 // Two banks served by the SAME process (alice, bob). Trader T1 issues voucher
 // VX at bank alice; trader T2 issues voucher VY at bank bob. They swap 10 VX
-// for 10 VY. This exercises the matchmaker creating records on two banks, the
+// for 10 VY. This exercises the coordinator creating records on two banks, the
 // per-bank Confirm, and the lead/follow advance cascade — all of which, when
 // the banks are co-located, must dispatch in-process (Deno Deploy blocks an
 // isolate from fetching its own URL).
@@ -139,7 +139,7 @@ await rpc(t1, bob, 'submit_docs', { docs: [t1Order], publish_offers: [t1OrderHas
 await rpc(t2, alice, 'submit_docs', { docs: [t2Order], publish_offers: [t2OrderHash] });
 await rpc(t2, bob, 'submit_docs', { docs: [t2Order], publish_offers: [t2OrderHash] });
 
-// Matchmaker discovers each Order hash from a published Offer (Offers are the
+// Coordinator discovers each Order hash from a published Offer (Offers are the
 // discovery surface; the Offer's `order` field carries the canonical Order
 // hash that every participating bank can resolve).
 const aliceOffers = await rpc(t1, alice, 'list_offers', { voucher_hash: vxHash, intention: 'sell' }) as Array<Record<string, unknown>>;
@@ -150,7 +150,7 @@ if (!t1Offer || !t2Offer) throw new Error('offers not published as expected');
 const t1OrderRef = (t1Offer as { order: string }).order;
 const t2OrderRef = (t2Offer as { order: string }).order;
 
-// Matchmaker = T1, proposes the deal touching both banks, referencing Orders.
+// Coordinator = T1, proposes the deal touching both banks, referencing Orders.
 const propose = await uiAuth(t1, alice, 'POST', '/propose_deal', {
   offer1: { hash: t1OrderRef, debit_amount: 10, credit_amount: 10 },
   offer2: { hash: t2OrderRef, debit_amount: 10, credit_amount: 10 },
@@ -158,7 +158,7 @@ const propose = await uiAuth(t1, alice, 'POST', '/propose_deal', {
 });
 console.log('proposed deal', propose.deal_id, propose.state);
 
-// Poll deal status on alice (matchmaker bank).
+// Poll deal status on alice (coordinator bank).
 const dealId: string = propose.deal_id;
 let finalState = '';
 for (let i = 0; i < 20; i++) {

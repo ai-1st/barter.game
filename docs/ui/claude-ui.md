@@ -1959,7 +1959,7 @@ The UI maintains, per signed-in user, **one Account per Voucher the user touches
 2. **On building any Order** — if a `debit`/`credit` side names a Voucher the user has no Account for yet, the UI mints one before constructing the Order, because `Order.{debit,credit}.account` must reference a stored Account owned by `Order.pubkey`.
 3. **On accepting an Offer / registering from a QR** — if the user is about to receive a Voucher they don't yet hold (e.g. landing from an Issuer Profile QR and adding the issuer to their trusted issuers, then trading), the UI mints the receiving Account.
 
-The UI keeps the mapping `voucher-hash → {account-ulid, account-hash, local name}` in client state (see **Identity/Key Custody** for where per-user UI state is persisted). Names default to the Voucher name (`"1 hour consulting"`) and are editable locally; the bank sees the chosen name but the protocol treats it as private (`matchmaker-bilateral.md` attack #9).
+The UI keeps the mapping `voucher-hash → {account-ulid, account-hash, local name}` in client state (see **Identity/Key Custody** for where per-user UI state is persisted). Names default to the Voucher name (`"1 hour consulting"`) and are editable locally; the bank sees the chosen name but the protocol treats it as private (`coordinator-arbitrage.md` attack #9).
 
 #### Resulting signed doc
 
@@ -2007,14 +2007,14 @@ The UI derives a friendly **price preview** from `rate`, `min`/`max` (e.g. "give
 
 #### Rate semantics (UI must explain)
 
-`rate = max(total_debit / total_credit)` for the whole deal, **not per pair**, checked at `ready` once every record of the deal matched to this Order is known (`bank-schema.md` §1.4 rule 7; `matchmaker-bilateral.md` rate callout). The UI computes `rate` from the user's "give/get" numbers (`rate = give ÷ get`) and shows it read-only with an editable "worst acceptable price" advanced control. For one-sided Orders `rate` is informational but must be positive; the UI defaults it to `1`.
+`rate = max(total_debit / total_credit)` for the whole deal, **not per pair**, checked at `ready` once every record of the deal matched to this Order is known (`bank-schema.md` §1.4 rule 7; `coordinator-arbitrage.md` rate callout). The UI computes `rate` from the user's "give/get" numbers (`rate = give ÷ get`) and shows it read-only with an editable "worst acceptable price" advanced control. For one-sided Orders `rate` is informational but must be positive; the UI defaults it to `1`.
 
 #### Lead UX and risk (UI must state plainly)
 
-`lead: true` authorizes **this bank to hold and settle this user's records before peer banks have locked or settled** (`bank-schema.md` §1.4; `matchmaker-bilateral.md`). Present it as a single toggle with a plain-language explanation, not jargon:
+`lead: true` authorizes **this bank to hold and settle this user's records before peer banks have locked or settled** (`bank-schema.md` §1.4; `coordinator-arbitrage.md`). Present it as a single toggle with a plain-language explanation, not jargon:
 
 - **Off (follow, default for swaps):** *"Your bank waits for the other side's bank to lock and settle first. Safer — your balance only moves after theirs is committed."*
-- **On (lead):** *"Your bank moves first. The other side's bank could still fail to reciprocate, and there is no automatic timeout or reversal in v1 — you'd have to resolve it socially."* (This is exactly the lead/follow risk in `matchmaker-bilateral.md` attacks #1, #2.)
+- **On (lead):** *"Your bank moves first. The other side's bank could still fail to reciprocate, and there is no automatic timeout or reversal in v1 — you'd have to resolve it socially."* (This is exactly the lead/follow risk in `coordinator-arbitrage.md` attacks #1, #2.)
 - The UI must warn if **both** sides of a contemplated deal would be `follow` (deadlock) or surface that at least one side must lead; for Invoice/Cheque the payer side leads by convention (Flow 4).
 
 #### Resulting signed doc (two-sided swap)
@@ -2222,11 +2222,11 @@ For a same-bank Invoice/Cheque (single bank) this step is skipped.
   "pubkey":"<user>", "to":"<bank-pubkey>" }
 ```
 
-4. **Banks self-advance.** Once each bank has the Confirm + bound Orders, its advance engine issues `ready`, then `hold`, then `settle` automatically; banks discover each other via the `bank` fields on the Orders and push signatures peer-to-peer via `notify_signatures` (`bank-rpc.md` §4 step 6; `matchmaker-bilateral.md` Phase 5). The UI does **not** drive hold/settle.
+4. **Banks self-advance.** Once each bank has the Confirm + bound Orders, its advance engine issues `ready`, then `hold`, then `settle` automatically; banks discover each other via the `bank` fields on the Orders and push signatures peer-to-peer via `notify_signatures` (`bank-rpc.md` §4 step 6; `coordinator-arbitrage.md` Phase 5). The UI does **not** drive hold/settle.
 
 #### Matchmaker-bilateral mechanics the UI surfaces (read-only)
 
-For a two-bank swap the UI shows the lead/follow cascade so the user understands ordering and risk (`matchmaker-bilateral.md` Phase 5):
+For a two-bank swap the UI shows the lead/follow cascade so the user understands ordering and risk (`coordinator-arbitrage.md` Phase 5):
 
 - The bank whose holder's Order is `lead:true` is the **lead**; it issues `hold` then `settle` first.
 - The **follow** bank waits for the lead's `hold` before locking, and for the lead's `settle` before applying its deltas; its `settle` Signature cites the lead's `settle` hashes in `Signature.seen` — the verifiable cascade proof (`base.md` §3.1).
@@ -2247,7 +2247,7 @@ The UI watches each record by hash and renders the stepper from observed Signatu
 
 #### Relay path (push lost / follow stalled)
 
-If a follow bank is missing a predecessor's `settle` (e.g. the lead pushed to a stale Address), any party may relay by hand: read the signatures from the bank that has them and re-deliver them to the bank that needs them (`bank-rpc.md` §4 step 7; `matchmaker-bilateral.md` attack #3). The UI exposes this as a one-click **"Nudge / Relay"** via a custom endpoint:
+If a follow bank is missing a predecessor's `settle` (e.g. the lead pushed to a stale Address), any party may relay by hand: read the signatures from the bank that has them and re-deliver them to the bank that needs them (`bank-rpc.md` §4 step 7; `coordinator-arbitrage.md` attack #3). The UI exposes this as a one-click **"Nudge / Relay"** via a custom endpoint:
 
 ```jsonc
 POST <this-bank-url>/ui/relay_signatures
@@ -2317,7 +2317,7 @@ Order shows `withdrawn` locally; its Offer disappears from subsequent `list_offe
 
 #### Example A — Create and run a cross-bank **sell** Order (swap)
 
-Alice sells `100` Avoucher (issued at Abank) for `90` Bvoucher (issued at Bbank); she follows. This mirrors `matchmaker-bilateral.md`.
+Alice sells `100` Avoucher (issued at Abank) for `90` Bvoucher (issued at Bbank); she follows. This mirrors `coordinator-arbitrage.md`.
 
 1. **Vouchers/Accounts exist.** Alice already issued Avoucher (Flow 1) and holds a Bvoucher Account (Flow 2, auto-minted when she builds the Order). Account hashes: `<A-acct>`, `<B-acct>`.
 2. **Build + sign Order** (Flow 3), `rate = 100/90`:

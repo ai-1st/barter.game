@@ -2,7 +2,7 @@
 //
 // Deno Deploy blocks an isolate from fetching its own deployment URL
 // (HTTP 508 "Loop Detected"). When several banks are co-located in one
-// deployment, the matchmaker and the advance engine must therefore reach
+// deployment, the coordinator and the advance engine must therefore reach
 // peer banks in-process instead of over HTTP. This registry lets the
 // peer-call layer detect a co-located target by pubkey and dispatch the
 // RPC directly against the in-memory Bank.

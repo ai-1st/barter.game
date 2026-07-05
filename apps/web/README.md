@@ -1,0 +1,150 @@
+# barter.game web client
+
+The reference web client: a build-less, framework-less vanilla-JS SPA that the
+bank serves itself. There is no bundler, no transpiler, and no build step — the
+files in this directory are exactly what the browser runs.
+
+The contract this client implements is the [protocol](../../protocol/README.md)
+([base](../../protocol/base.md), [bank-schema](../../protocol/bank-schema.md),
+[bank-rpc](../../protocol/bank-rpc.md)). This app is *one possible client* —
+anyone can build their own against the same protocol. How a client manages
+keypairs (browser keystore, hardware token, paper) is deliberately outside the
+protocol; the scheme below is this client's choice.
+
+## How it is served
+
+The bank ([`../bank/main.ts`](../bank/main.ts), [`../bank/ui.ts`](../bank/ui.ts))
+hosts the SPA directly:
+
+| Route | What it does |
+|---|---|
+| `GET /:bank/ui` (with or without trailing slash) | Returns `index.html` with `<base href="/:bank/ui/">` injected into `<head>`, so the relative `app/…` asset refs resolve either way |
+| `GET /:bank/ui/app/*` | Serves the static files from `apps/web/` (paths are relative to the bank process CWD — run the bank from the repo root) |
+
+The SPA derives the bank name from the first URL path segment and boots by
+fetching the public `GET /:bank/ui/config` for the bank's pubkey and URL.
+
+Runtime dependencies are pinned in an import map in `index.html` and loaded
+from esm.sh (`@noble/ed25519` 3.1.0, `@noble/hashes` 2.2.0, `@scure/base`
+2.2.0, `ulid` 2.3.0); fonts come from Google Fonts. Nothing is bundled, and the
+app is **not offline-capable**.
+
+## Key handling & security model
+
+The bank is a **blind custodian**: it stores only an encrypted keystore blob
+and never sees the password or the plaintext key.
+
+- **Registration** (`#/register`): an ed25519 keypair is generated in the
+  browser. The 32-byte seed is encrypted with PBKDF2-HMAC-SHA-256 (250,000
+  iterations, random 16-byte salt) deriving an AES-256-GCM key (random 12-byte
+  nonce). The client `POST`s `{handle, pubkey, keystore, proof}` to
+  `/:bank/ui/register`, where `proof` is an ed25519 signature over the
+  canonical form of `{handle, pubkey, keystore_sha256}` — proving possession
+  of the private key and binding the keystore blob to the registration. See
+  [WORKAROUNDS.md §1](../../WORKAROUNDS.md) for why PBKDF2 rather than
+  Argon2id.
+- **Login** (`#/unlock`): the encrypted keystore is fetched from the public
+  `GET /:bank/ui/keystore/:handle` (bank rate-limits it to 5/min per handle),
+  decrypted locally, and the pubkey derived from the seed must match the
+  registered pubkey. There is no password recovery.
+- **In memory only**: the decrypted key lives in a JS variable; `localStorage`
+  keeps only the last handle used. **Auto-lock** wipes the key after 10
+  minutes of inactivity (checked every 30 s).
+- **Recovery kit** (`#/settings`): downloads
+  `{handle, pubkey, bank, keystore}` as JSON — useful only with the password.
+- **Barter Links**: landing pages fetch the `?format=json` envelope and verify
+  **every** document signature client-side (`verifyDoc`) before rendering
+  anything. A foreign bank's link resolves at its origin bank.
+
+## Screens
+
+Hash-routed; the whole router is one function in `app.js`.
+
+| Route | Purpose |
+|---|---|
+| `#/` | Welcome hero (logged out) / dashboard: balances, quick actions, recent activity |
+| `#/register`, `#/unlock` | Create account / log in with handle + password |
+| `#/connect` | Import a raw 32-byte base58 seed |
+| `#/vouchers`, `#/vouchers/new` | List and create own vouchers; share profile QR |
+| `#/orders`, `#/orders/new` | List orders; author a two-sided swap order |
+| `#/invoices`, `#/invoices/new` | Credit-only orders (requests for payment) with shareable QR |
+| `#/cheques`, `#/cheques/new` | Debit-only orders with shareable QR |
+| `#/discover` | Poll known banks for published offers; accept one into a deal |
+| `#/deal/:id` | Deal status with per-leg ready/hold/settle; re-polls every 3 s until settled/rejected |
+| `#/activity` | Transaction history |
+| `#/network` | Trusted issuers (with free-text notes), pinned banks, contacts |
+| `#/scan` | Camera QR scanner (BarcodeDetector, jsQR fallback) or paste a link |
+| `#/settings` | Identity, bank info, recovery kit, lock |
+| `#/land/:kind/:value` | Barter Link landings (`i` profile, `v` invoice, `q` cheque, `o` offer, `x` invite) — work logged out, then resume the action after register/login |
+
+Order/invoice/cheque forms use a **voucher chooser** (own issued vouchers plus
+trusted issuers' vouchers resolved via the public `GET /:bank/ui/resolve/:pubkey`)
+instead of raw hash pasting.
+
+## Transports
+
+Two signed channels, both authenticated by the user's ed25519 key:
+
+1. **JSON-RPC** — `POST /:bank/rpc` with a signed envelope
+   `{jsonrpc, id, method, params, pubkey, to, sig}`. This is the protocol
+   surface ([bank-rpc](../../protocol/bank-rpc.md)).
+2. **Signed REST** — `/:bank/ui/*` with an `X-Barter-Auth` header:
+   `base64url(canonical authdoc) + "." + base58 signature`, where the authdoc
+   is `{pubkey, method, path, id, ts, body_sha256}` (`path` includes the query
+   string). The bank checks method/path match, ±120 s timestamp skew, a
+   single-use `id` (replay protection), and the body hash.
+
+Note: `/:bank/ui/*` (state, portfolio, history, orders, discover,
+propose_deal, deal status, trusted/banks/contacts, keystore) is this bank's
+**custom API layer** for its own client — an implementation detail, not part
+of the protocol contract.
+
+## Files
+
+| File | What it is |
+|---|---|
+| `index.html` | Shell + import map; `<base>` is injected at serve time |
+| `app.js` | The entire app: router, screens, transports, keystore crypto |
+| `styles.css` | All styling |
+| `protocol.js` | **Vendored** JS build of [`packages/protocol/src/index.ts`](../../packages/protocol/src/index.ts) — not imported from the workspace |
+| `qr.js` | QR generation (ECC level M) and camera scanning |
+| `vendor/qrcode.js` | qrcode-generator 1.5.0 (MIT), UMD → ESM |
+| `vendor/jsqr.js` | jsQR 1.4.0 (Apache-2.0), UMD → ESM |
+
+**Regenerating `protocol.js` is a manual step.** When the protocol package
+changes: `npx tsc -p tsconfig.web.json` from `packages/protocol/` emits
+`apps/web/index.js`; rename it to `protocol.js` and review the diff. No script
+automates this, so the file can drift — treat protocol-package changes as
+incomplete until this mirror is refreshed.
+
+## Developing
+
+There is no build step, and no meaningful standalone dev server — nearly every
+screen needs the bank API. Run the bank from the repo root and let it serve
+the SPA:
+
+```sh
+deno run apps/bank/genkey.ts   # prints a fresh BANK_..._PRIV_KEY line
+BANK_ALICE_PRIV_KEY=<base58 seed> \
+  deno run --allow-net --allow-env --allow-read --allow-write --unstable-kv \
+  apps/bank/main.ts
+```
+
+Open `http://localhost:8000/alice/ui`. The bank name comes from the env var
+(`BANK_FOO_BAR_PRIV_KEY` → bank `foo-bar`); set several vars to run a local
+federation on one port. Files are read from disk per request — edit and reload.
+
+## Known gaps
+
+- The deal screen's **"Relay signatures" button is a placeholder**: it posts
+  empty `record_hashes` with `from` = `to` = the user's own bank, so it never
+  relays anything.
+- **Cross-bank order submission from `#/orders/new` is unfinished**: the order
+  is only submitted to the user's own bank even when the credit voucher lives
+  at another bank. Cross-bank deals work via the discover/landing accept paths,
+  where the counterparty bank is known.
+- The **voucher create form has no `expires` field**, although the protocol
+  `Voucher` schema supports an optional `expires`.
+- `#/cheques` is a stub that points at the Orders tab; only `#/cheques/new`
+  does real work.
+- Keystore KDF is PBKDF2, not Argon2id ([WORKAROUNDS.md §1](../../WORKAROUNDS.md)).

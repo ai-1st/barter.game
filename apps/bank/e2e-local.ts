@@ -1,5 +1,5 @@
 // End-to-end smoke test against a local bank server.
-// Run with: deno run --allow-net apps/bank/e2e-local.ts
+// Run with: deno run --allow-net --allow-env apps/bank/e2e-local.ts
 import {
   base58Encode,
   base58Decode,

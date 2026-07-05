@@ -3,10 +3,10 @@
 //   PRIV_KEY=<base58-32-bytes>
 //   PUB_KEY=<base58-32-bytes>
 //
-// Use to bootstrap a new bank function:
-//   bun run scripts/genkey.ts > /tmp/bank-alice.env
-//   supabase secrets set --env-file /tmp/bank-alice.env
-//   rm /tmp/bank-alice.env
+// Use to bootstrap a new bank: rename the PRIV_KEY line to
+// BANK_<NAME>_PRIV_KEY and set it as an env var (locally or in the
+// Deno Deploy dashboard). `deno run apps/bank/genkey.ts` does the
+// same under Deno and prints the env-var form directly.
 //
 // Never commit the resulting private key.
 

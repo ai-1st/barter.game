@@ -57,49 +57,47 @@ Before dispatching to a method handler:
 
 ## 5. Implement the method handlers
 
-Start with read-only methods (`get_voucher`, `get_account_balance`, `list_accounts`, `get_deal`) — they're simple and let you test your envelope.
+Start with read-only methods (`get_voucher`, `get_account_balance`, `list_accounts`, `get_record_signatures`) — they're simple and let you test your envelope.
 
-One rule that applies everywhere: there is no `open_account`. Accounts are **implicit** — any mutating call can carry Voucher and Account docs, and the bank stores them on first sight (a Voucher must reference this bank; an Account's voucher must be issued here). **Never accept a Account body** — `account.account` is an opaque hash; Account bodies stay with the holder.
+One rule that applies everywhere: there is no `open_account`. Accounts arrive as signed docs through `submit_docs`, and the bank stores each one by hash on first sight after verifying the holder's signature (a Voucher must reference this bank; an Account's voucher must be issued here). Account `name`s stay private to the holder, and balances are private by default.
 
 Then implement the trade path in order:
 
-### `mint`
-- Validate: the Voucher references this bank and is signed by the sender; the two Account docs belong to the sender, reference the Voucher, and sit on **distinct Account hashes**.
-- The mint is the first ledger record pair: a debit on the issue account (goes negative) and a credit on the holding account (goes positive). Set `pair` on each record.
-- Single signer, single bank — settle immediately: apply the deltas, issue per-record `approve` signatures, a `settle` for the mint deal, and a bank attestation over the Voucher hash.
+### `submit_docs`
+- One intake method for every holder-signed doc. Route by `type`: Vouchers must have `pubkey == bank`; Accounts must reference a known Voucher and be signed by the holder; Orders must reference known Accounts owned by the same holder and carry a valid, positive `rate`; Addresses update the address directory if newer by ULID; Posts per bank policy.
+- Optionally derive and publish a discovery **Offer** for any Order hash listed in `publish_offers` — the Offer copies the Order's terms while hiding the holder's identity and account hashes.
+- Return the hashes of stored docs and any derived Offers.
+- There is no `mint`. Issuers begin trading by submitting an Order that debits their own issuer account — the issuer is the one holder allowed to go negative.
 
 ### `create_records`
-- Run doc intake first, so new accounts can be referenced in the same call.
-- Per transfer: both accounts on the same Voucher, Voucher issued here, integer/positive checks.
-- The bank mints debit/credit record pairs with its own ULIDs; `pair` links the two halves.
-- Store the leg topology under the deal: `role` (lead/follow), `predecessors`, the full bank list. State: `created`.
-- Store in `ledger_records` and return the bodies to the client.
+- Coordinator-only: this is the sole way records come into existence.
+- Params: `giver` and `receiver` — hashes of holder-signed **Orders** already stored via `submit_docs` — plus `amount`, `counter_amount`, and a `deal_id`.
+- Mint exactly one debit/credit record pair for **this bank's voucher**, with your own ULIDs; `pair` links the two halves. Seal `deal_id` and the sender's pubkey (the coordinator) into each record's `RecordDetails` — only that coordinator's Mandate can advance them later.
+- Validate: both Orders resolve and name this bank's voucher on the right sides; `amount` sits inside both Orders' `min`/`max`; the caller's `counter_amount` is bank-asserted against both Orders' foreign-side windows and rates — never trusted.
+- Idempotent on `(deal_id, giver, receiver)`; same key with different amounts is rejected. State: `created`. Return the bodies.
 
-### `submit_tx`
-- Params: a holder's Tx plus their `lead`/`follow` signature over its hash. The envelope sender may differ from the holder — anyone can relay a signed Tx.
-- Validate: the signature verifies; every record this bank owns in `tx.records` sits on an account whose holder is `tx.pubkey`. Idempotent re-submits are fine.
-- Persist the Tx, bind the records to it.
-- Per owned record, run the limit/balance check and issue a per-record `approve` or `reject` Signature.
-- Leg advances to `approved` once **every** record this bank owns under the deal is Tx-bound and approved.
-- Fan out the new signatures, then run the advance engine.
+### `submit_mandate`
+- Params: one coordinator-signed `Mandate` — the unit of work for one (Order, bank) — plus all the record bodies it lists (every record satisfying that Order across **all** banks).
+- Verify the coordinator's signature and `mandate.bank == you`. Resolve `mandate.order` to a stored Order.
+- Local records must have been created for `mandate.deal_id` with `details.coordinator == mandate.pubkey` and `Record.order == mandate.order`. Foreign bodies must hash to their listed values and be signed by their minting banks.
+- Verify local completeness (every record you minted for this deal+order is listed), then validate the Order's conditions — per-record bounds, cumulative and account limits, and the rate over the full local+foreign set.
+- Reject duplicate `(deal_id, order)` Mandates. Only after a valid Mandate may records leave `created`.
 
 ### `subscribe`
-- Store the Subscription doc (subscriber pubkey = sender) plus one watch row per key (`record`, `hash`, or `deal`).
-- On every signature the bank creates, POST a bank-signed `notify_signatures` envelope to matching subscribers. Fire-and-forget: a lost push is unstuck by client relay.
+- Optional. Store the Subscription doc (subscriber pubkey = sender) plus one watch row per key (`record`, `holder`, or `voucher`).
+- On every matching signature the bank creates or receives, POST a bank-signed `notify_signatures` envelope to the subscriber's URL. Fire-and-forget: a lost push is unstuck by relay. Banks never rely on subscriptions to settle.
 
 ### `notify_signatures`
-- Verify the envelope and each pushed signature (known pubkey, valid sig), store them, then run the advance engine.
-- This single method serves both topologies: bank-to-bank push and client relay.
+- Verify each pushed signature (known pubkey, valid sig), store the valid ones, then run the advance engine for every deal they touch. Invalid entries are skipped, not fatal.
+- This single method serves both topologies: direct bank-to-bank delivery (the reference default — banks find each other via `Order.bank` and the Address registry) and manual relay by any party.
 
 ### The advance engine (not an RPC)
-Banks self-advance — there is no client hold or settle call. After every `submit_tx` and `notify_signatures`, evaluate the leg:
-- `approved` → acquire holds on owned debit accounts, sign `hold` for the deal, fan out, state → `held`. On hold conflict, leave state unchanged; the next event retries.
-- `held` → settle. **Lead leg:** once valid `hold` signatures from every other bank in the deal have arrived. **Follow leg:** once valid `settle` signatures from all predecessors have arrived, citing their hashes in `Signature.seen`.
-- Settle = apply deltas (enforcing sum-to-zero), release holds, sign `settle`, fan out, state → `settled`. Idempotent.
-
-### `reject_deal`
-- Any deal participant can cancel before settlement.
-- Release holds, mark the leg `rejected`, fan out the reject signature.
+Banks self-advance — there is no client hold or settle call. After every `submit_docs`, `submit_mandate`, and `notify_signatures`, re-evaluate the affected records:
+- `created` → `approved` once every owned record has a valid Order bound **and** the Mandate for its Order has arrived. Issue a `ready` signature per record after checking free balance (issuers may go negative on their own Orders); fan out.
+- `approved` → `held`. **Lead** (the authorizing Order has `lead: true`): hold once every record in the deal is `ready`. **Follow:** hold only after verifying the lead's `hold` signature, whose `seen` must contain your `ready` hashes. Acquire holds on owned debit accounts, sign `hold`, fan out. On hold conflict, leave state unchanged; the next event retries.
+- `held` → `settled`. **Lead:** settle once every record in the deal is held and the follow holds cite your hashes. **Follow:** settle once the lead's `settle` signature arrives, citing your `hold` hashes in `Signature.seen`.
+- Settle = apply deltas (enforcing sum-to-zero), release holds, sign `settle`, fan out. Idempotent.
+- **Reject:** banks — never holders or coordinators — issue a `reject` signature on a record whose precondition failure is permanent (side/account mismatch, amount out of bounds, uncovered debit, limit violation). A reject cascades through the deal's pre-settled records, releases holds, and fans out. Settled records stay settled. A bank MAY also reject a stalled deal on its own timeout to free locked accounts.
 
 ## 6. Enforce the invariants
 
@@ -107,7 +105,7 @@ Banks self-advance — there is no client hold or settle call. After every `subm
 On every settle, after applying deltas, the sum of `balance` across all accounts for the settled Voucher must equal zero. If it doesn't, your implementation has a bug.
 
 ### One active hold per account
-When the advance engine acquires holds, check for another active hold on the same account. On conflict, leave the leg state unchanged — the next incoming signature retries. Release holds on `settle`, `reject`, and sweeper cleanup.
+When the advance engine acquires holds, check for another active hold on the same account by a different deal. On conflict, leave the record state unchanged — the next incoming signature retries. Release holds on `settle`, `reject`, and sweeper cleanup.
 
 ## 7. Expose discovery
 
@@ -126,25 +124,23 @@ Sign this response with your bank key so clients can verify it.
 
 ## 8. Add an address directory (optional but recommended)
 
-The reference server exposes:
+The reference server exposes one plain REST endpoint for reads:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/<name>/address/<pubkey>` | Look up a stored Address doc |
-| `POST` | `/<name>/address` | Submit or update an Address doc |
+| `GET` | `/<name>/address/<pubkey>` | Look up the newest stored Address doc |
 
-Address docs map a pubkey to a human-readable name and a push-receipt URL. They live outside RPC so the mapping itself is not part of a signed RPC envelope.
+Address docs map a pubkey to a human-readable name and a callable URL; peer banks use them to call each other directly. Writes go through the standard `submit_docs` RPC — an Address is just another signed doc, updated when a newer ULID arrives. Only the read lives outside RPC, so anyone can resolve a pubkey with a bare GET.
 
 ## 9. Write a client and test end-to-end
 
 You need a client that can:
-1. Mint (`mint`: Voucher + two Accounts on distinct Account hashes).
-2. Produce and consume `barter://` invite strings.
-3. Initiate a trade: call `create_records` on each bank, build one Tx per holder, sign yours as `lead`, `submit_tx`, register Subscriptions, and print a `barterdeal:` token per counterparty.
-4. Accept: verify a deal token against the banks via `get_deal`, sign your Tx as `follow`, `submit_tx`.
-5. Watch the banks self-advance (`get_deal` polling — `barter status`) and relay missing signatures via `notify_signatures` when a push got lost (`barter nudge`).
+1. Register a keypair and submit signed Voucher, Account, and Order docs via `submit_docs` (an issuer's first Order debits the issuer account negative — that's how vouchers come into existence; there is no mint call).
+2. Produce and consume `barter://` invite strings and discover counterparty Offers via `list_offers`.
+3. Act as coordinator: read the Order hashes from the Offers, call `create_records` on each participating bank, then send a signed `Mandate` per Order per bank via `submit_mandate`.
+4. Watch the banks self-advance (`list_account_records` / `get_record_signatures`) and relay missing signatures by hand — `get_record_signatures` on one bank, `notify_signatures` on the other — when a direct bank-to-bank push got lost.
 
-Test against the reference banks: mint → invite → trade → accept → status. If your client can trade with `bank-alice` and `bank-bob`, your implementation is interoperable.
+Test against the reference banks (the browser SPA each bank serves at `/:bank/ui` is the reference client): publish Orders → create records → mandate → watch the banks settle. If your client can trade with `bank-alice` and `bank-bob`, your implementation is interoperable.
 
 ## 10. Production considerations
 
@@ -157,16 +153,13 @@ Test against the reference banks: mint → invite → trade → accept → statu
 
 | Concern | Path in reference repo |
 |---|---|
-| Canonical JSON | `packages/protocol/src/canonical.ts` |
-| Crypto primitives | `packages/protocol/src/crypto.ts` |
-| Doc schemas + validators | `packages/protocol/src/schemas.ts` |
-| Invite format | `packages/protocol/src/invite.ts` |
-| Deno Deploy entrypoint | `apps/bank/main.ts` |
+| Canonical JSON, crypto, doc types + validators | `packages/protocol/src/index.ts` (single file) |
+| Deno entrypoint | `apps/bank/main.ts` |
 | Env var key loader | `apps/bank/env.ts` |
 | RPC envelope handler | `apps/bank/rpc.ts` |
+| Bank method registry | `apps/bank/registry.ts` |
 | Per-method handlers | `apps/bank/handlers/*.ts` |
 | Deno KV database layer | `apps/bank/db.ts` |
-| Bank method registry | `apps/bank/registry.ts` |
 | Advance engine | `apps/bank/advance.ts` |
-| Signature fan-out | `apps/bank/subscriptions.ts` |
-| CLI client wrapper | `apps/cli/src/client.ts` |
+| Web UI serving | `apps/bank/ui.ts` |
+| Browser client | `apps/web/app.js` |

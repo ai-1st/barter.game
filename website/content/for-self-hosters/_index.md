@@ -8,43 +8,39 @@ A barter.game bank is just an HTTP server that holds an ed25519 key and enforces
 
 ## The Deno Deploy path (reference implementation)
 
-This is the fastest way to get a live bank. It uses the same code that runs the demo.
+This is the fastest way to get a live bank. It uses the same code that runs the live demo banks.
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) installed (for local tooling and key generation)
+- [Deno](https://deno.com) installed (for key generation and the `deno deploy` CLI)
 - A [Deno Deploy](https://deno.com/deploy) account
-- A GitHub repository for the project
 
 ### Steps
 
 ```bash
-# 1. Clone the repo and install
+# 1. Clone the repo
 git clone https://github.com/ai-1st/barter.game.git && cd barter.game
-bun install
 
 # 2. Generate a bank private key
-bun run scripts/genkey.ts | sed 's/^BANK_PRIV_KEY/BANK_ALICE_PRIV_KEY/' > /tmp/key.env
-#    The file contains one line: BANK_ALICE_PRIV_KEY=<base58>
+deno run apps/bank/genkey.ts
+#    Prints two lines — BANK_ALICE_PRIV_KEY=<base58> and the matching
+#    BANK_ALICE_PUB_KEY. Keep the private key safe; the pubkey is shareable.
 
-# 3. Create a Deno Deploy project and link the repo
-#    - Go to https://deno.com/deploy
-#    - Create a project; note its name
-#    - Connect the GitHub repository
+# 3. Point the deploy block in deno.json at your own project
+#    "deploy": { "org": "<your-org>", "app": "<your-app>" }
 
-# 4. Configure GitHub variables and secrets
-#    - Repository variable: DENO_DEPLOY_PROJECT = <your-project-name>
-#    - Repository secret:   BANK_ALICE_PRIV_KEY = <the key from /tmp/key.env>
+# 4. Set the env vars in the Deno Deploy dashboard
+#    BANK_ALICE_PRIV_KEY = <the key from step 2>
 #    Add BANK_BOB_PRIV_KEY, BANK_CAROL_PRIV_KEY, etc. to serve more banks from the same project.
 
-# 5. Push to main
-#    .github/workflows/deploy.yml deploys apps/bank/main.ts automatically.
+# 5. Deploy
+deno deploy
 
 # 6. Verify it's live
-curl https://<your-project>.deno.dev/alice/barter-bank.json
+curl https://<your-app>.<your-org>.deno.net/alice/barter-bank.json
 ```
 
-You now have a bank. Tell your friends about it. They run `barter init` against your URL and you're a tiny central bank in a federation of exactly however many people you've invited.
+You now have a bank. Tell your friends about it. They open `<your-url>/<bank>/ui`, register, and you're a tiny central bank in a federation of exactly however many people you've invited.
 
 ## The "bring your own server" path
 
@@ -55,7 +51,7 @@ Don't want Deno Deploy? No problem. You need four things:
 Any language, any framework. You just need to handle:
 - `POST /<name>/rpc` — the JSON-RPC envelope
 - `GET /<name>/barter-bank.json` — bank identity discovery
-- `GET /<name>/address/<pubkey>` and `POST /<name>/address` — address directory (optional but recommended)
+- `GET /<name>/address/<pubkey>` — address directory reads (optional but recommended; Address docs are written via the `submit_docs` RPC)
 
 ### 2. An ed25519 keypair
 
@@ -70,7 +66,7 @@ Deno KV with atomic check-and-set is one way. Postgres with a partial unique ind
 
 ### 4. The protocol handlers
 
-Implement the methods in `PROTOCOL.md` §7. The reference handlers in `apps/bank/handlers/` are a working example you can read and adapt.
+Implement the methods in `protocol/bank-rpc.md`. The reference handlers in `apps/bank/handlers/` are a working example you can read and adapt.
 
 ## Security checklist
 
@@ -92,7 +88,7 @@ In v1.5 we may add a federated directory. For now, word of mouth is the discover
 
 ## Read more
 
-- [Protocol contract →](https://github.com/ai-1st/barter.game/blob/main/PROTOCOL.md)
-- [Implementation details →](https://github.com/ai-1st/barter.game/blob/main/IMPLEMENTATION.md)
-- [Database schema →](https://github.com/ai-1st/barter.game/blob/main/SCHEMA.md)
+- [Protocol contract →](https://github.com/ai-1st/barter.game/blob/main/protocol/README.md)
+- [Reference bank server →](https://github.com/ai-1st/barter.game/blob/main/apps/bank/README.md)
+- [Reference web client →](https://github.com/ai-1st/barter.game/blob/main/apps/web/README.md)
 - [Developer guide →](../for-developers)

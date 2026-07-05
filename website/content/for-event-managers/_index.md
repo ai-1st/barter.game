@@ -16,24 +16,20 @@ The best networking happens when people trade real value, not just business card
 ## How it works at an event
 
 1. **You deploy a bank** (or we do it for you). It takes 10 minutes. See the [self-hoster guide](../for-self-hosters).
-2. **Attendees `barter init`** against your bank URL. They now have a wallet.
+2. **Attendees open your bank's web UI** (`<your-bank-url>/ui`) and register with a handle and password. They now have a wallet.
 3. **They mint vouchers** — whatever they can deliver. "1 design review." "1 investor intro." "1 yoga class."
-4. **They trade.** The protocol handles the cryptography. Attendees just scan a QR code or paste an invite string, then accept the deal token that comes back.
+4. **They trade.** The protocol handles the cryptography. Attendees just scan a QR code or paste an invite string, then place a signed order — the web app coordinates the rest.
 5. **Banks settle on their own.** Once both sides have signed, balances update. The issuer now owes the holder a deliverable.
 
 ## What your attendees see
 
-```bash
-# At the event
-barter init --bank https://your-event.barter.game/functions/v1/event-bank
-barter mint "1 portfolio review" --amount 5
-barter invite --give <voucher>:1 --get <their-voucher>:1   # hand them the barter:// string
-# …they run: barter trade --invite "<barter://...>" and send back a deal token…
-barter accept "<barterdeal:...>"                            # banks settle on their own
-barter inbox                                                # watch the balances land
-```
+1. **Open the bank's web UI** — `https://your-event.example/event-bank/ui` — and register with a handle and password. The key is generated and encrypted right in the browser.
+2. **Mint a voucher** — "1 portfolio review", up to 5 of them.
+3. **Share the QR code.** Anyone who scans it sees the voucher and can propose a trade.
+4. **Place an order** — give 1 "portfolio review", get 1 of theirs. The app creates the ledger records and clears the orders; the banks settle on their own.
+5. **Watch the balances land** in the wallet.
 
-Or, wrap this in a simple web UI (v1.5) and attendees never touch the terminal.
+That's the whole flow — the web UI ships with every bank today, and attendees never touch a terminal.
 
 ## The day after
 
@@ -43,6 +39,6 @@ Attendees leave holding signed vouchers. They can redeem them later — a coffee
 
 - [Deploy a bank →](../for-self-hosters)
 - [Read the developer docs →](../for-developers)
-- [See the full protocol →](https://github.com/ai-1st/barter.game/blob/main/PROTOCOL.md)
+- [See the full protocol →](https://github.com/ai-1st/barter.game/blob/main/protocol/README.md)
 
 Want help running this at your event? Open an issue on GitHub and we'll figure it out together.

@@ -36,7 +36,7 @@ layout: hextra-home
   >}}
   {{< hextra/feature-card
     title="For AI Enthusiasts"
-    subtitle="Let AI agents trade with each other. Agents can be holders, emitters, even banks."
+    subtitle="Let AI agents trade with each other. Agents can be holders, issuers, even banks."
     link="for-ai-enthusiasts"
     icon="cube"
   >}}
@@ -53,7 +53,7 @@ layout: hextra-home
 
 ## How it works in one paragraph
 
-Every user and every bank is an **ed25519 keypair**. Voucher, Account, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the matchmaker creates the record pairs (`create_records`), holders submit signed Orders (`submit_docs`), and the matchmaker sends each bank a per-bank `Confirm`. From there the banks self-advance: per-record approvals, holds, then settlement. Banks discover each other via the `bank` fields in Orders and call each other directly through the Address registry; subscriptions are optional. No bank ever sees the full transaction. The math binds everyone together.
+Every user and every bank is an **ed25519 keypair**. Voucher, Account, Signature, Subscription, and Order docs are canonicalized via RFC 8785 JSON, SHA-256-hashed, and content-addressed. Ledger records are bank-minted with ULIDs. In a cross-bank trade the coordinator creates the record pairs (`create_records`), holders submit signed Orders (`submit_docs`), and the coordinator clears each Order at each bank with a signed `Mandate` (`submit_mandate`). From there the banks self-advance: per-record approvals, holds, then settlement. Banks discover each other via the `bank` fields in Orders and call each other directly through the Address registry; subscriptions are optional. No bank ever sees the full transaction. The math binds everyone together.
 
 [Read the full docs →](docs)
 
@@ -63,13 +63,17 @@ Every user and every bank is an **ed25519 keypair**. Voucher, Account, Signature
 
 ## See it work
 
+Open the live demo banks — no install needed: [barter-game-banks.ai-1st.deno.net/alice/ui](https://barter-game-banks.ai-1st.deno.net/alice/ui). Register with a handle and password; the key is generated and encrypted in your browser.
+
+Or run a bank locally:
+
 ```bash
 git clone https://github.com/ai-1st/barter.game.git
 cd barter.game
-bun install
-./scripts/demo.sh
+deno run apps/bank/genkey.ts   # prints BANK_ALICE_PRIV_KEY=<base58>
+BANK_ALICE_PRIV_KEY=<base58> deno run --allow-net --allow-env --allow-read --allow-write --unstable-kv apps/bank/main.ts
 ```
 
-The script narrates each step. By the end, two simulated users have minted personal currencies on different banks, traded them, and settled. Sum per Voucher = 0. The cryptographic version of "we're even."
+Then open `http://localhost:8000/alice/ui`, register two users, issue personal currencies, and place matching orders. The banks settle on their own. Sum per Voucher = 0. The cryptographic version of "we're even."
 
 </div>

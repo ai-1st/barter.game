@@ -12,7 +12,7 @@ Every "coin" in your wallet is a signed IOU from someone you know. "1 logo from 
 
 This changes how you think about your portfolio:
 
-- **Diversify your emitters.** Holding 50 vouchers from one person is concentration risk. If they ghost, you're holding paper.
+- **Diversify your issuers.** Holding 50 vouchers from one person is concentration risk. If they ghost, you're holding paper.
 - **Pay attention to `due` dates.** A voucher with a maturity date is a time-bounded commitment. Trade accordingly.
 - **Watch the limit.** If Alice set `limit: 100` on her "1 logo" voucher, she can only issue 100 total. Scarcity matters.
 
@@ -37,7 +37,7 @@ In every cross-bank trade, someone settles first. That party is the **lead**. Th
 - Their bank operator is unknown.
 - You can afford to wait.
 
-In a ring trade (`A → B → C → A`), one party must break the cycle by leading. The protocol picks based on the graph structure. As a player, you should understand whether you're in the lead set before you accept — your follow signature on your own Tx is what authorizes the deal, and once the banks have everyone's signatures they settle on their own.
+In a ring trade (`A → B → C → A`), one party must break the cycle by leading. The protocol picks based on the graph structure. As a player, you should understand whether you're in the lead set before you sign — the `lead` flag on your own Order is what authorizes the role, and once the banks have everyone's Orders and the coordinator's Mandates they settle on their own.
 
 ## The social layer is the enforcement layer
 
@@ -53,11 +53,11 @@ This is a feature, not a bug. The protocol is precise about what it guarantees (
 
 ### The liquidity bridge
 
-Alice wants Bob's "1 hour" but Bob doesn't want Alice's "1 logo." Carol wants Alice's "1 logo" and has something Bob wants. The protocol supports N-party rings. Alice initiates a three-way deal: her client builds the graph, creates the records on each bank, and hands Bob and Carol a deal token each. They accept, and the banks settle the ring themselves.
+Alice wants Bob's "1 hour" but Bob doesn't want Alice's "1 logo." Carol wants Alice's "1 logo" and has something Bob wants. The protocol supports N-party rings. Alice initiates a three-way deal: Bob and Carol each sign an Order, Alice's client acts as coordinator — it creates the records on each bank and clears each Order with a signed Mandate — and the banks settle the ring themselves.
 
 ### Portfolio rebalancing
 
-If you're holding too many vouchers from one emitter, offer them to others at favorable rates. "I'll give you 2 of Alice's logos for 1 of your hours." The protocol doesn't price-match; you do. It's barter, not a market.
+If you're holding too many vouchers from one issuer, offer them to others at favorable rates. "I'll give you 2 of Alice's logos for 1 of your hours." The protocol doesn't price-match; you do. It's barter, not a market.
 
 ### The event play
 
@@ -68,7 +68,7 @@ Go to an event with an empty wallet. Mint a voucher on arrival — "1 intro to m
 The ultimate barter.game player is not the one with the highest balance. It's the one with:
 
 - **The most trusted issuer relationships.** People know you'll deliver.
-- **The most diverse portfolio.** Many small vouchers from many emitters.
+- **The most diverse portfolio.** Many small vouchers from many issuers.
 - **The best timing.** Knowing when to lead and when to follow.
 - **The cleanest redemption record.** You settle your debts promptly.
 

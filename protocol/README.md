@@ -5,11 +5,13 @@
 > If you are building your own bank or client, read this overview first, then see:
 >
 > - [`base.md`](./base.md) — identity, canonical JSON, `BaseDoc`, `Signature`, `Address`, the JSON-RPC envelope, replay protection, and request signing.
-> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Subscription`) and ledger semantics (state machine, concurrency, balance invariants).
+> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Mandate`, `Subscription`, `Balance`) and ledger semantics (state machine, concurrency, balance invariants).
 > - [`bank-rpc.md`](./bank-rpc.md) — the bank JSON-RPC API and REST address-directory endpoints.
-> - `scenarios/*.md` are step-by-step interaction traces. 
-> 
-> `IMPLEMENTATION.md` explains how the reference team built it.
+> - [`discovery.md`](./discovery.md) — how parties find banks, vouchers, issuers, offers, and public holdings.
+> - [`post-feed.md`](./post-feed.md) — voucher-anchored post feeds (`Post` doc, publishing, reading, moderation).
+> - [`../scenarios/`](../scenarios/) — step-by-step interaction traces.
+>
+> The reference implementation documents its own choices in [`../apps/bank/README.md`](../apps/bank/README.md), [`../apps/web/README.md`](../apps/web/README.md), and [`../packages/protocol/README.md`](../packages/protocol/README.md).
 
 A federated mutual-credit ledger enabling multi-party barter deals where parties issue Vouchers for their goods and services and exchange them with others. A deal is a chain of paired credit/debit transfers — one or more holders moving Vouchers among themselves across one or more banks — completed via signed JSON-RPC, ending with every participating bank agreeing on the new balances.
 
@@ -21,7 +23,7 @@ A **Voucher** is a signed, content-addressed document in which one party (the **
 
 - **Issuer**: the owner of the Voucher. The issuer decides what the Voucher means and how many may exist. The issuer is personally accountable for redemption.
 - **Holder**: any user with a positive balance in an Account for that Voucher. Holders trade Vouchers among themselves; they are not accountable for the issuer's delivery, only for their own ledger position.
-- **Bank**: the ledger operator whose pubkey appears in `Voucher.bank`. The bank is the sole source of truth for balances of that Voucher. It stores the docs presented to it, verifies signatures, and applies transfers. **The only artifacts a bank creates are ledger records and signatures.** It does not guarantee the issuer's performance — that trust is social, out-of-band.
+- **Bank**: the ledger operator whose pubkey appears in `Voucher.bank`. The bank is the sole source of truth for balances of that Voucher. It stores the docs presented to it, verifies signatures, and applies transfers. **The only artifacts a bank creates are ledger records, signatures, and the derived statements it publishes from them** (discovery `Offer`s and signed `Balance` attestations). It does not guarantee the issuer's performance — that trust is social, out-of-band.
 
 A **transfer** moves a Voucher from one holder to another. The debit holder's balance decreases; the credit holder's balance increases. The sum across all Accounts for a given Voucher is always zero.
 
@@ -34,7 +36,7 @@ A **transfer** moves a Voucher from one holder to another. The debit holder's ba
 barter.game v1 is built on three behavioral assumptions. They are not enforced by cryptography; they are the social substrate that makes the protocol's risk posture coherent.
 
 1. **Users already know the issuers of the Vouchers they hold.**
-   Discovery is out of band — DM, in-person, group chat. The protocol does not search for trading partners, rate issuers, or verify goods/service delivery.
+   Trust formation is out of band — DM, in-person, group chat. The protocol ships discovery surfaces for *facts* — voucher registries, Offers, profile QR bundles, public holdings, post feeds ([`discovery.md`](./discovery.md), [`post-feed.md`](./post-feed.md)) — but it does not rate issuers, rank search results, or verify goods/service delivery. Deciding whom to trust stays human.
 
 2. **Trust is socially enforced.**
    If Alice delivers and Bob ghosts, Alice yells at Bob. The protocol records the deal cryptographically; it does not arbitrate. Recourse is human, not algorithmic.
@@ -106,7 +108,7 @@ A bank advances a record only when it has valid authorization — a holder-signe
 
 The lead set is whichever holders must move before anyone downstream can be made whole. Three shapes:
 
-- **Bilateral** (the degenerate case): one lead bank, one follow bank. The lead settles first on its own records; the follower settles on its own records once the client relays the lead's record-level `settle` signatures.
+- **Bilateral** (the degenerate case): one lead bank, one follow bank. The lead settles first on its own records; the follower settles on its own records once the lead's record-level `settle` signatures arrive — delivered bank-to-bank via `notify_signatures`, or relayed by any party as the fallback.
 - **Ring** (`A → B → C → A`): one lead breaks the cycle by settling first; the settle then propagates `B → C → A` until the ring closes.
 - **Multiple leads**: when a node's inbound depends on more than one giver, *every* such giver must lead. For
 
@@ -120,19 +122,17 @@ If any downstream bank refuses to apply (compromise, malice, downtime), every re
 
 > **Invariant:** There is no protocol-level rollback mechanism and no protocol-level timeout. An implementation MAY add a sweeper that releases stuck holds for hygiene, but that is an implementation convenience, not a correctness mechanism.
 
-### 2.3 Visibility — every bank sees only its own records
+### 2.3 Visibility — every bank owns only its own records
 
-**No bank ever sees the whole deal.** A bank sees only the transfers of the vouchers *it issues* — "this much of my voucher leaves holder X; this much arrives at holder Y" — and nothing about the other records.
+**No bank ever sees the whole deal's private substance.** A bank *operates on* only the transfers of the vouchers *it issues* — "this much of my voucher leaves holder X; this much arrives at holder Y." It only ever locks, applies, and signs records whose `pubkey` is its own; this falls straight out of the issuer-authority rule: a transfer of voucher `P` lives entirely at `P`'s issuer bank, and every record carries `pubkey =` `P`'s issuer bank.
 
-This falls straight out of the issuer-authority rule: a transfer of voucher `P` lives entirely at `P`'s issuer bank (debit and credit are both `P`-accounts there), and every record carries `pubkey =` `P`'s issuer bank. A bank only ever locks, applies, and signs records whose `pubkey` is its own.
+The **coordinator** is the one party that legitimately knows the whole deal — it designed it. To let each bank validate its slice, the Mandate flow (`bank-rpc.md` §2.1) does hand a bank the **bodies of foreign records** listed in the Mandates addressed to it — but those bodies expose only the mechanical terms: type, amount, the Order they satisfy (an Order this bank already holds — Orders are submitted to every bank they touch), and the opaque `details` hash. What never leaves a record's own bank is its `RecordDetails` body: the account hash, the `pair` ULID, and the `deal_id`. Concretely, per bank:
 
-The **initiating client** is the one party that legitimately knows the whole deal — it designed it — so it builds the graph and hands each bank only that bank's slice:
+- **Full knowledge:** its own records and their `RecordDetails`.
+- **Terms only:** foreign record bodies from Mandates — types, amounts, and Order references, needed for the cross-set rate check; accounts and deal grouping stay behind the opaque `details` hash.
+- **Routing:** the pubkeys of the peer banks named by the deal's Orders (so it can verify their record-level signatures, see `base.md`). It learns *that* a peer bank participates and *what quantities* move, not which accounts they touch.
 
-- **Bodies it gets:** only the credit/debit records whose voucher this bank issues.
-- **Hashes it gets:** the record hashes in each holder Order presented to it. These are opaque identifiers. A bank needs them to verify that its own records are included in each Order; it cannot infer another record's amount, account, holder, or voucher from a record hash alone.
-- **Routing it gets:** for the settle cascade, the pubkeys of its immediate **predecessor banks** (so it can verify their record-level `settle` signatures, see `base.md`). It learns *that* a peer bank participates, not *what* that peer transfers.
-
-> **Invariant:** This visibility boundary is load-bearing. Any implementation that lets a bank see another bank's record bodies violates the protocol.
+> **Invariant:** This visibility boundary is load-bearing. `RecordDetails` bodies MUST NOT be disclosed to other banks; a foreign bank sees a record's details only as an opaque hash.
 
 ### 2.4 Signature fan-out — Bank-to-bank direct, relay, and optional subscriptions
 
@@ -148,7 +148,7 @@ Every received-and-verified signature re-evaluates the bank's advance engine for
 
 ## 3. Invite strings and deep links
 
-Both OOB handoffs are self-validating signed strings: the receiver verifies the signature before any network call, and tampering invalidates it.
+Both OOB handoffs carry signed, self-validating content: the receiver verifies signatures before trusting anything — an invite string validates before any network call; a deep link's document bundle validates on fetch. Tampering invalidates either.
 
 ### 3.1 Invite strings
 
@@ -167,9 +167,9 @@ barter://<inviter-pubkey>@<inviter-bank-url>
 - `accs`: the inviter's Account docs referenced by the records, so the initiator can present them to the banks.
 - `sig`: ed25519 over canonical JSON of the invite minus `sig`, by the inviter's pubkey.
 
-### 3.2 Deal tokens
+### 3.2 Deep links
 
-Users share these as short deep links, typically rendered as QR codes. When another user scans the link with a smartphone camera, it opens a bank webapp that suggests creating a new key or logging into an existing app. Inside the app the user adds the voucher, address, or issuer to their personal catalog. The exact UX is implementation-specific; the link format and its self-validating property are protocol.
+Signed documents — an issuer profile, a voucher, an invoice or cheque Order — are shared as short deep links, typically rendered as QR codes ([`discovery.md`](./discovery.md) §4). When another user scans the link with a smartphone camera, it opens a bank webapp that suggests creating a new key or logging into an existing account. Inside the app the user verifies the documents' signatures and adds the voucher, address, or issuer to their personal catalog. The exact UX is implementation-specific; carrying verifiable signed documents is the protocol property.
 
 > **Invariant:** The invite string format, its fields, and its self-validating property are protocol. How the invite is conveyed (QR code, NFC, deep link, copy-paste) is an implementation detail.
 
@@ -181,8 +181,8 @@ Users share these as short deep links, typically rendered as QR codes. When anot
 |---|---|---|
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
 | Trust model | Counterparties already know each other; discovery OOB | **Yes** |
-| Coordinator pattern | **Coordinator-orchestrated**: a coordinator calls `create_records` on each bank, then sends a `Mandate` per Order per bank; banks never call each other on the trade path | **Yes** |
-| Visibility | Each bank sees only the records of the vouchers it issues + the holder Orders + the Mandates for those Orders + peer bank pubkeys from `Order.bank`; no bank sees the full deal | **Yes** |
+| Coordinator pattern | **Coordinator-orchestrated**: a coordinator calls `create_records` on each bank, then sends a `Mandate` per Order per bank; banks never call each other to create or clear records — they exchange settlement signatures directly via `notify_signatures` | **Yes** |
+| Visibility | Each bank owns only the records of the vouchers it issues; foreign records arrive as terms-only bodies via Mandates, their `RecordDetails` staying an opaque hash; peer bank pubkeys come from `Order.bank`; no bank sees the deal's private substance | **Yes** |
 | Record creation | Only the coordinator may create records, and only via `create_records({ giver, receiver, … })` referencing holder Order hashes | **Yes** |
 | Advance gate | A bank advances records only after receiving a `Mandate` for the record's Order and the valid Order itself | **Yes** |
 | Issuer authority | Issuer is sole source of truth for its Voucher's balances | **Yes** |
@@ -222,7 +222,6 @@ If you are building your own bank or client:
 1. Read this overview cover to cover.
 2. Read [`base.md`](./base.md) for the wire format and signature rules.
 3. Read [`bank-schema.md`](./bank-schema.md) for the document schemas and ledger invariants.
-4. Read [`bank-rpc.md`](./bank-rpc.md) for the bank API methods.
-5. Read `MASTER-INPUT.md` — the canonical bilateral narrative, doc snippets included.
-6. See `IMPLEMENTATION.md` for how the reference team built it: Deno Deploy, Deno KV, the CLI, and the specific file map.
-7. See `SCHEMA.md` for the v1 reference database schema — useful as a starting point, but you may use any storage that enforces the invariants in `bank-schema.md`.
+4. Read [`bank-rpc.md`](./bank-rpc.md) for the bank API methods, then [`discovery.md`](./discovery.md) and [`post-feed.md`](./post-feed.md) for the discovery and feed surfaces.
+5. Walk the traces in [`../scenarios/`](../scenarios/) — cheque, invoice, bilateral swap, coordinator arbitrage, merge-branch, and the builder-event journey.
+6. See how the reference implementation did it: [`../apps/bank/README.md`](../apps/bank/README.md) (Deno bank server, Deno KV key-space), [`../apps/web/README.md`](../apps/web/README.md) (browser SPA), and [`../packages/protocol/README.md`](../packages/protocol/README.md) (shared primitives + the canonicalization golden vectors to port against). You may use any stack that enforces the invariants in `bank-schema.md`.

@@ -5,10 +5,11 @@ This file defines the banking entities and the ledger invariants that operate on
 - `Voucher`, `Account`
 - `Record`, `Order`, `Offer`, `Mandate`
 - `Subscription` (optional)
+- `Balance` (bank-signed position statement)
 - Per-record, per-bank state machine
 - Concurrency and balance semantics
 
-For the base doc shell, `Signature`, `Address`, canonicalization, and the JSON-RPC envelope, see [`base.md`](./base.md). For the RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md). For the human narrative and trust/settlement models, see [`README.md`](./README.md).
+For the base doc shell, `Signature`, `Address`, canonicalization, and the JSON-RPC envelope, see [`base.md`](./base.md). For the RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md). The `Post` doc type is defined in [`post-feed.md`](./post-feed.md). For the human narrative and trust/settlement models, see [`README.md`](./README.md).
 
 ---
 
@@ -18,7 +19,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address" | "balance" | "post";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -55,10 +56,13 @@ Account: BaseDoc & {
   type: "account";
   name: string;           // local label, typically not public
   voucher: Base58SHA256;  // hash of the Voucher this account holds
+  public?: boolean;       // opt in to third-party balance/history reads (default false)
 }
 ```
 
 `Account.pubkey` is the holder. `Account.ulid` uniquely identifies this account. The holder signs the Account doc; the bank stores it by hash after verifying the signature.
+
+**Visibility.** Accounts are private by default: a bank MUST NOT disclose an account's balance or record history to anyone but its holder — and the Voucher's issuer, who reads all records of their own voucher via `list_voucher_records` (the backup path, [`bank-rpc.md`](./bank-rpc.md) §2.4). Setting `public: true` opts the account into third-party reads — it appears in `list_public_balances` and any caller may read its balance and records ([`bank-rpc.md`](./bank-rpc.md) §2.4, [`discovery.md`](./discovery.md) §6). Going public discloses the balance facts (holder pubkey, voucher, account hash, amounts) — the account `name` stays private either way.
 
 > **Invariant:** A bank MUST reject a record whose `details.account` hash does not resolve to a stored Account owned by the record's holder. Account names are private, but the Account doc itself is part of the bank's verified state.
 
@@ -246,6 +250,27 @@ Subscription: BaseDoc & {
 ```
 
 When the bank issues or receives a Signature that matches a Subscription, it POSTs a bank-signed `notify_signatures` envelope to `url` fire-and-forget. The receiver verifies the bank signature and the contained Signatures independently.
+
+### 1.8 Balance
+
+A bank-signed statement that a specific holder has a specific amount of a specific voucher on a specific account. The ledger stays authoritative — a Balance doc is a **portable attestation** of the position as of its `ulid`, verifiable by anyone against the bank's pubkey without calling the bank.
+
+```ts
+Balance: BaseDoc & {
+  type: "balance";
+  pubkey: Base58PubKey;    // the BANK — banks sign Balance docs
+  ulid: ULID;              // issuance moment; for the same account, newer supersedes older
+  account: Base58SHA256;   // Account hash
+  voucher: Base58SHA256;   // Voucher hash
+  holder: Base58PubKey;    // the account's holder
+  amount: number;          // settled balance at issuance
+  pending?: number;        // amount locked by active holds, if any
+}
+```
+
+Balance docs are issued on demand (`get_balance`) and served for public accounts (`list_public_balances`) — see [`bank-rpc.md`](./bank-rpc.md) §2.4. Like all signed docs they are irrevocable; a Balance is a true statement *about the moment it was issued*, and a newer ULID for the same account supersedes it. Banks MUST NOT issue a Balance for a non-public account to anyone but its holder or the Voucher's issuer.
+
+Use cases: a holder proving a position to a counterparty; public holdings in discovery ([`discovery.md`](./discovery.md) §6); an issuer's backup snapshots alongside `list_voucher_records`.
 
 
 

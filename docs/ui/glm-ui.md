@@ -353,7 +353,7 @@ Drives the full `Order` schema (`bank-schema.md §1.4`):
   and carry the risk if the other party abandons. Follow = safer, but the deal
   only completes once the lead has settled." Defaults to *follow* for new
   users; the UI never lets both sides of a two-Order deal be `lead=false`
-  (deadlock — see `matchmaker-bilateral.md` attack #8).
+  (deadlock — see `coordinator-arbitrage.md` attack #8).
 - **Behavior:** browser signs the Order, calls `submit_docs` with
   `publish_offers: [<order-hash>]` on every bank that issues a Voucher on
   either side (per `bank-rpc.md §4` step 1). Toast confirms with the Offer
@@ -433,8 +433,8 @@ Drives the full `Order` schema (`bank-schema.md §1.4`):
 
 The UI bundles `packages/protocol` compiled for the browser. Canonical JSON,
 ed25519 sign/verify, SHA-256, base58 — all the same code paths the CLI uses.
-The cross-runtime parity guarantee (`IMPLEMENTATION.md §3`) extends to the
-browser: a Voucher signed in the UI must verify under Bun, Deno, and Node.
+The cross-runtime parity guarantee (`packages/protocol/README.md`) extends to
+the browser: a Voucher signed in the UI must verify under Bun and Deno.
 
 ### 6.2 Doc construction and signing flow
 

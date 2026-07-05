@@ -9,6 +9,6 @@ Welcome to the barter.game documentation. Start here to understand the protocol,
 
 - [**What is barter.game?**](what-is-barter-game) — The big idea in 5 minutes.
 - [**How it works**](how-it-works) — A visual walkthrough of a trade.
-- [**Protocol contract (invariant)**](https://github.com/ai-1st/barter.game/blob/main/PROTOCOL.md) — The wire-format spec. Read this if you're building an implementation.
-- [**Implementation guide**](https://github.com/ai-1st/barter.game/blob/main/IMPLEMENTATION.md) — How the reference team built it. Change anything here.
-- [**Database schema**](https://github.com/ai-1st/barter.game/blob/main/SCHEMA.md) — The v1 reference Postgres schema.
+- [**Protocol contract (invariant)**](https://github.com/ai-1st/barter.game/blob/main/protocol/README.md) — The wire-format spec. Read this if you're building an implementation.
+- [**Reference bank server**](https://github.com/ai-1st/barter.game/blob/main/apps/bank/README.md) — Routes, Deno KV key-space, config, and deployment. How the reference team built it; change anything here.
+- [**Reference web client**](https://github.com/ai-1st/barter.game/blob/main/apps/web/README.md) — The browser SPA the bank serves: keystore model, screens, transports.

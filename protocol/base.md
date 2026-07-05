@@ -11,7 +11,7 @@ This file defines the parts of the v1 contract that are not specific to banking 
 - Bank discovery and pubkey pinning
 - Standard vs custom API surface
 
-For Voucher/Account/Record/Order/Offer/Subscription schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
+For Voucher/Account/Record/Order/Offer/Mandate/Subscription/Balance schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
 
 ---
 
@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address" | "balance" | "post";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -61,7 +61,7 @@ Encoded fields:
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
 - `DateString` — `2024-05-02T00:00:00Z` -  ISO 8601 datetime  
 
-The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Record, Order, Offer, and Subscription are defined in [`bank-schema.md`](./bank-schema.md).
+The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Record, Order, Offer, Mandate, Subscription, and Balance are defined in [`bank-schema.md`](./bank-schema.md); Post is defined in [`post-feed.md`](./post-feed.md).
 
 ### 3.1 Signature
 
@@ -99,7 +99,7 @@ This is what makes a signature **non-replayable across deals without a public de
 
 For a bilateral deal across two banks, one bank hosts the **lead** transfer and the other the **follow** transfer. (A *transfer* is a debit/credit pair of one voucher, both records at that voucher's issuing bank; it is *lead* iff its debit-side `Order.lead` is `true`.) Let `R` be the deal's full record set — every bank can enumerate `R` from the Mandates it holds (`bank-schema.md` §1.6) and gather each record's signatures from the peers' fan-out.
 
-1. **ready** — each bank validates each of its own records against that record's Order (`bank-schema.md` §1.6) and issues `ready(r)` with `seen = []`. Banks fan `ready` sigs out to the peer.
+1. **ready** — each bank validates each of its own records against that record's Order (`bank-schema.md` §1.4) and issues `ready(r)` with `seen = []`. Banks fan `ready` sigs out to the peer.
 2. **hold** —
    - **lead**: once *every* record in `R` carries a `ready` (its own plus the peer's), it locks its debit accounts and issues `hold(r)` for each own `r` with `seen =` the hashes of **all `ready` sigs over `R`**. Fans out.
    - **follow**: on the lead's `hold`, it verifies the lead `hold` is validly signed **and every one of its own `ready` hashes is present in that `hold`'s `seen`** (this proves the lead is holding *this* deal). It then locks and issues `hold(r)` with `seen =` **all `ready` hashes + the lead `hold` hashes**. Fans out.
@@ -107,7 +107,7 @@ For a bilateral deal across two banks, one bank hosts the **lead** transfer and 
    - **lead**: once every record in `R` carries a `hold`, it verifies each follow `hold`'s `seen` **contains its own `ready`+`hold` hashes**, then settles each of its transfers atomically and issues `settle(r)` with `seen =` **all `hold` hashes over `R`**. Fans out.
    - **follow**: on the lead's `settle`, it verifies the `settle` is validly signed **and its `seen` contains the follower's own `hold` hashes**, then settles its transfers atomically and issues `settle(r)` with `seen =` **all `hold` hashes + the lead `settle` hashes**. Terminal.
 
-The lead settles first, so a cautious holder can `follow` (receive before giving) to bound counterparty risk. The containment checks are **fail-closed**: an unverifiable or missing predecessor never advances a record — the engine waits (and `reject` is the only abort; there is no rollback, `bank-schema.md` §2). N-party (≥3 bank) deals generalize the same rule over each transfer's predecessor set; that DAG is out of scope for v1 (see `docs/design/mandate-validation.md` §5).
+The lead settles first, so a cautious holder can `follow` (receive before giving) to bound counterparty risk. The containment checks are **fail-closed**: an unverifiable or missing predecessor never advances a record — the engine waits (and `reject` is the only abort; there is no rollback, `bank-schema.md` §2). N-party (≥3 bank) deals generalize the same rule over each transfer's predecessor set; that DAG is out of scope for v1 (see `../docs/design/mandate-validation.md` §5 at the repo root).
 
 > **Invariant:** `Signature.seen` carries the cascade proof. A bank MUST NOT issue `hold`/`settle` for a record until it has verified that the upstream signature it depends on **cites this deal's own signatures in its `seen`** (own `ready` ⊆ lead `hold.seen` before follow-hold; own `hold` ⊆ lead `settle.seen` before follow-settle; and the symmetric lead-side checks). Advancing on a signature not so bound — e.g. the newest `settle` from a signer regardless of deal — is a protocol violation. The exactly-one-target rule for actioned signatures is protocol.
 
@@ -194,7 +194,7 @@ GET <bank-url>/barter-bank.json
 
 The `url` field is the canonical RPC URL — the location clients should use. It MUST be a prefix of the URL from which `barter-bank.json` was fetched.
 
-Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have heard from, sourced from discovery documents and from explicitly presented **Address** docs (§3.2). Under the client-orchestrated trade path banks do not call each other, so peer caching is vestigial on the hot path in v1 — kept for discovery and future bank-to-bank features.
+Banks MAY maintain a cache of `(peer_pubkey, peer_url)` for banks they have heard from, sourced from discovery documents and from explicitly presented **Address** docs (§3.2). This cache is on the settlement hot path: banks deliver `ready`/`hold`/`settle`/`reject` signatures to each other directly via `notify_signatures`, resolving peer URLs through Address docs (see `bank-rpc.md` §4).
 
 ### 5.2 Pubkey pinning (security)
 

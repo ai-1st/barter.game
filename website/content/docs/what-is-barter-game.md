@@ -9,8 +9,8 @@ barter.game takes the opposite stance: **trust is local**. The system is for peo
 ## The core loop
 
 1. **Mint** a personal currency — "1 logo", "1 hour of consulting", "1 home-cooked dinner" — issued by you, signed by you, redeemable from you.
-2. **Trade** — offer your voucher for theirs with a signed invite string. The initiator builds the deal: ledger records on each bank, one Tx per participant.
-3. **Accept** — each party signs their own Tx. Your signature is both authorization and receipt confirmation.
+2. **Trade** — offer your voucher for theirs with a signed invite string. Each holder signs their own Order; a coordinator — often just your own web app — builds the deal: ledger records on each bank, cleared by a signed Mandate per Order.
+3. **Authorize** — your signed Order is both authorization and receipt confirmation. There is no separate accept step.
 4. **Banks settle** — on their own, lead bank first, each citing cryptographic proof of the previous step. Sum per Voucher = 0.
 
 ## What makes it different
@@ -24,7 +24,7 @@ barter.game takes the opposite stance: **trust is local**. The system is for peo
 
 ## Federation is table stakes
 
-Every bank is its own URL, its own ed25519 key, its own ledger. Banks talk to each other via signed HTTP. Anyone running the codebase can be a peer. The demo collapses four banks into one Supabase project for operational simplicity; the *protocol* doesn't know or care.
+Every bank is its own URL, its own ed25519 key, its own ledger. Banks talk to each other via signed HTTP. Anyone running the codebase can be a peer. The demo collapses several banks into one Deno Deploy process and one Deno KV database for operational simplicity; the *protocol* doesn't know or care.
 
 If barter.game ever centralized — even subtly, even for "the demo" — we have built the wrong thing.
 
