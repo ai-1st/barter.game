@@ -1122,25 +1122,43 @@ window.showShare = function(kind, value, title) {
   const link = `${state.bankUrl}/${kind}/${value}`;
   let dataUrl = '';
   try { dataUrl = qrDataUrl(link); } catch (e) { toast(e.message, 'error'); return; }
+  const opener = document.activeElement; // return focus here on close
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal">
-      <h3>${escapeHtml(title || 'Share')}</h3>
-      <img class="qr" src="${dataUrl}" alt="QR code">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
+      <h3 id="share-title">${escapeHtml(title || 'Share')}</h3>
+      <img class="qr" src="${dataUrl}" alt="QR code for ${escapeHtml(title || 'this link')}">
       <div class="mono small" style="word-break:break-all;margin:0.5rem 0">${escapeHtml(link)}</div>
       <div class="flex">
         <button class="btn" id="share-copy">Copy link</button>
         <button class="btn secondary" id="share-close">Close</button>
       </div>
     </div>`;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  overlay.querySelector('#share-close').onclick = () => overlay.remove();
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (opener && typeof opener.focus === 'function') opener.focus();
+  };
+  // Escape closes; Tab is trapped inside the dialog.
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = overlay.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#share-close').onclick = close;
   overlay.querySelector('#share-copy').onclick = async () => {
     try { await navigator.clipboard.writeText(link); toast('Link copied'); }
     catch { toast('Copy failed — select the text manually', 'error'); }
   };
   document.body.appendChild(overlay);
+  document.addEventListener('keydown', onKey, true);
+  overlay.querySelector('#share-copy').focus();
 };
 
 // ---------------- scanning + Barter Link handling ----------------
