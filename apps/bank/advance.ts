@@ -185,7 +185,9 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
       if (st.held || st.settled || !st.mandated) continue;
       if (transferIsLead(st)) {
         toHold.push(st);
-      } else if (foreignHashes.size > 0 && everyForeignHoldBound(ownReadyHashes)) {
+      } else if (foreignHashes.size === 0 || everyForeignHoldBound(ownReadyHashes)) {
+        // Follow: wait for the lead's bound hold across banks; a single-bank
+        // deal (no foreign records) has no cross-bank predecessor to wait for.
         toHold.push(st);
       }
     }
@@ -223,8 +225,10 @@ export async function advanceDeal(bank: Bank, dealId: string): Promise<void> {
     for (const st of own) {
       if (!st.held || st.settled) continue;
       if (transferIsLead(st)) {
-        // Lead: every follow (foreign) hold must cite our ready+hold.
-        if (foreignHashes.size > 0 && everyForeignHoldBound([...ownReadyHashes, ...ownHoldHashes])) {
+        // Lead: every follow (foreign) hold must cite our ready+hold. A
+        // single-bank deal (no foreign records) settles directly once held —
+        // the bank owns every leg, so there is no cross-bank replay surface.
+        if (foreignHashes.size === 0 || everyForeignHoldBound([...ownReadyHashes, ...ownHoldHashes])) {
           toSettle.push(st);
         }
       } else {
