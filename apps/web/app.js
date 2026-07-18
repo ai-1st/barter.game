@@ -258,7 +258,7 @@ function dealBankFor(dealId) {
 // nav tab while the async screen fetches.
 const ROUTE_TITLES = {
   '': 'Dashboard', vouchers: 'Vouchers', orders: 'Orders', invoices: 'Invoices',
-  cheques: 'Cheques', discover: 'Discover', activity: 'Activity',
+  cheques: 'Cheques', discover: 'Discover', registry: 'Registry', activity: 'Activity',
   network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal',
 };
 
@@ -277,6 +277,13 @@ function route() {
     app.innerHTML = '';
   }
 
+  // After the (possibly async) screen renders, move focus to its heading so
+  // keyboard/screen-reader users land on the new content — not stuck at <body>
+  // — and the screen title is announced.
+  Promise.resolve(dispatch(app, p, rest)).then(moveFocusToMain).catch(() => {});
+}
+
+function dispatch(app, p, rest) {
   // Landing routes work logged-out (they carry the register CTA themselves).
   if (p === 'land' && rest[0] && rest[1]) return renderLanding(app, rest[0], rest[1]);
 
@@ -297,6 +304,7 @@ function route() {
   if (p === 'cheques' && rest[0] === 'new') return renderCreateCheque(app);
   if (p === 'cheques') return renderCheques(app);
   if (p === 'discover') return renderDiscover(app);
+  if (p === 'registry') return renderRegistry(app);
   if (p === 'deal' && rest[0]) return renderDeal(app, rest[0]);
   if (p === 'activity') return renderActivity(app);
   if (p === 'network') return renderNetwork(app);
@@ -304,6 +312,18 @@ function route() {
   if (p === 'settings') return renderSettings(app);
   return renderDashboard(app);
 }
+
+// Move focus to the first heading of the freshly rendered screen (skipping the
+// loading skeleton), making it programmatically focusable first.
+function moveFocusToMain() {
+  const app = document.getElementById('app');
+  if (!app || app.querySelector('.skeleton')) return; // still loading; render will re-focus
+  const h = app.querySelector('h1, h2, h3');
+  if (!h) return;
+  h.setAttribute('tabindex', '-1');
+  try { h.focus({ preventScroll: true }); } catch { h.focus(); }
+}
+window.skipToContent = function() { moveFocusToMain(); };
 
 window.addEventListener('hashchange', route);
 // Exposed so inline "Retry"/"Refresh" controls can re-render the current screen
@@ -313,7 +333,8 @@ window.route = route;
 // ---------------- UI components ----------------
 
 function header(title) {
-  return `<div class="header">
+  return `<a href="#" class="skip-link" onclick="skipToContent();return false">Skip to content</a>
+  <div class="header">
     <div class="brand">
       <div class="logo-mark"><span></span></div>
       <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>
@@ -596,6 +617,7 @@ async function renderVouchers(app) {
       <div><strong>${escapeHtml(v.name)}</strong></div>
       <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
       <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
+      ${expiryNote(v.expires)}
       <button class="btn secondary" onclick="showShare('i', '${jsStr(v.pubkey)}', 'Issuer profile — ${jsStr(v.name)}')">Share issuer QR</button>
     </div>
   `).join('') || '<p class="small">No vouchers yet. <a href="#/vouchers/new">Create one.</a></p>'}</div>`;
@@ -609,6 +631,7 @@ function renderCreateVoucher(app) {
       <label for="v-name">Name</label><input id="v-name" placeholder="1 hour consulting">
       <label for="v-desc">Description (markdown)</label><textarea id="v-desc" rows="3"></textarea>
       <label for="v-limit">Supply limit <span class="small">(optional — max you will ever issue)</span></label><input id="v-limit" type="number" min="0" step="any" placeholder="unlimited">
+      <label for="v-expires">Expires <span class="small">(optional — the voucher is void after this date)</span></label><input id="v-expires" type="date">
       <label><input type="checkbox" id="v-int"> Integer amounts only</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateVoucher()">Create & sign</button>
       <p class="small error" id="v-err"></p>
@@ -620,6 +643,7 @@ window.doCreateVoucher = async function() {
   const name = document.getElementById('v-name').value.trim();
   const desc = document.getElementById('v-desc').value.trim();
   const limit = document.getElementById('v-limit').value;
+  const expires = document.getElementById('v-expires').value; // YYYY-MM-DD or ''
   const integer = document.getElementById('v-int').checked;
   const err = document.getElementById('v-err');
   if (!name) { err.textContent = 'Name required'; return; }
@@ -628,6 +652,8 @@ window.doCreateVoucher = async function() {
     const voucher = { type: 'voucher', pubkey: state.user.pubkey, ulid: newUlid(), bank: state.bankPubkey, name };
     if (desc) voucher.description_md = desc;
     if (limit) voucher.limit = Number(limit);
+    // Protocol wants an ISO 8601 datetime; treat the picked day as end-of-day UTC.
+    if (expires) voucher.expires = new Date(expires + 'T23:59:59Z').toISOString();
     if (integer) voucher.integer = true;
     voucher.sig = signDoc(voucher, state.user.privateKey);
 
@@ -665,9 +691,30 @@ async function renderInvoices(app) {
   app.innerHTML = body;
 }
 
+// A trusted issuer may bank ELSEWHERE — their handle and vouchers only resolve
+// at their own bank, not ours. applyTrust pins that bank, so resolve a pubkey
+// against our bank first, then each pinned bank, and use the first hit.
+async function issuerResolveBases() {
+  const bases = [state.bankUrl || state.basePath];
+  const pinned = await uiGet('/banks').catch(() => []);
+  (pinned || []).forEach(b => { if (b.url && !bases.includes(b.url)) bases.push(b.url); });
+  return bases;
+}
+async function resolveIssuerAt(bases, pubkey) {
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base.replace(/\/$/, '')}/ui/resolve/${pubkey}`).then(x => x.json());
+      if (r && (r.handle || (Array.isArray(r.vouchers) && r.vouchers.length))) {
+        return { ...r, pubkey };
+      }
+    } catch { /* try next base */ }
+  }
+  return { pubkey, vouchers: [] };
+}
+
 // Vouchers the user can pick when authoring orders/invoices/cheques: their own
-// issued vouchers plus those of issuers they trust (resolved at this bank). This
-// replaces pasting raw voucher hashes.
+// issued vouchers plus those of issuers they trust (resolved across their banks).
+// This replaces pasting raw voucher hashes.
 async function knownVouchers() {
   const out = [];
   const seen = new Set();
@@ -678,15 +725,14 @@ async function knownVouchers() {
     seen.add(hash);
     out.push({ hash, name: v.name, issuer });
   };
-  const [mine, trusted] = await Promise.all([
+  const [mine, trusted, bases] = await Promise.all([
     rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []),
     uiGet('/trusted').catch(() => []),
+    issuerResolveBases(),
   ]);
   (mine || []).forEach(v => add(v, 'you'));
-  const resolved = await Promise.all((trusted || []).map(t => {
-    const pk = typeof t === 'string' ? t : t.pubkey;
-    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json()).catch(() => null);
-  }));
+  const resolved = await Promise.all((trusted || []).map(t =>
+    resolveIssuerAt(bases, typeof t === 'string' ? t : t.pubkey)));
   resolved.forEach(r => {
     if (!r || !Array.isArray(r.vouchers)) return;
     const who = r.handle || (r.pubkey || '').slice(0, 8) + '…';
@@ -704,6 +750,18 @@ function noVouchersNotice() {
 }
 // A usable amount is a finite number greater than zero.
 function badAmount(n) { return !Number.isFinite(n) || n <= 0; }
+
+// Render a voucher's expiry as a small note, flagging it red once past.
+function expiryNote(expires) {
+  if (!expires) return '';
+  const d = new Date(expires);
+  if (isNaN(d)) return '';
+  const day = d.toISOString().slice(0, 10);
+  const past = d.getTime() < Date.now();
+  return past
+    ? `<div class="small error">expired ${escapeHtml(day)}</div>`
+    : `<div class="small">expires ${escapeHtml(day)}</div>`;
+}
 
 async function renderCreateInvoice(app) {
   const vouchers = await knownVouchers();
@@ -915,22 +973,83 @@ async function renderDiscover(app) {
     body += card('Couldn\'t reach', unreachable.map(u => `<div class="small">bank ${escapeHtml((u.bank || '').slice(0, 12))}…</div>`).join(''));
   }
   if (res.error) body += `<p class="error small">${escapeHtml(res.error)}</p>`;
+  body += `<p class="small"><a href="#/registry">Browse this bank's voucher registry →</a></p>`;
   app.innerHTML = body + `</div>`;
 }
 
-// Accept a discovered two-sided swap: build the mirror order (I give what they
-// want, receive what they give), submit it, then propose the deal pairing it
-// with theirs. The offer object is read from the stash so nothing attacker-
-// controlled is interpolated into markup.
-window.acceptOfferByIdx = async function(btn) {
+// Browse the bank's public voucher registry, grouped by issuer, so a newcomer
+// can find issuers/vouchers and trust them. (INPUTS: "check a bank's public
+// registry of vouchers, optionally filtered by issuer".)
+async function renderRegistry(app) {
+  let vouchers = [], failed = false;
+  try { vouchers = await rpcCall('list_vouchers', {}); } catch { failed = true; }
+  const trusted = new Set((await uiGet('/trusted').catch(() => [])).map(t => typeof t === 'string' ? t : t.pubkey));
+  // Group vouchers by issuer pubkey.
+  const byIssuer = new Map();
+  (vouchers || []).forEach(v => {
+    if (!v || !v.pubkey) return;
+    if (!byIssuer.has(v.pubkey)) byIssuer.set(v.pubkey, []);
+    byIssuer.get(v.pubkey).push(v);
+  });
+  // Resolve each issuer's handle at this bank (best-effort).
+  const issuers = [...byIssuer.keys()];
+  const handles = {};
+  await Promise.all(issuers.map(pk =>
+    fetch(`${(state.bankUrl || state.basePath).replace(/\/$/, '')}/ui/resolve/${pk}`)
+      .then(r => r.json()).then(r => { handles[pk] = r.handle || ''; }).catch(() => {})));
+  let body = header('Registry') + `<div class="container">`;
+  body += `<p class="small">Vouchers issued at ${escapeHtml(state.bankName)}. Trust an issuer to use their vouchers in your orders.</p>`;
+  if (failed) {
+    body += loadError('the registry');
+  } else if (!issuers.length) {
+    body += `<p class="small">No public vouchers at this bank yet.</p>`;
+  } else {
+    body += issuers.map(pk => {
+      const isMe = state.user && pk === state.user.pubkey;
+      const isTrusted = trusted.has(pk) || isMe;
+      const who = handles[pk] || (pk.slice(0, 12) + '…');
+      const vs = byIssuer.get(pk);
+      return card(who, `
+        <div class="mono small">${escapeHtml(pk.slice(0, 24))}…</div>
+        ${vs.map(v => `<div class="small">• ${escapeHtml(v.name)}</div>${expiryNote(v.expires)}`).join('')}
+        ${isMe ? '<p class="small">This is you.</p>'
+          : isTrusted ? '<p class="small success">✓ Trusted</p>'
+          : `<button class="btn secondary" data-pk="${escapeHtml(pk)}" data-handle="${escapeHtml(handles[pk] || '')}" onclick="trustFromRegistry(this)">Trust ${escapeHtml(who)}</button>`}
+      `);
+    }).join('');
+  }
+  app.innerHTML = body + `</div>`;
+}
+
+window.trustFromRegistry = async function(btn) {
+  const pubkey = btn.dataset.pk;
+  const handle = btn.dataset.handle || '';
+  try {
+    await uiPost('/trusted', { pubkey, note: '' });
+    toast(`You now trust ${handle || pubkey.slice(0, 12)}`);
+    route();
+  } catch (e) { toast(e.message, 'error'); }
+};
+
+// Accept a discovered two-sided swap by index into the Discover stash. The
+// offer object is read back from the stash so nothing attacker-controlled is
+// interpolated into markup.
+window.acceptOfferByIdx = function(btn) {
   const o = (window.__discoverOffers || [])[Number(btn.dataset.idx)];
   if (!o) { toast('Offer no longer available — refresh Discover', 'error'); return; }
+  return window.acceptSwap(o, btn);
+};
+
+// Core swap-accept, shared by Discover and the offer landing: build the mirror
+// order (I give what they want, receive what they give), submit it, then propose
+// the deal pairing it with theirs.
+window.acceptSwap = async function acceptSwap(o, btn) {
   if (!o.debit || !o.credit) { toast('One-sided offer — open its link to pay or claim', 'error'); return; }
-  if (btn.disabled) return;
+  if (btn && btn.disabled) return;
   // Cross-bank swaps need the mirror order submitted to two banks; not yet
   // supported here. Single-bank (both vouchers at one bank) is the common case.
   if (o.debit.bank !== o.credit.bank) {
-    toast('This swap spans two banks — not supported from Discover yet', 'error');
+    toast('This swap spans two banks — not supported yet', 'error');
     return;
   }
   const theyGive = o.debit;   // voucher A they give (I receive)
@@ -939,8 +1058,8 @@ window.acceptOfferByIdx = async function(btn) {
   const nm = {}; known.forEach(v => { nm[v.hash] = v.name; });
   const nameOf = (h) => nm[h] || (h.slice(0, 8) + '…');
   if (!window.confirm(`Accept this swap?\n\nYou give ${theyWant.max} ${nameOf(theyWant.voucher)}\nYou receive ${theyGive.max} ${nameOf(theyGive.voucher)}`)) return;
-  const label = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Working…';
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   try {
     const vbank = await resolveVoucherBank(theyGive, { bank: o.bank, bank_url: o.bank_url });
     if (vbank.pubkey !== state.bankPubkey) {
@@ -982,10 +1101,10 @@ window.acceptOfferByIdx = async function(btn) {
     location.hash = `#/deal/${res.deal_id}`;
     route();
   } catch (e) {
-    btn.disabled = false; btn.textContent = label;
+    if (btn) { btn.disabled = false; btn.textContent = label; }
     toast(e.message, 'error');
   }
-};
+}
 
 async function renderDeal(app, dealId) {
   // A deal proposed at another bank (e.g. a claimed cheque at the voucher's
@@ -1102,25 +1221,43 @@ window.showShare = function(kind, value, title) {
   const link = `${state.bankUrl}/${kind}/${value}`;
   let dataUrl = '';
   try { dataUrl = qrDataUrl(link); } catch (e) { toast(e.message, 'error'); return; }
+  const opener = document.activeElement; // return focus here on close
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal">
-      <h3>${escapeHtml(title || 'Share')}</h3>
-      <img class="qr" src="${dataUrl}" alt="QR code">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
+      <h3 id="share-title">${escapeHtml(title || 'Share')}</h3>
+      <img class="qr" src="${dataUrl}" alt="QR code for ${escapeHtml(title || 'this link')}">
       <div class="mono small" style="word-break:break-all;margin:0.5rem 0">${escapeHtml(link)}</div>
       <div class="flex">
         <button class="btn" id="share-copy">Copy link</button>
         <button class="btn secondary" id="share-close">Close</button>
       </div>
     </div>`;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  overlay.querySelector('#share-close').onclick = () => overlay.remove();
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (opener && typeof opener.focus === 'function') opener.focus();
+  };
+  // Escape closes; Tab is trapped inside the dialog.
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = overlay.querySelectorAll('button, [href], input, [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#share-close').onclick = close;
   overlay.querySelector('#share-copy').onclick = async () => {
     try { await navigator.clipboard.writeText(link); toast('Link copied'); }
     catch { toast('Copy failed — select the text manually', 'error'); }
   };
   document.body.appendChild(overlay);
+  document.addEventListener('keydown', onKey, true);
+  overlay.querySelector('#share-copy').focus();
 };
 
 // ---------------- scanning + Barter Link handling ----------------
@@ -1230,6 +1367,7 @@ async function renderLanding(app, kind, value) {
         <p class="small">After you sign in you can choose to trust <b>${escapeHtml(handle)}</b>.</p>
         <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
         <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>
+        ${otherBankCta('i', value, env.bank_url)}
       `)}</div>`;
     } else {
       app.innerHTML = header('Profile') + `<div class="container" style="max-width:480px">${card('Issuer profile', body + `
@@ -1257,6 +1395,7 @@ async function renderLanding(app, kind, value) {
       <div class="card">
         <div>Amount: <strong>${escapeHtml(amount)}${voucherName ? ` ${escapeHtml(voucherName)}` : ''}</strong></div>
         ${voucherName && voucherDoc.description_md ? `<div class="small">${escapeHtml(voucherDoc.description_md)}</div>` : ''}
+        ${voucherDoc ? expiryNote(voucherDoc.expires) : ''}
         <div class="mono small">voucher ${voucherName ? `${escapeHtml(voucherName)} · ` : ''}${escapeHtml(side.voucher.slice(0, 16))}…</div>
       </div>`;
     sessionStorage.setItem('barter_pending', JSON.stringify({ action: env.kind, orderHash: hashDoc(order), kind, value, base }));
@@ -1264,6 +1403,7 @@ async function renderLanding(app, kind, value) {
       app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card(env.kind, body + `
         <a class="btn" style="display:block;text-align:center" href="#/register">Register &amp; ${verb.toLowerCase()}</a>
         <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in &amp; ${verb.toLowerCase()}</a>
+        ${otherBankCta(kind, value, env.bank_url)}
       `)}</div>`;
     } else {
       app.innerHTML = header(verb) + `<div class="container" style="max-width:480px">${card(env.kind, body + `
@@ -1276,8 +1416,66 @@ async function renderLanding(app, kind, value) {
     return;
   }
 
+  if (env.kind === 'offer') {
+    const offer = env.docs.find(d => d.type === 'offer') || env.docs[0];
+    // Give the accept flow the same shape Discover produces.
+    const o = offer ? { ...offer, bank: env.bank, bank_url: env.bank_url } : null;
+    const known = await knownVouchers().catch(() => []);
+    const nm = {}; known.forEach(v => { nm[v.hash] = v.name; });
+    const name = (h) => h ? (nm[h] || h.slice(0, 8) + '…') : '';
+    const give = o && o.debit ? `give ${escapeHtml(String(o.debit.max))} ${escapeHtml(name(o.debit.voucher))}` : '';
+    const get = o && o.credit ? `get ${escapeHtml(String(o.credit.max))} ${escapeHtml(name(o.credit.voucher))}` : '';
+    const summary = [give, get].filter(Boolean).join(' · ') || 'offer';
+    const twoSided = o && o.debit && o.credit;
+    const inner = `<h2>Trade offer</h2>${verified}
+      <div class="card"><strong>${summary}</strong></div>`;
+    if (!state.user) {
+      sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'view', kind: 'o', value }));
+      app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card('offer', inner + `
+        <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>
+        ${otherBankCta('o', value, env.bank_url)}`)}</div>`;
+    } else if (twoSided) {
+      window.__landingOffer = o;
+      app.innerHTML = header('Offer') + `<div class="container" style="max-width:480px">${card('offer', inner + `
+        <button class="btn" style="width:100%" onclick="acceptSwap(window.__landingOffer, this)">Accept swap</button>`)}</div>`;
+    } else {
+      app.innerHTML = header('Offer') + `<div class="container" style="max-width:480px">${card('offer', inner + `
+        <p class="small">This is a one-sided offer — open it as an invoice or cheque link to pay or claim.</p>`)}</div>`;
+    }
+    return;
+  }
+
+  if (env.kind === 'invite') {
+    app.innerHTML = `<div class="container" style="max-width:420px;padding-top:6vh">${card('You\'re invited', `
+      ${verified}
+      <p class="small">Someone invited you to barter on ${escapeHtml(state.bankName || 'this bank')}.</p>
+      ${state.user
+        ? '<a class="btn" style="display:block;text-align:center" href="#/">Go to your dashboard</a>'
+        : '<a class="btn" style="display:block;text-align:center" href="#/register">Create an account</a><a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in</a>'}`)}</div>`;
+    return;
+  }
+
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
     ${card('Barter Link', `<p>Kind: ${escapeHtml(env.kind)}</p>${verified}<p><a href="#/">Home</a></p>`)}</div>`;
+}
+
+// Redirect a recipient who banks ELSEWHERE to the same landing on their own
+// bank, carrying the source bank as the scan origin so the doc still resolves.
+// (The cross-bank claim then works via actOnOrder, which addresses the voucher's
+// issuing bank directly.) Same-origin sessionStorage carries the origin across
+// the redirect in the current path-based federation.
+window.useOtherBank = function(kind, value, sourceUrl) {
+  const url = window.prompt('Enter your bank\'s URL (e.g. https://…/alice):', '');
+  if (!url) return;
+  const clean = url.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(clean)) { toast('Enter a full https:// bank URL', 'error'); return; }
+  try { if (sourceUrl) sessionStorage.setItem('barter_scan_origin', sourceUrl); } catch { /* ignore */ }
+  location.href = `${clean}/ui/app#/land/${kind}/${value}`;
+};
+function otherBankCta(kind, value, sourceUrl) {
+  return `<p class="small" style="text-align:center;margin-top:0.75rem">
+    <a href="#" onclick="useOtherBank('${jsStr(kind)}','${jsStr(value)}','${jsStr(sourceUrl || '')}');return false">Use my account at another bank</a></p>`;
 }
 
 // Add an issuer to the trusted list (+ their bank to known banks). The pubkey,
@@ -1440,14 +1638,16 @@ async function renderNetwork(app) {
     uiGet('/trusted').catch(() => []),
     uiGet('/contacts').catch(() => []),
   ]);
-  // Resolve handles for trusted issuers (public endpoint, no auth needed).
-  // Entries are {pubkey, note} (legacy bare strings still tolerated).
-  const resolved = await Promise.all(trusted.map(t => {
+  // Resolve handles/vouchers for trusted issuers across our bank + pinned banks
+  // (a foreign issuer only resolves at their own bank). Entries are
+  // {pubkey, note} (legacy bare strings still tolerated).
+  const bases = [state.bankUrl || state.basePath];
+  (banks || []).forEach(b => { if (b.url && !bases.includes(b.url)) bases.push(b.url); });
+  const resolved = await Promise.all(trusted.map(async t => {
     const pk = typeof t === 'string' ? t : t.pubkey;
     const note = typeof t === 'string' ? '' : (t.note || '');
-    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json())
-      .then(r => ({ ...r, pubkey: pk, note }))
-      .catch(() => ({ pubkey: pk, note }));
+    const r = await resolveIssuerAt(bases, pk);
+    return { ...r, pubkey: pk, note };
   }));
 
   app.innerHTML = header('Network') + `<div class="container">
@@ -1538,15 +1738,23 @@ window.removeContact = async function(pk) {
 // ---------------- auto-lock ----------------
 
 let lastActivity = Date.now();
+let lockWarned = false;
 const AUTOLOCK_MS = 10 * 60 * 1000;
+const LOCK_WARN_MS = AUTOLOCK_MS - 60 * 1000; // warn 1 min before locking
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
-  document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
+  document.addEventListener(ev, () => { lastActivity = Date.now(); lockWarned = false; }, { passive: true }));
 setInterval(() => {
-  if (state.user && Date.now() - lastActivity > AUTOLOCK_MS) {
+  if (!state.user) return;
+  const idle = Date.now() - lastActivity;
+  if (idle > AUTOLOCK_MS) {
     toast('Locked after inactivity');
     window.lock();
+  } else if (idle > LOCK_WARN_MS && !lockWarned) {
+    // Warn before wiping the key so an in-progress form isn't lost silently.
+    lockWarned = true;
+    toast('Locking in 1 minute due to inactivity — move to stay signed in', 'error');
   }
-}, 30000);
+}, 15000);
 
 // ---------------- boot ----------------
 
