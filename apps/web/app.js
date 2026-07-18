@@ -220,8 +220,10 @@ async function remoteHoldings(bankRef) {
       voucher: a.voucher,
       name: (byHash[a.voucher] || {}).name || 'Unknown',
       account,
-      current: bal ? bal.current : 0,
-      pending: bal ? bal.pending : 0,
+      // null (not 0) when the balance RPC failed — the dashboard renders '—' so
+      // a transient error is never shown as a real zero balance.
+      current: bal ? bal.current : null,
+      pending: bal ? bal.pending : null,
     });
   }
   return out;
@@ -288,6 +290,9 @@ function route() {
 }
 
 window.addEventListener('hashchange', route);
+// Exposed so inline "Retry"/"Refresh" controls can re-render the current screen
+// in place (no full page reload, which would wipe the in-memory key).
+window.route = route;
 
 // ---------------- UI components ----------------
 
@@ -315,14 +320,39 @@ function header(title) {
 
 function card(title, body) { return `<div class="card"><h3>${escapeHtml(title)}</h3>${body}</div>`; }
 
+// A "couldn't load" state, distinct from a genuine empty state — a bank outage,
+// timeout, or clock-skew auth failure must never read as "you have nothing".
+function loadError(what) {
+  return `<div class="small error">Couldn't load ${escapeHtml(what)} — the bank may be unreachable. <button class="btn secondary" onclick="route()">Retry</button></div>`;
+}
+
 function escapeHtml(s) {
   if (typeof s !== 'string') return String(s ?? '');
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Escape a value for embedding as a single-quoted JS string literal INSIDE a
+// double-quoted HTML attribute (e.g. onclick="fn('${jsStr(x)}')"). The browser
+// HTML-decodes the attribute first, then the JS engine parses it, so we must
+// survive both passes: backslash-escape for JS (so quotes/newlines can't break
+// out of the string after decoding) and HTML-encode the attribute delimiters.
+// Prefer data-* attributes + addEventListener for new code; this guards the
+// remaining inline handlers that carry attacker-influenced strings.
+function jsStr(s) {
+  return String(s ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r?\n/g, '\\n')
+    .replace(/</g, '\\x3C')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
 }
 
 function toast(msg, type = 'success') {
   const t = document.createElement('div');
   t.className = `small ${type}`;
+  t.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  t.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
   t.style.cssText = 'position:fixed;bottom:1rem;right:1rem;background:var(--card);padding:0.75rem 1rem;border:1px solid var(--border);border-radius:0.5rem;z-index:100';
   t.textContent = msg;
   document.body.appendChild(t);
@@ -360,15 +390,22 @@ async function renderWelcome(app) {
   </div>`;
 }
 
+const MIN_PASSWORD = 8;
+
 function renderRegister(app) {
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
     ${card('Create account', `
-      <label>Handle <span class="small">(2–32 chars: a–z, 0–9, _ or -)</span></label><input id="r-handle" placeholder="alice">
-      <label>Password</label><input id="r-pass" type="password" placeholder="••••••••">
-      <label>Confirm password</label><input id="r-pass2" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doRegister()">
+      <form id="r-form" onsubmit="doRegister();return false">
+      <label for="r-handle">Handle <span class="small">(2–32 chars: a–z, 0–9, _ or -)</span></label>
+      <input id="r-handle" name="username" autocomplete="username" placeholder="alice">
+      <label for="r-pass">Password <span class="small">(${MIN_PASSWORD}+ characters — there is no recovery, so make it strong and save it)</span></label>
+      <input id="r-pass" name="new-password" type="password" autocomplete="new-password" placeholder="••••••••">
+      <label for="r-pass2">Confirm password</label>
+      <input id="r-pass2" name="confirm-password" type="password" autocomplete="new-password" placeholder="••••••••">
       <label><input type="checkbox" id="r-ack"> I understand there is no password recovery</label>
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doRegister()">Create</button>
+      <button class="btn" type="submit" style="width:100%;margin-top:1rem">Create</button>
       <p class="small error" id="r-err"></p>
+      </form>
     `)}
     <p style="text-align:center"><a href="#/">Back</a></p>
   </div>`;
@@ -380,10 +417,10 @@ window.doRegister = async function() {
   const pass2 = document.getElementById('r-pass2').value;
   const ack = document.getElementById('r-ack').checked;
   const err = document.getElementById('r-err');
-  if (!handle || !pass || pass !== pass2 || !ack) {
-    err.textContent = 'Check fields and acknowledgement';
-    return;
-  }
+  if (!handle) { err.textContent = 'Choose a handle'; return; }
+  if (pass.length < MIN_PASSWORD) { err.textContent = `Password must be at least ${MIN_PASSWORD} characters`; return; }
+  if (pass !== pass2) { err.textContent = 'Passwords do not match'; return; }
+  if (!ack) { err.textContent = 'Please acknowledge there is no password recovery'; return; }
   try {
     const { privateKey, pubkeyBase58 } = genKeyPair();
     const keystore = await encryptSeed(privateKey, pass);
@@ -441,11 +478,13 @@ function renderUnlock(app) {
   const last = rememberedHandle();
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
     ${card('Log in', `
-      <label>Handle</label><input id="u-handle" placeholder="alice" autocomplete="username" value="${escapeHtml(last)}">
-      <label>Password</label><input id="u-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doUnlock()">
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doUnlock()">Log in</button>
+      <form id="u-form" onsubmit="doUnlock();return false">
+      <label for="u-handle">Handle</label><input id="u-handle" name="username" placeholder="alice" autocomplete="username" value="${escapeHtml(last)}">
+      <label for="u-pass">Password</label><input id="u-pass" name="password" type="password" placeholder="••••••••" autocomplete="current-password">
+      <button class="btn" type="submit" style="width:100%;margin-top:1rem">Log in</button>
       <p class="small error" id="u-err"></p>
       <p class="small">No password recovery. Lost password = lost account.</p>
+      </form>
     `)}
     <p style="text-align:center" class="small">New here? <a href="#/register">Create account</a> · <a href="#/">Back</a></p>
   </div>`;
@@ -462,7 +501,11 @@ window.doUnlock = async function() {
     const res = await fetch(`${state.basePath}/ui/keystore/${encodeURIComponent(handle)}`);
     const data = await res.json();
     if (data.code || !data.keystore) {
-      err.textContent = res.status === 404 ? 'No account with that handle at this bank' : 'Could not log in — try again';
+      if (res.status === 404) err.textContent = 'No account with that handle at this bank';
+      else if (res.status === 429) {
+        const wait = data.retry_after ? ` Try again in ${data.retry_after}s.` : ' Wait a minute and try again.';
+        err.textContent = `Too many attempts.${wait}`;
+      } else err.textContent = 'Could not log in — please try again';
       return;
     }
     let seed;
@@ -492,14 +535,17 @@ function rememberedHandle() {
 }
 
 async function renderDashboard(app) {
-  const holdings = await allHoldings().catch(() => []);
-  const history = await uiGet('/history?limit=5').catch(() => ({ events: [] }));
+  let holdings = [], holdingsFailed = false;
+  try { holdings = await allHoldings(); } catch { holdingsFailed = true; }
+  let history = { events: [] }, historyFailed = false;
+  try { history = await uiGet('/history?limit=5'); } catch { historyFailed = true; }
+  const amt = (n) => n === null || n === undefined ? '—' : n;
   let body = header('Dashboard');
   body += `<div class="container">`;
-  body += card('Balances', `<div class="grid">${holdings.map(h => `
+  body += card('Balances', holdingsFailed ? loadError('balances') : `<div class="grid">${holdings.map(h => `
     <div>
       <div class="small">${escapeHtml(h.name)}${h.remote ? ` <span class="chip" title="${escapeHtml(h.bank_url || '')}">@ ${escapeHtml((h.bank || '').slice(0, 8))}…</span>` : ''}</div>
-      <div><strong>${h.current}</strong> <span class="small">pending ${h.pending}</span></div>
+      <div><strong>${amt(h.current)}</strong> <span class="small">pending ${amt(h.pending)}</span></div>
       <div class="mono small">${escapeHtml(h.account.slice(0,12))}…</div>
     </div>
   `).join('') || '<p class="small">No balances yet</p>'}</div>`);
@@ -509,33 +555,34 @@ async function renderDashboard(app) {
     <a class="btn secondary" href="#/cheques/new">New cheque</a>
     <a class="btn secondary" href="#/discover">Discover</a>
   </div>`);
-  body += card('Recent activity', history.events.map(e => `
+  body += card('Recent activity', historyFailed ? loadError('activity') : (history.events.map(e => `
     <div class="flex" style="justify-content:space-between;margin:0.4rem 0">
       <span class="mono small">${escapeHtml(e.deal_id.slice(0,12))}…</span>
-      <span>${e.direction} ${e.amount} ${escapeHtml(e.voucher_name || e.voucher.slice(0,8))}</span>
-      <span class="chip state-${e.state}">${e.state}</span>
+      <span>${e.direction === 'credit' ? '↓ received' : '↑ sent'} ${escapeHtml(String(e.amount))} ${escapeHtml(e.voucher_name || e.voucher.slice(0,8))}</span>
+      <span class="chip state-${escapeHtml(e.state)}">${escapeHtml(e.state)}</span>
     </div>
-  `).join('') || '<p class="small">No activity</p>');
+  `).join('') || '<p class="small">No activity</p>'));
   body += `</div>`;
   app.innerHTML = body;
 }
 
 async function renderVouchers(app) {
-  const vouchers = await rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []);
+  let vouchers = [], failed = false;
+  try { vouchers = await rpcCall('list_vouchers', { filter: 'mine' }); } catch { failed = true; }
   let body = header('Vouchers');
   body += `<div class="container">`;
   body += `<div class="flex" style="margin-bottom:1rem">
     <a class="btn" href="#/vouchers/new">Create voucher</a>
-    <button class="btn secondary" onclick="showShare('i', '${escapeHtml(state.user.pubkey)}', 'My issuer profile')">Share my profile QR</button>
+    <button class="btn secondary" onclick="showShare('i', '${jsStr(state.user.pubkey)}', 'My issuer profile')">Share my profile QR</button>
   </div>`;
-  body += `<div class="grid">${vouchers.map(v => `
+  body += failed ? loadError('your vouchers') : `<div class="grid">${vouchers.map(v => `
     <div class="card">
       <div><strong>${escapeHtml(v.name)}</strong></div>
       <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
       <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
-      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(v.pubkey)}', '${escapeHtml(v.name)}')">Share QR</button>
+      <button class="btn secondary" onclick="showShare('i', '${jsStr(v.pubkey)}', 'Issuer profile — ${jsStr(v.name)}')">Share issuer QR</button>
     </div>
-  `).join('') || '<p class="small">No vouchers</p>'}</div>`;
+  `).join('') || '<p class="small">No vouchers yet. <a href="#/vouchers/new">Create one.</a></p>'}</div>`;
   body += `</div>`;
   app.innerHTML = body;
 }
@@ -543,9 +590,9 @@ async function renderVouchers(app) {
 function renderCreateVoucher(app) {
   app.innerHTML = header('Create voucher') + `<div class="container">
     ${card('New voucher', `
-      <label>Name</label><input id="v-name" placeholder="1 hour consulting">
-      <label>Description (markdown)</label><textarea id="v-desc" rows="3"></textarea>
-      <label>Supply limit</label><input id="v-limit" type="number" placeholder="optional">
+      <label for="v-name">Name</label><input id="v-name" placeholder="1 hour consulting">
+      <label for="v-desc">Description (markdown)</label><textarea id="v-desc" rows="3"></textarea>
+      <label for="v-limit">Supply limit <span class="small">(optional — max you will ever issue)</span></label><input id="v-limit" type="number" min="0" step="any" placeholder="unlimited">
       <label><input type="checkbox" id="v-int"> Integer amounts only</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateVoucher()">Create & sign</button>
       <p class="small error" id="v-err"></p>
@@ -560,6 +607,7 @@ window.doCreateVoucher = async function() {
   const integer = document.getElementById('v-int').checked;
   const err = document.getElementById('v-err');
   if (!name) { err.textContent = 'Name required'; return; }
+  if (limit && (!Number.isFinite(Number(limit)) || Number(limit) <= 0)) { err.textContent = 'Supply limit must be a positive number, or left blank'; return; }
   try {
     const voucher = { type: 'voucher', pubkey: state.user.pubkey, ulid: newUlid(), bank: state.bankPubkey, name };
     if (desc) voucher.description_md = desc;
@@ -581,18 +629,22 @@ window.doCreateVoucher = async function() {
 };
 
 async function renderInvoices(app) {
-  const orders = await uiGet('/orders?kind=invoice').catch(() => ({ orders: [] }));
+  let orders = { orders: [] }, failed = false;
+  try { orders = await uiGet('/orders?kind=invoice'); } catch { failed = true; }
+  // Guard against non-invoice rows: a bank that ignores ?kind= (or older data)
+  // could return cheques/two-sided orders, which have no credit side.
+  const invoices = (orders.orders || []).filter(o => o.credit);
   let body = header('Invoices');
   body += `<div class="container">`;
   body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/invoices/new">New invoice</a></div>`;
-  body += orders.orders.map(o => `
+  body += failed ? loadError('your invoices') : (invoices.map(o => `
     <div class="card">
-      <div>Receive ${o.credit.max} of ${escapeHtml(o.credit.voucher.slice(0,12))}…</div>
+      <div>Receive ${escapeHtml(String(o.credit.max))} of ${escapeHtml(o.credit.voucher.slice(0,12))}…</div>
       <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
-      <div class="small">state: ${o.state}</div>
-      <button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>
+      <div class="small">state: ${escapeHtml(String(o.state))}</div>
+      <button class="btn secondary" onclick="showShare('v', '${jsStr(o.order)}', 'Invoice — scan to pay')">Share QR</button>
     </div>
-  `).join('') || '<p class="small">No invoices</p>';
+  `).join('') || '<p class="small">No invoices yet.</p>');
   body += `</div>`;
   app.innerHTML = body;
 }
@@ -634,14 +686,17 @@ function voucherChooser(id, vouchers, selected) {
 function noVouchersNotice() {
   return `<p class="small">No vouchers to choose from yet. <a href="#/vouchers/new">Create one</a> or <a href="#/network">trust an issuer</a> first.</p>`;
 }
+// A usable amount is a finite number greater than zero.
+function badAmount(n) { return !Number.isFinite(n) || n <= 0; }
 
 async function renderCreateInvoice(app) {
   const vouchers = await knownVouchers();
   app.innerHTML = header('New invoice') + `<div class="container">
-    ${card('Invoice (credit-only order)', vouchers.length ? `
-      <label>Voucher</label>${voucherChooser('i-voucher', vouchers)}
-      <label>Account name</label><input id="i-acct" value="receiving">
-      <label>Amount</label><input id="i-amount" type="number" value="10">
+    ${card('Request a payment (invoice)', vouchers.length ? `
+      <p class="small">Creates a shareable request: whoever opens it pays you the amount below, in the chosen voucher.</p>
+      <label for="i-voucher">Voucher to receive</label>${voucherChooser('i-voucher', vouchers)}
+      <label for="i-acct">Account name <span class="small">(where the payment lands)</span></label><input id="i-acct" value="receiving">
+      <label for="i-amount">Amount to receive</label><input id="i-amount" type="number" min="0" step="any" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice()">Create invoice</button>
       <p class="small error" id="i-err"></p>
     ` : noVouchersNotice())}
@@ -653,6 +708,7 @@ window.doCreateInvoice = async function() {
   const acctName = document.getElementById('i-acct').value.trim();
   const amount = Number(document.getElementById('i-amount').value);
   const err = document.getElementById('i-err');
+  if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
     account.sig = signDoc(account, state.user.privateKey);
@@ -671,17 +727,33 @@ window.doCreateInvoice = async function() {
   }
 };
 
-function renderCheques(app) {
-  app.innerHTML = header('Cheques') + `<div class="container"><p class="small">Cheques are debit-only orders. Use the Orders tab to view.</p></div>`;
+async function renderCheques(app) {
+  let orders = { orders: [] }, failed = false;
+  try { orders = await uiGet('/orders?kind=cheque'); } catch { failed = true; }
+  const cheques = (orders.orders || []).filter(o => o.debit && !o.credit);
+  let body = header('Cheques') + `<div class="container">`;
+  body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/cheques/new">New cheque</a></div>`;
+  body += `<p class="small">A cheque lets someone claim a fixed amount of your voucher. Share its QR with the recipient.</p>`;
+  body += failed ? loadError('your cheques') : (cheques.map(o => `
+    <div class="card">
+      <div>Pay out ${escapeHtml(String(o.debit.max))} of ${escapeHtml(o.debit.voucher.slice(0,12))}…</div>
+      <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
+      <div class="small">state: ${escapeHtml(String(o.state))}</div>
+      <button class="btn secondary" onclick="showShare('q', '${jsStr(o.order)}', 'Cheque — scan to claim')">Share QR</button>
+    </div>
+  `).join('') || '<p class="small">No cheques yet.</p>');
+  body += `</div>`;
+  app.innerHTML = body;
 }
 
 async function renderCreateCheque(app) {
   const vouchers = await knownVouchers();
   app.innerHTML = header('New cheque') + `<div class="container">
-    ${card('Cheque (debit-only order)', vouchers.length ? `
-      <label>Voucher</label>${voucherChooser('q-voucher', vouchers)}
-      <label>Account name</label><input id="q-acct" value="spending">
-      <label>Amount</label><input id="q-amount" type="number" value="10">
+    ${card('Write a cheque', vouchers.length ? `
+      <p class="small">Creates a shareable link: whoever opens it claims the amount below from you, in the chosen voucher.</p>
+      <label for="q-voucher">Voucher to pay out</label>${voucherChooser('q-voucher', vouchers)}
+      <label for="q-acct">Account name <span class="small">(paid from)</span></label><input id="q-acct" value="spending">
+      <label for="q-amount">Amount to pay</label><input id="q-amount" type="number" min="0" step="any" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque()">Create cheque</button>
       <p class="small error" id="q-err"></p>
     ` : noVouchersNotice())}
@@ -693,6 +765,7 @@ window.doCreateCheque = async function() {
   const acctName = document.getElementById('q-acct').value.trim();
   const amount = Number(document.getElementById('q-amount').value);
   const err = document.getElementById('q-err');
+  if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
     account.sig = signDoc(account, state.user.privateKey);
@@ -705,41 +778,42 @@ window.doCreateCheque = async function() {
     await rpcCall('submit_docs', { docs: [order, account], publish_offers: [orderHash] });
     location.hash = '#/cheques';
     route();
-    toast('Cheque created');
+    toast('Cheque created — share its QR to let someone claim it');
+    // Pop the shareable QR straight away — the point of a cheque is to send it.
+    showShare('q', orderHash, 'Cheque — scan to claim');
   } catch (e) {
     err.textContent = e.message;
   }
 };
 
 async function renderOrders(app) {
-  const orders = await uiGet('/orders').catch(() => ({ orders: [] }));
+  let orders = { orders: [] }, failed = false;
+  try { orders = await uiGet('/orders'); } catch { failed = true; }
   app.innerHTML = header('Orders') + `<div class="container">
     <div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/orders/new">New order</a></div>
-    ${orders.orders.map(o => `
+    ${failed ? loadError('your orders') : (orders.orders.map(o => `
       <div class="card">
-        <div>${o.kind === 'two-sided' ? 'Swap' : o.kind} · rate ${o.rate} · lead ${o.lead}</div>
+        <div>${o.kind === 'two-sided' ? 'Swap' : escapeHtml(String(o.kind))}${o.lead ? ' · settles first' : ''}</div>
         <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
-        <div class="small">${o.debit ? `give ${o.debit.min}-${o.debit.max}` : ''} ${o.credit ? `· get ${o.credit.min}-${o.credit.max}` : ''}</div>
-        ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${escapeHtml(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
-        ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${escapeHtml(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
+        <div class="small">${o.debit ? `give up to ${escapeHtml(String(o.debit.max))}` : ''} ${o.credit ? `· receive up to ${escapeHtml(String(o.credit.max))}` : ''}</div>
+        ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${jsStr(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
+        ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${jsStr(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
       </div>
-    `).join('') || '<p class="small">No orders</p>'}
+    `).join('') || '<p class="small">No orders yet.</p>')}
   </div>`;
 }
 
 async function renderCreateOrder(app) {
   const vouchers = await knownVouchers();
   app.innerHTML = header('New order') + `<div class="container">
-    ${card('Two-sided swap order', vouchers.length ? `
-      <label>You give (voucher)</label>${voucherChooser('o-dv', vouchers)}
-      <label>Debit account name</label><input id="o-da" value="selling">
-      <label>Debit max</label><input id="o-dmax" type="number" value="100">
-      <label>You receive (voucher)</label>${voucherChooser('o-cv', vouchers)}
-      <label>Credit account name</label><input id="o-ca" value="buying">
-      <label>Credit max</label><input id="o-cmax" type="number" value="90">
-      <label>Rate (debit/credit max)</label><input id="o-rate" type="number" value="1.111">
-      <label><input type="checkbox" id="o-lead"> Lead (settle first)</label>
-      <label><input type="checkbox" id="o-pub" checked> Publish as offer</label>
+    ${card('Offer a swap', vouchers.length ? `
+      <p class="small">Offer to trade one voucher for another. The exchange rate is set by the two amounts you enter.</p>
+      <label for="o-dv">You give (voucher)</label>${voucherChooser('o-dv', vouchers)}
+      <label for="o-dmax">Amount you give (up to)</label><input id="o-dmax" type="number" min="0" step="any" value="100">
+      <label for="o-cv">You receive (voucher)</label>${voucherChooser('o-cv', vouchers)}
+      <label for="o-cmax">Amount you receive (up to)</label><input id="o-cmax" type="number" min="0" step="any" value="90">
+      <label><input type="checkbox" id="o-lead"> Settle my side first <span class="small">(the counterparty may not reciprocate)</span></label>
+      <label><input type="checkbox" id="o-pub" checked> List publicly so others can discover this</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder()">Create order</button>
       <p class="small error" id="o-err"></p>
     ` : noVouchersNotice())}
@@ -748,19 +822,20 @@ async function renderCreateOrder(app) {
 
 window.doCreateOrder = async function() {
   const dv = document.getElementById('o-dv').value.trim();
-  const da = document.getElementById('o-da').value.trim();
   const dmax = Number(document.getElementById('o-dmax').value);
   const cv = document.getElementById('o-cv').value.trim();
-  const ca = document.getElementById('o-ca').value.trim();
   const cmax = Number(document.getElementById('o-cmax').value);
-  const rate = Number(document.getElementById('o-rate').value);
   const lead = document.getElementById('o-lead').checked;
   const pub = document.getElementById('o-pub').checked;
   const err = document.getElementById('o-err');
+  if (dv === cv) { err.textContent = 'Pick two different vouchers — you cannot swap a voucher for itself'; return; }
+  if (badAmount(dmax) || badAmount(cmax)) { err.textContent = 'Both amounts must be greater than zero'; return; }
+  // Rate is derived from the two amounts, not hand-typed — they can never disagree.
+  const rate = dmax / cmax;
   try {
-    const dAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: da, voucher: dv };
+    const dAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: 'giving', voucher: dv };
     dAccount.sig = signDoc(dAccount, state.user.privateKey);
-    const cAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: ca, voucher: cv };
+    const cAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: 'receiving', voucher: cv };
     cAccount.sig = signDoc(cAccount, state.user.privateKey);
     const dHash = hashDoc(dAccount), cHash = hashDoc(cAccount);
     const order = { type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate,
@@ -770,55 +845,128 @@ window.doCreateOrder = async function() {
     order.sig = signDoc(order, state.user.privateKey);
     const oHash = hashDoc(order);
     const docs = [order, dAccount, cAccount];
-    // Cross-bank: also submit to credit voucher's bank if different.
     await rpcCall('submit_docs', { docs, publish_offers: pub ? [oHash] : [] });
-    if (cv !== dv) {
-      // Need credit bank pubkey. For now assume same bank; UI lets user add banks later.
-    }
     location.hash = '#/orders';
     route();
-    toast('Order created');
+    toast(pub ? 'Order created and listed publicly' : 'Order created');
   } catch (e) {
     err.textContent = e.message;
   }
 };
 
 async function renderDiscover(app) {
-  const offers = await uiPost('/discover', { vouchers: [], intentions: ['sell','buy'] }).catch(e => ({ offers: [], error: e.message }));
-  app.innerHTML = header('Discover') + `<div class="container">
-    ${card('Offers', (offers.offers || []).map(o => `
-      <div class="card">
-        <div>${o.debit ? `give ${o.debit.min}-${o.debit.max}` : ''} ${o.credit ? `· get ${o.credit.min}-${o.credit.max}` : ''}</div>
-        <div class="small">rate ${o.rate} · lead ${o.lead} · bank ${escapeHtml(o.bank.slice(0,12))}…</div>
-        <div class="mono small">${escapeHtml(o.offer.slice(0,16))}…</div>
-        <button class="btn" onclick="acceptOffer('${o.order}', ${o.debit?.max||0}, ${o.credit?.max||0}, '${o.bank}', '${o.bank_url}')">Accept</button>
-      </div>
-    `).join('') || '<p class="small">No offers discovered</p>')}
-    ${offers.error ? `<p class="error small">${offers.error}</p>` : ''}
-  </div>`;
+  const known = await knownVouchers().catch(() => []);
+  const nameByHash = {};
+  known.forEach(v => { nameByHash[v.hash] = v.name; });
+  let body = header('Discover') + `<div class="container">`;
+  if (!known.length) {
+    body += card('Discover trades', `<p class="small">To discover trades you first need a voucher you issue, or an issuer you trust. <a href="#/vouchers/new">Create a voucher</a> or <a href="#/network">trust an issuer</a>, then come back.</p>`);
+    app.innerHTML = body + `</div>`;
+    return;
+  }
+  // Poll our own bank AND every pinned bank for offers on the vouchers we know.
+  // (The bank defaults `vouchers` to an empty catalog and `banks` to pinned-only,
+  // so both must be sent explicitly or nothing is ever discovered.)
+  const pinned = await uiGet('/banks').catch(() => []);
+  const banks = [{ pubkey: state.bankPubkey, url: state.bankUrl }];
+  (pinned || []).forEach(b => { if (b.pubkey && b.pubkey !== state.bankPubkey) banks.push({ pubkey: b.pubkey, url: b.url }); });
+  const vouchers = known.map(v => v.hash);
+  let res;
+  try { res = await uiPost('/discover', { banks, vouchers, intentions: ['sell', 'buy'] }); }
+  catch (e) { res = { offers: [], error: e.message, unreachable: [] }; }
+  // The same order can surface from several (bank × voucher × intention) polls.
+  const seen = new Set();
+  const uniq = (res.offers || []).filter(o => { const k = o.order || o.offer; if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  // Attacker-influenced strings (from a polled bank) never enter inline JS — the
+  // click handler reads the full offer object back from this stash by index.
+  window.__discoverOffers = uniq;
+  const name = (h) => h ? (nameByHash[h] || (h.slice(0, 8) + '…')) : '';
+  body += card('Offers', uniq.map((o, i) => {
+    const give = o.debit ? `give ${escapeHtml(String(o.debit.max))} ${escapeHtml(name(o.debit.voucher))}` : '';
+    const get = o.credit ? `get ${escapeHtml(String(o.credit.max))} ${escapeHtml(name(o.credit.voucher))}` : '';
+    const summary = [give, get].filter(Boolean).join(' · ') || 'offer';
+    const twoSided = o.debit && o.credit;
+    return `<div class="card">
+      <div><strong>${summary}</strong></div>
+      <div class="small">at bank ${escapeHtml((o.bank || '').slice(0, 12))}…</div>
+      ${twoSided
+        ? `<button class="btn" data-idx="${i}" onclick="acceptOfferByIdx(this)">Accept swap</button>`
+        : `<p class="small">One-sided offer — open its link to pay or claim.</p>`}
+    </div>`;
+  }).join('') || '<p class="small">No offers found at your bank or pinned banks yet. Publish an order, or pin more banks under Network.</p>');
+  const unreachable = res.unreachable || [];
+  if (unreachable.length) {
+    body += card('Couldn\'t reach', unreachable.map(u => `<div class="small">bank ${escapeHtml((u.bank || '').slice(0, 12))}…</div>`).join(''));
+  }
+  if (res.error) body += `<p class="error small">${escapeHtml(res.error)}</p>`;
+  app.innerHTML = body + `</div>`;
 }
 
-window.acceptOffer = async function(theirOrderHash, debitMax, creditMax, theirBankPubkey, theirBankUrl) {
+// Accept a discovered two-sided swap: build the mirror order (I give what they
+// want, receive what they give), submit it, then propose the deal pairing it
+// with theirs. The offer object is read from the stash so nothing attacker-
+// controlled is interpolated into markup.
+window.acceptOfferByIdx = async function(btn) {
+  const o = (window.__discoverOffers || [])[Number(btn.dataset.idx)];
+  if (!o) { toast('Offer no longer available — refresh Discover', 'error'); return; }
+  if (!o.debit || !o.credit) { toast('One-sided offer — open its link to pay or claim', 'error'); return; }
+  if (btn.disabled) return;
+  // Cross-bank swaps need the mirror order submitted to two banks; not yet
+  // supported here. Single-bank (both vouchers at one bank) is the common case.
+  if (o.debit.bank !== o.credit.bank) {
+    toast('This swap spans two banks — not supported from Discover yet', 'error');
+    return;
+  }
+  const theyGive = o.debit;   // voucher A they give (I receive)
+  const theyWant = o.credit;  // voucher B they want (I give)
+  const known = await knownVouchers().catch(() => []);
+  const nm = {}; known.forEach(v => { nm[v.hash] = v.name; });
+  const nameOf = (h) => nm[h] || (h.slice(0, 8) + '…');
+  if (!window.confirm(`Accept this swap?\n\nYou give ${theyWant.max} ${nameOf(theyWant.voucher)}\nYou receive ${theyGive.max} ${nameOf(theyGive.voucher)}`)) return;
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Working…';
   try {
-    const mine = await uiGet('/orders');
-    const myOffer = mine.orders[0];
-    if (!myOffer) { toast('Create your own order first', 'error'); return; }
-    // Reference Orders by their canonical hash so every participating bank can
-    // resolve the same doc — Offers are per-bank derivations with bank-local
-    // hashes and would not resolve at a counterparty bank.
-    const myOrderHash = myOffer.order || myOffer.offers[0];
-    const banks = [{ pubkey: state.bankPubkey, url: state.bankUrl }];
-    if (theirBankPubkey && theirBankUrl && !banks.some(b => b.pubkey === theirBankPubkey)) {
-      banks.push({ pubkey: theirBankPubkey, url: theirBankUrl });
+    const vbank = await resolveVoucherBank(theyGive, { bank: o.bank, bank_url: o.bank_url });
+    if (vbank.pubkey !== state.bankPubkey) {
+      await uiPost('/banks', { pubkey: vbank.pubkey, url: vbank.url }).catch(() => {});
     }
-    const res = await uiPost('/propose_deal', {
-      offer1: { hash: myOrderHash, debit_amount: debitMax || creditMax, credit_amount: creditMax || debitMax },
-      offer2: { hash: theirOrderHash, debit_amount: creditMax || debitMax, credit_amount: debitMax || creditMax },
-      banks
+    // I must hold voucher B (what they want) to give it. Reuse a funded account.
+    const mine = await rpcCallAt(vbank.url, vbank.pubkey, 'list_accounts', {}).catch(() => ({ accounts: [] }));
+    const docs = [];
+    let giveAccount = null;
+    for (const a of (mine.accounts || []).filter(a => a.voucher === theyWant.voucher).map(a => hashDoc(a))) {
+      const bal = await rpcCallAt(vbank.url, vbank.pubkey, 'get_account_balance', { account_hash: a }).catch(() => null);
+      if (bal && (bal.current - bal.pending) >= theyWant.max) { giveAccount = a; break; }
+    }
+    if (!giveAccount) throw new Error(`you need ${theyWant.max} ${nameOf(theyWant.voucher)} at this bank to accept`);
+    // Receiving account for voucher A — reuse or create fresh.
+    let recvAccount = (mine.accounts || []).filter(a => a.voucher === theyGive.voucher).map(a => hashDoc(a))[0] || null;
+    if (!recvAccount) {
+      const acct = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: 'receiving', voucher: theyGive.voucher };
+      acct.sig = signDoc(acct, state.user.privateKey);
+      recvAccount = hashDoc(acct);
+      docs.push(acct);
+    }
+    const myOrder = {
+      type: 'order', pubkey: state.user.pubkey, ulid: newUlid(), rate: theyWant.max / theyGive.max,
+      debit: { account: giveAccount, voucher: theyWant.voucher, bank: theyWant.bank, min: 0, max: theyWant.max },
+      credit: { account: recvAccount, voucher: theyGive.voucher, bank: theyGive.bank, min: 0, max: theyGive.max },
+      lead: false,
+    };
+    myOrder.sig = signDoc(myOrder, state.user.privateKey);
+    const myHash = hashDoc(myOrder);
+    docs.push(myOrder);
+    await rpcCallAt(vbank.url, vbank.pubkey, 'submit_docs', { docs });
+    const res = await signedRequestAt(vbank.url, 'POST', '/propose_deal', {
+      offer1: { hash: o.order, debit_amount: theyGive.max, credit_amount: theyWant.max },
+      offer2: { hash: myHash, debit_amount: theyWant.max, credit_amount: theyGive.max },
+      banks: [{ pubkey: vbank.pubkey, url: vbank.url }],
     });
+    rememberDealBank(res.deal_id, vbank);
     location.hash = `#/deal/${res.deal_id}`;
     route();
   } catch (e) {
+    btn.disabled = false; btn.textContent = label;
     toast(e.message, 'error');
   }
 };
@@ -827,14 +975,25 @@ async function renderDeal(app, dealId) {
   // A deal proposed at another bank (e.g. a claimed cheque at the voucher's
   // issuing bank) is polled there, not at the SPA's own bank.
   const remote = dealBankFor(dealId);
-  const status = await (remote && remote.pubkey !== state.bankPubkey
-    ? signedRequestAt(remote.url, 'GET', `/deal/${dealId}`, null)
-    : uiGet(`/deal/${dealId}`)
-  ).catch(() => null);
+  let status = null, errored = false;
+  try {
+    status = await (remote && remote.pubkey !== state.bankPubkey
+      ? signedRequestAt(remote.url, 'GET', `/deal/${dealId}`, null)
+      : uiGet(`/deal/${dealId}`));
+  } catch { errored = true; }
   let body = header('Deal') + `<div class="container">`;
-  if (!status) {
-    body += card('Deal', '<p class="small">Not found</p>');
-  } else {
+  if (errored || !status) {
+    // A blank/failed read right after propose is almost always transient
+    // (replication lag, a network blip, clock skew). Keep polling instead of
+    // dead-ending on "Not found", and never blank the screen permanently.
+    body += card(`Deal ${escapeHtml(dealId.slice(0, 12))}…`, `
+      <p class="small">Connecting to the bank… this can take a moment right after a deal is proposed. This page keeps retrying.</p>
+      <button class="btn secondary" onclick="route()">Retry now</button>`);
+    app.innerHTML = body + `</div>`;
+    setTimeout(() => { if (location.hash === `#/deal/${dealId}`) route(); }, 3000);
+    return;
+  }
+  {
     const done = status.state === 'settled' || status.state === 'rejected';
     const tick = (b) => b ? '✓' : '·';
     // Every leg below is minted by the SAME bank (the one we polled), so the
@@ -863,8 +1022,7 @@ async function renderDeal(app, dealId) {
       ${done
         ? `<a class="btn" href="#/">Back to balances</a>`
         : `<p class="small">Waiting for the banks to sign… this page refreshes itself.</p>
-           <button class="btn secondary" onclick="location.reload()">Refresh now</button>
-           <button class="btn secondary" onclick="relayDeal('${escapeHtml(dealId)}')">Relay signatures</button>`}
+           <button class="btn secondary" onclick="route()">Refresh now</button>`}
     `);
   }
   body += `</div>`;
@@ -874,21 +1032,12 @@ async function renderDeal(app, dealId) {
   }
 }
 
-window.relayDeal = async function(dealId) {
-  try {
-    const res = await uiPost('/relay_signatures', { from: {pubkey: state.bankPubkey, url: state.bankUrl}, to: {pubkey: state.bankPubkey, url: state.bankUrl}, record_hashes: [] });
-    toast('Relay attempted');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-};
-
 async function renderSettings(app) {
   app.innerHTML = header('Settings') + `<div class="container">
     ${card('Identity', `
       <p>Handle: ${escapeHtml(state.user.handle || '')}</p>
       <p class="mono small">${escapeHtml(state.user.pubkey)}</p>
-      <button class="btn secondary" onclick="showShare('i', '${escapeHtml(state.user.pubkey)}', 'My issuer profile')">My profile QR</button>
+      <button class="btn secondary" onclick="showShare('i', '${jsStr(state.user.pubkey)}', 'My issuer profile')">My profile QR</button>
     `)}
     ${card('Bank', `
       <p>${escapeHtml(state.bankName)}</p>
@@ -970,7 +1119,7 @@ async function renderScan(app) {
     ${card('Scan a Barter QR', `
       <video id="scan-video" style="width:100%;border-radius:0.5rem;background:#000"></video>
       <p class="small" id="scan-status">Requesting camera…</p>
-      <label>…or paste a Barter Link</label>
+      <label for="scan-manual">…or paste a Barter Link</label>
       <input id="scan-manual" placeholder="https://…/alice/i/PUBKEY">
       <button class="btn" style="width:100%;margin-top:0.5rem" onclick="handleScanned(document.getElementById('scan-manual').value.trim())">Open link</button>
     `)}
@@ -1057,17 +1206,20 @@ async function renderLanding(app, kind, value) {
       ${vouchers.map(v => `<div class="card"><strong>${escapeHtml(v.name)}</strong>${v.description_md ? `<p class="small">${escapeHtml(v.description_md)}</p>` : ''}</div>`).join('') || '<p class="small">No vouchers published yet.</p>'}
     `;
     if (!state.user) {
-      sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'trust', pubkey: env.pubkey || value, handle: env.handle, bank: env.bank, bank_url: env.bank_url }));
+      // Remember only to RETURN to this profile after auth — never arm a silent
+      // auto-trust just because the profile was viewed. The explicit Trust
+      // button below (logged-in branch) is the only thing that adds trust.
+      sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'view', kind: 'i', value }));
       app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card('Issuer profile', body + `
-        <p class="small">Registering will add <b>${escapeHtml(handle)}</b> to your trusted issuers.</p>
-        <a class="btn" style="display:block;text-align:center" href="#/register">Register &amp; trust ${escapeHtml(handle)}</a>
-        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in &amp; trust</a>
+        <p class="small">After you sign in you can choose to trust <b>${escapeHtml(handle)}</b>.</p>
+        <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>
       `)}</div>`;
     } else {
       app.innerHTML = header('Profile') + `<div class="container" style="max-width:480px">${card('Issuer profile', body + `
-        <label>Note <span class="small">(optional)</span></label>
+        <label for="trust-note">Note <span class="small">(optional)</span></label>
         <textarea id="trust-note" rows="2" placeholder="e.g. met at the train station, seemed OK"></textarea>
-        <button class="btn" style="width:100%" onclick="applyTrust('${escapeHtml(env.pubkey || value)}', '${escapeHtml(env.handle || '')}')">Trust ${escapeHtml(handle)}</button>
+        <button class="btn" style="width:100%" data-pk="${escapeHtml(env.pubkey || value)}" data-handle="${escapeHtml(env.handle || '')}" data-bank="${escapeHtml(env.bank || '')}" data-bankurl="${escapeHtml(env.bank_url || '')}" onclick="applyTrust(this)">Trust ${escapeHtml(handle)}</button>
       `)}</div>`;
     }
     return;
@@ -1076,6 +1228,10 @@ async function renderLanding(app, kind, value) {
   if (env.kind === 'invoice' || env.kind === 'cheque') {
     const order = env.docs.find(d => d.type === 'order');
     const side = env.kind === 'invoice' ? order.credit : order.debit;
+    // The bank now bundles the referenced Voucher doc (verified above), so the
+    // recipient sees WHAT they pay/claim by name — not a bare hash.
+    const voucherDoc = env.docs.find(d => d.type === 'voucher' && hashDoc(d) === side.voucher);
+    const voucherName = voucherDoc ? voucherDoc.name : null;
     const who = env.handle || order.pubkey.slice(0, 12) + '…';
     const amount = side.min === side.max ? String(side.max) : `${side.min}–${side.max}`;
     const verb = env.kind === 'invoice' ? 'Pay' : 'Claim';
@@ -1083,8 +1239,9 @@ async function renderLanding(app, kind, value) {
       <h2>${env.kind === 'invoice' ? `Pay ${escapeHtml(who)}` : `Cheque from ${escapeHtml(who)}`}</h2>
       ${verified}
       <div class="card">
-        <div>Amount: <strong>${escapeHtml(amount)}</strong></div>
-        <div class="mono small">voucher ${escapeHtml(side.voucher.slice(0, 16))}…</div>
+        <div>Amount: <strong>${escapeHtml(amount)}${voucherName ? ` ${escapeHtml(voucherName)}` : ''}</strong></div>
+        ${voucherName && voucherDoc.description_md ? `<div class="small">${escapeHtml(voucherDoc.description_md)}</div>` : ''}
+        <div class="mono small">voucher ${voucherName ? `${escapeHtml(voucherName)} · ` : ''}${escapeHtml(side.voucher.slice(0, 16))}…</div>
       </div>`;
     sessionStorage.setItem('barter_pending', JSON.stringify({ action: env.kind, orderHash: hashDoc(order), kind, value, base }));
     if (!state.user) {
@@ -1107,15 +1264,20 @@ async function renderLanding(app, kind, value) {
     ${card('Barter Link', `<p>Kind: ${escapeHtml(env.kind)}</p>${verified}<p><a href="#/">Home</a></p>`)}</div>`;
 }
 
-// Add an issuer to the trusted list (+ their bank to known banks) with Undo.
-window.applyTrust = async function(pubkey, handle) {
+// Add an issuer to the trusted list (+ their bank to known banks). The pubkey,
+// handle and bank ride on the button's data-* attributes so nothing scanned is
+// interpolated into inline JS.
+window.applyTrust = async function(btn) {
+  const pubkey = btn.dataset.pk;
+  const handle = btn.dataset.handle || '';
+  const bank = btn.dataset.bank || '';
+  const bankUrl = btn.dataset.bankurl || '';
   try {
     const noteEl = document.getElementById('trust-note');
     const note = noteEl ? noteEl.value.trim() : '';
     await uiPost('/trusted', { pubkey, note });
-    const pending = JSON.parse(sessionStorage.getItem('barter_pending') || '{}');
-    if (pending.bank && pending.bank_url && pending.bank !== state.bankPubkey) {
-      await uiPost('/banks', { pubkey: pending.bank, url: pending.bank_url }).catch(() => {});
+    if (bank && bankUrl && bank !== state.bankPubkey) {
+      await uiPost('/banks', { pubkey: bank, url: bankUrl }).catch(() => {});
     }
     sessionStorage.removeItem('barter_pending');
     toast(`You now trust ${handle || pubkey.slice(0, 12)}`);
@@ -1225,11 +1387,11 @@ function resumePendingAction() {
   if (!raw) return false;
   try {
     const pending = JSON.parse(raw);
-    if (pending.action === 'trust') {
-      window.applyTrust(pending.pubkey, pending.handle);
-      return true;
-    }
-    if (pending.action === 'invoice' || pending.action === 'cheque') {
+    // 'view' (a profile) and invoice/cheque all resume by RETURNING to the
+    // landing — where the explicit Trust / Pay / Claim button is shown. Nothing
+    // executes automatically just because the user signed in.
+    if (pending.action === 'view' || pending.action === 'invoice' || pending.action === 'cheque') {
+      sessionStorage.removeItem('barter_pending');
       location.hash = `#/land/${pending.kind}/${pending.value}`;
       route();
       return true;
@@ -1241,15 +1403,16 @@ function resumePendingAction() {
 // ---------------- activity ----------------
 
 async function renderActivity(app) {
-  const history = await uiGet('/history?limit=100').catch(() => ({ events: [] }));
+  let history = { events: [] }, failed = false;
+  try { history = await uiGet('/history?limit=100'); } catch { failed = true; }
   app.innerHTML = header('Activity') + `<div class="container">
-    ${card('Transaction history', history.events.map(e => `
+    ${card('Transaction history', failed ? loadError('your activity') : (history.events.map(e => `
       <div class="flex" style="justify-content:space-between;margin:0.4rem 0;align-items:center">
         <a class="mono small" href="#/deal/${escapeHtml(e.deal_id)}">${escapeHtml(e.deal_id.slice(0, 12))}…</a>
-        <span>${e.direction === 'in' ? '↓' : '↑'} ${e.amount} ${escapeHtml(e.voucher_name || e.voucher.slice(0, 8))}</span>
+        <span>${e.direction === 'credit' ? '↓ received' : '↑ sent'} ${escapeHtml(String(e.amount))} ${escapeHtml(e.voucher_name || e.voucher.slice(0, 8))}</span>
         <span class="chip state-${escapeHtml(e.state)}">${escapeHtml(e.state)}</span>
       </div>
-    `).join('') || '<p class="small">No activity yet</p>')}
+    `).join('') || '<p class="small">No activity yet</p>'))}
   </div>`;
 }
 
@@ -1279,16 +1442,16 @@ async function renderNetwork(app) {
             <span class="small">${(r.vouchers || []).length} voucher(s)</span></span>
           <span>
             <button class="btn secondary" data-pk="${escapeHtml(r.pubkey)}" data-note="${escapeHtml(r.note || '')}" onclick="editTrustNote(this)">Note</button>
-            <button class="btn secondary" onclick="showShare('i', '${escapeHtml(r.pubkey)}', 'Issuer profile')">QR</button>
-            <button class="btn danger" onclick="untrust('${escapeHtml(r.pubkey)}')">Remove</button>
+            <button class="btn secondary" onclick="showShare('i', '${jsStr(r.pubkey)}', 'Issuer profile')">QR</button>
+            <button class="btn danger" onclick="untrust('${jsStr(r.pubkey)}')">Remove</button>
           </span>
         </div>
         ${r.note ? `<p class="small" style="margin:0.3rem 0 0;font-style:italic">&ldquo;${escapeHtml(r.note)}&rdquo;</p>` : ''}
       </div>
     `).join('') || '<p class="small">Nobody trusted yet. Scan a friend&#39;s profile QR to start.</p>')}
     ${card('Add trusted issuer', `
-      <label>Issuer pubkey</label><input id="n-trust-pk" placeholder="base58 pubkey">
-      <label>Note <span class="small">(optional)</span></label>
+      <label for="n-trust-pk">Issuer pubkey</label><input id="n-trust-pk" placeholder="base58 pubkey">
+      <label for="n-trust-note">Note <span class="small">(optional)</span></label>
       <textarea id="n-trust-note" rows="2" placeholder="e.g. met at the train station, seemed OK"></textarea>
       <button class="btn" onclick="addTrusted()">Trust</button>
     `)}
@@ -1297,17 +1460,17 @@ async function renderNetwork(app) {
       ${banks.map(b => `
         <div class="flex" style="justify-content:space-between;align-items:center;margin:0.4rem 0">
           <span class="mono small">${escapeHtml(b.pubkey.slice(0, 16))}… · ${escapeHtml(b.url)}</span>
-          <button class="btn danger" onclick="removeBank('${escapeHtml(b.pubkey)}')">Remove</button>
+          <button class="btn danger" onclick="removeBank('${jsStr(b.pubkey)}')">Remove</button>
         </div>
       `).join('') || '<p class="small">No peer banks pinned</p>'}
-      <label>Bank URL</label><input id="n-bank-url" placeholder="https://…/bankname">
+      <label for="n-bank-url">Bank URL</label><input id="n-bank-url" placeholder="https://…/bankname">
       <button class="btn" onclick="addBank()">Pin bank</button>
       <p class="small error" id="n-bank-err"></p>
     `)}
     ${card('Contacts', contacts.map(c => `
       <div class="flex" style="justify-content:space-between;margin:0.4rem 0">
         <span>${escapeHtml(c.handle || '')} <span class="mono small">${escapeHtml((c.pubkey || '').slice(0, 16))}…</span></span>
-        <button class="btn danger" onclick="removeContact('${escapeHtml(c.pubkey)}')">Remove</button>
+        <button class="btn danger" onclick="removeContact('${jsStr(c.pubkey)}')">Remove</button>
       </div>
     `).join('') || '<p class="small">No contacts</p>')}
   </div>`;
