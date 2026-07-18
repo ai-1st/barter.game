@@ -258,7 +258,7 @@ function dealBankFor(dealId) {
 // nav tab while the async screen fetches.
 const ROUTE_TITLES = {
   '': 'Dashboard', vouchers: 'Vouchers', orders: 'Orders', invoices: 'Invoices',
-  cheques: 'Cheques', discover: 'Discover', activity: 'Activity',
+  cheques: 'Cheques', discover: 'Discover', registry: 'Registry', activity: 'Activity',
   network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal',
 };
 
@@ -304,6 +304,7 @@ function dispatch(app, p, rest) {
   if (p === 'cheques' && rest[0] === 'new') return renderCreateCheque(app);
   if (p === 'cheques') return renderCheques(app);
   if (p === 'discover') return renderDiscover(app);
+  if (p === 'registry') return renderRegistry(app);
   if (p === 'deal' && rest[0]) return renderDeal(app, rest[0]);
   if (p === 'activity') return renderActivity(app);
   if (p === 'network') return renderNetwork(app);
@@ -972,8 +973,63 @@ async function renderDiscover(app) {
     body += card('Couldn\'t reach', unreachable.map(u => `<div class="small">bank ${escapeHtml((u.bank || '').slice(0, 12))}…</div>`).join(''));
   }
   if (res.error) body += `<p class="error small">${escapeHtml(res.error)}</p>`;
+  body += `<p class="small"><a href="#/registry">Browse this bank's voucher registry →</a></p>`;
   app.innerHTML = body + `</div>`;
 }
+
+// Browse the bank's public voucher registry, grouped by issuer, so a newcomer
+// can find issuers/vouchers and trust them. (INPUTS: "check a bank's public
+// registry of vouchers, optionally filtered by issuer".)
+async function renderRegistry(app) {
+  let vouchers = [], failed = false;
+  try { vouchers = await rpcCall('list_vouchers', {}); } catch { failed = true; }
+  const trusted = new Set((await uiGet('/trusted').catch(() => [])).map(t => typeof t === 'string' ? t : t.pubkey));
+  // Group vouchers by issuer pubkey.
+  const byIssuer = new Map();
+  (vouchers || []).forEach(v => {
+    if (!v || !v.pubkey) return;
+    if (!byIssuer.has(v.pubkey)) byIssuer.set(v.pubkey, []);
+    byIssuer.get(v.pubkey).push(v);
+  });
+  // Resolve each issuer's handle at this bank (best-effort).
+  const issuers = [...byIssuer.keys()];
+  const handles = {};
+  await Promise.all(issuers.map(pk =>
+    fetch(`${(state.bankUrl || state.basePath).replace(/\/$/, '')}/ui/resolve/${pk}`)
+      .then(r => r.json()).then(r => { handles[pk] = r.handle || ''; }).catch(() => {})));
+  let body = header('Registry') + `<div class="container">`;
+  body += `<p class="small">Vouchers issued at ${escapeHtml(state.bankName)}. Trust an issuer to use their vouchers in your orders.</p>`;
+  if (failed) {
+    body += loadError('the registry');
+  } else if (!issuers.length) {
+    body += `<p class="small">No public vouchers at this bank yet.</p>`;
+  } else {
+    body += issuers.map(pk => {
+      const isMe = state.user && pk === state.user.pubkey;
+      const isTrusted = trusted.has(pk) || isMe;
+      const who = handles[pk] || (pk.slice(0, 12) + '…');
+      const vs = byIssuer.get(pk);
+      return card(who, `
+        <div class="mono small">${escapeHtml(pk.slice(0, 24))}…</div>
+        ${vs.map(v => `<div class="small">• ${escapeHtml(v.name)}</div>${expiryNote(v.expires)}`).join('')}
+        ${isMe ? '<p class="small">This is you.</p>'
+          : isTrusted ? '<p class="small success">✓ Trusted</p>'
+          : `<button class="btn secondary" data-pk="${escapeHtml(pk)}" data-handle="${escapeHtml(handles[pk] || '')}" onclick="trustFromRegistry(this)">Trust ${escapeHtml(who)}</button>`}
+      `);
+    }).join('');
+  }
+  app.innerHTML = body + `</div>`;
+}
+
+window.trustFromRegistry = async function(btn) {
+  const pubkey = btn.dataset.pk;
+  const handle = btn.dataset.handle || '';
+  try {
+    await uiPost('/trusted', { pubkey, note: '' });
+    toast(`You now trust ${handle || pubkey.slice(0, 12)}`);
+    route();
+  } catch (e) { toast(e.message, 'error'); }
+};
 
 // Accept a discovered two-sided swap by index into the Discover stash. The
 // offer object is read back from the stash so nothing attacker-controlled is
