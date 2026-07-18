@@ -277,6 +277,13 @@ function route() {
     app.innerHTML = '';
   }
 
+  // After the (possibly async) screen renders, move focus to its heading so
+  // keyboard/screen-reader users land on the new content — not stuck at <body>
+  // — and the screen title is announced.
+  Promise.resolve(dispatch(app, p, rest)).then(moveFocusToMain).catch(() => {});
+}
+
+function dispatch(app, p, rest) {
   // Landing routes work logged-out (they carry the register CTA themselves).
   if (p === 'land' && rest[0] && rest[1]) return renderLanding(app, rest[0], rest[1]);
 
@@ -305,6 +312,18 @@ function route() {
   return renderDashboard(app);
 }
 
+// Move focus to the first heading of the freshly rendered screen (skipping the
+// loading skeleton), making it programmatically focusable first.
+function moveFocusToMain() {
+  const app = document.getElementById('app');
+  if (!app || app.querySelector('.skeleton')) return; // still loading; render will re-focus
+  const h = app.querySelector('h1, h2, h3');
+  if (!h) return;
+  h.setAttribute('tabindex', '-1');
+  try { h.focus({ preventScroll: true }); } catch { h.focus(); }
+}
+window.skipToContent = function() { moveFocusToMain(); };
+
 window.addEventListener('hashchange', route);
 // Exposed so inline "Retry"/"Refresh" controls can re-render the current screen
 // in place (no full page reload, which would wipe the in-memory key).
@@ -313,7 +332,8 @@ window.route = route;
 // ---------------- UI components ----------------
 
 function header(title) {
-  return `<div class="header">
+  return `<a href="#" class="skip-link" onclick="skipToContent();return false">Skip to content</a>
+  <div class="header">
     <div class="brand">
       <div class="logo-mark"><span></span></div>
       <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>

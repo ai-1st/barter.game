@@ -250,3 +250,20 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* skip link — hidden until keyboard-focused */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  z-index: 60;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.5rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  transition: top 0.15s ease;
+}
+.skip-link:focus { top: 0.5rem; text-decoration: none; outline: 2px solid #fff; }
+/* a heading focused by the router should not draw a persistent outline */
+h1:focus, h2:focus, h3:focus { outline: none; }
