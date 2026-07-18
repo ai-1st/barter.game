@@ -958,19 +958,25 @@ async function renderDiscover(app) {
   app.innerHTML = body + `</div>`;
 }
 
-// Accept a discovered two-sided swap: build the mirror order (I give what they
-// want, receive what they give), submit it, then propose the deal pairing it
-// with theirs. The offer object is read from the stash so nothing attacker-
-// controlled is interpolated into markup.
-window.acceptOfferByIdx = async function(btn) {
+// Accept a discovered two-sided swap by index into the Discover stash. The
+// offer object is read back from the stash so nothing attacker-controlled is
+// interpolated into markup.
+window.acceptOfferByIdx = function(btn) {
   const o = (window.__discoverOffers || [])[Number(btn.dataset.idx)];
   if (!o) { toast('Offer no longer available — refresh Discover', 'error'); return; }
+  return window.acceptSwap(o, btn);
+};
+
+// Core swap-accept, shared by Discover and the offer landing: build the mirror
+// order (I give what they want, receive what they give), submit it, then propose
+// the deal pairing it with theirs.
+window.acceptSwap = async function acceptSwap(o, btn) {
   if (!o.debit || !o.credit) { toast('One-sided offer — open its link to pay or claim', 'error'); return; }
-  if (btn.disabled) return;
+  if (btn && btn.disabled) return;
   // Cross-bank swaps need the mirror order submitted to two banks; not yet
   // supported here. Single-bank (both vouchers at one bank) is the common case.
   if (o.debit.bank !== o.credit.bank) {
-    toast('This swap spans two banks — not supported from Discover yet', 'error');
+    toast('This swap spans two banks — not supported yet', 'error');
     return;
   }
   const theyGive = o.debit;   // voucher A they give (I receive)
@@ -979,8 +985,8 @@ window.acceptOfferByIdx = async function(btn) {
   const nm = {}; known.forEach(v => { nm[v.hash] = v.name; });
   const nameOf = (h) => nm[h] || (h.slice(0, 8) + '…');
   if (!window.confirm(`Accept this swap?\n\nYou give ${theyWant.max} ${nameOf(theyWant.voucher)}\nYou receive ${theyGive.max} ${nameOf(theyGive.voucher)}`)) return;
-  const label = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Working…';
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   try {
     const vbank = await resolveVoucherBank(theyGive, { bank: o.bank, bank_url: o.bank_url });
     if (vbank.pubkey !== state.bankPubkey) {
@@ -1022,10 +1028,10 @@ window.acceptOfferByIdx = async function(btn) {
     location.hash = `#/deal/${res.deal_id}`;
     route();
   } catch (e) {
-    btn.disabled = false; btn.textContent = label;
+    if (btn) { btn.disabled = false; btn.textContent = label; }
     toast(e.message, 'error');
   }
-};
+}
 
 async function renderDeal(app, dealId) {
   // A deal proposed at another bank (e.g. a claimed cheque at the voucher's
@@ -1331,6 +1337,45 @@ async function renderLanding(app, kind, value) {
         <p class="small error" id="act-err"></p>
       `)}</div>`;
     }
+    return;
+  }
+
+  if (env.kind === 'offer') {
+    const offer = env.docs.find(d => d.type === 'offer') || env.docs[0];
+    // Give the accept flow the same shape Discover produces.
+    const o = offer ? { ...offer, bank: env.bank, bank_url: env.bank_url } : null;
+    const known = await knownVouchers().catch(() => []);
+    const nm = {}; known.forEach(v => { nm[v.hash] = v.name; });
+    const name = (h) => h ? (nm[h] || h.slice(0, 8) + '…') : '';
+    const give = o && o.debit ? `give ${escapeHtml(String(o.debit.max))} ${escapeHtml(name(o.debit.voucher))}` : '';
+    const get = o && o.credit ? `get ${escapeHtml(String(o.credit.max))} ${escapeHtml(name(o.credit.voucher))}` : '';
+    const summary = [give, get].filter(Boolean).join(' · ') || 'offer';
+    const twoSided = o && o.debit && o.credit;
+    const inner = `<h2>Trade offer</h2>${verified}
+      <div class="card"><strong>${summary}</strong></div>`;
+    if (!state.user) {
+      sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'view', kind: 'o', value }));
+      app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card('offer', inner + `
+        <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>`)}</div>`;
+    } else if (twoSided) {
+      window.__landingOffer = o;
+      app.innerHTML = header('Offer') + `<div class="container" style="max-width:480px">${card('offer', inner + `
+        <button class="btn" style="width:100%" onclick="acceptSwap(window.__landingOffer, this)">Accept swap</button>`)}</div>`;
+    } else {
+      app.innerHTML = header('Offer') + `<div class="container" style="max-width:480px">${card('offer', inner + `
+        <p class="small">This is a one-sided offer — open it as an invoice or cheque link to pay or claim.</p>`)}</div>`;
+    }
+    return;
+  }
+
+  if (env.kind === 'invite') {
+    app.innerHTML = `<div class="container" style="max-width:420px;padding-top:6vh">${card('You\'re invited', `
+      ${verified}
+      <p class="small">Someone invited you to barter on ${escapeHtml(state.bankName || 'this bank')}.</p>
+      ${state.user
+        ? '<a class="btn" style="display:block;text-align:center" href="#/">Go to your dashboard</a>'
+        : '<a class="btn" style="display:block;text-align:center" href="#/register">Create an account</a><a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in</a>'}`)}</div>`;
     return;
   }
 
