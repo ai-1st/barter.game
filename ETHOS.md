@@ -17,23 +17,34 @@ The system exists to make this fantasy practical, not theoretical. Anyone
 with a cloud account or own server can deploy a bank. Anyone with a
 keyboard can mint a voucher.
 
-## 2. Trust is local; the protocol formalizes it
+## 2. Trust is local — and it attaches to issuers, not counterparties
 
-barter.game does NOT solve trust between strangers. It is a tool for people
-who *already* trust each other and want to make their dealings precise. The
-designer trading "1 logo" for "1 day of dev work" already has a relationship
-with the developer. The friend group running an IOU system already knows
-who's good for the round. The protocol records the deal; it does not
-adjudicate it.
+barter.game does not abolish trust; it **relocates** it. "A system for people
+who already trust each other" is the easy summary, and it is only half right —
+the half it gets wrong is the interesting half.
 
-When we had to choose between "build a marketplace where strangers find
-each other" and "build a settlement layer for people who already know each
-other," we chose the latter without flinching. The protocol ships discovery
-surfaces — registries, offers, QR profiles, voucher feeds
+What you must trust is the **issuer's promise**. A voucher is worth exactly
+what its issuer will actually deliver, and no amount of cryptography changes
+that. Signatures prove Alice *said* "1 logo"; nothing but Alice makes the logo
+appear.
+
+What you do **not** need to trust is the person on the other side of the
+trade. Settlement is performed entirely by the banks against signed Orders, so
+the counterparty is interchangeable — and usually anonymous. Offers deliberately
+hide holder identity. Two strangers can swap a mug voucher for a t-shirt
+voucher having never exchanged names, because neither is relying on the other
+for anything: they rely on the issuer who hands over the mug, and on the bank
+that moves the balances. See §3 for the full topology.
+
+So, stated honestly: **barter.game solves settlement between strangers, and
+declines to solve the trustworthiness of a promise.** We chose to build a
+settlement layer rather than a marketplace — not because strangers can't
+safely trade here (they can), but because ranking issuers and vouching for
+their promises is precisely the judgment we refuse to centralize. There is no
+reputation score, no arbitration, no dispute resolution. The protocol ships
+discovery surfaces — registries, offers, QR profiles, voucher feeds
 ([`protocol/discovery.md`](./protocol/discovery.md)) — but they distribute
-*facts*, not trust. Reputation is out of band. The protocol's job is to give
-the existing trust a verifiable surface — signed receipts, atomic ledger
-updates, no ambiguity about who owes whom.
+*facts*, not trust. Deciding whether a promise is good stays human.
 
 ## 3. Who trusts whom — and for what
 
@@ -46,9 +57,11 @@ on it:
   honest: one hold per account, sum-to-zero on every settle, signatures on
   every step.
 - **Holders never need to trust other holders.** Settlement is fully done
-  by the banks; the counterparty holder is interchangeable. This is why
-  Offers hide holder identity, and why you can trade with a stranger at an
-  event as long as you trust the voucher's issuer and the issuer's bank.
+  by the banks, so the counterparty is interchangeable — and need not be
+  known at all (§2).
+
+Note what is absent: there is no edge from holder to holder. That absence is
+what lets the network grow past a friend group without a reputation system.
 
 ## 4. Mutual credit, not currency
 

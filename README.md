@@ -14,13 +14,14 @@ mutual credit cooperatives) has run into the same wall: bootstrap. They
 needed strangers to trust each other before the system was useful, and
 strangers don't.
 
-barter.game takes the opposite stance: **trust is local**. The system is
-for people who already know each other and want to formalize their trades —
-friends, freelancer collaborators, club members, event attendees. The
-protocol gives the existing trust a verifiable surface: signed receipts,
-atomic settlement, no ambiguity about who owes whom. Discovery surfaces
-(registries, offers, QR profiles, voucher feeds) distribute *facts*;
-deciding whom to trust stays human.
+barter.game takes the opposite stance: **trust is local — and it attaches to
+the issuer, not your counterparty.** You trust the person whose promise backs
+the voucher, and the bank that settles it. You do *not* have to trust whoever
+is on the other side of the trade; the banks settle against signed Orders, so
+that counterparty is interchangeable and usually anonymous. Strangers can
+trade here safely — what the protocol declines to do is tell you whether a
+promise is any good. Discovery surfaces (registries, offers, QR profiles,
+voucher feeds) distribute *facts*; deciding whom to trust stays human.
 
 See [`ETHOS.md`](./ETHOS.md) for the full set of beliefs.
 

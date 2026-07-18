@@ -9,7 +9,7 @@ A barter.game trade is a cascade of signed documents across independent banks. H
 **Alice** runs `bank-alice`. She issues "1 logo" — a voucher to design one logo.
 **Bob** runs `bank-bob`. He issues "1 hour" — a voucher to do one hour of consulting.
 
-Alice and Bob already know each other. They agree to trade 1 logo for 1 hour.
+Alice and Bob agree to trade 1 logo for 1 hour. They happen to know each other here, but they needn't — each only has to trust the *other's voucher issuer* and the bank that settles it.
 
 ## Step 1: Publish intent
 

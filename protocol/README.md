@@ -180,7 +180,7 @@ Signed documents — an issuer profile, a voucher, an invoice or cheque Order �
 | Decision | Resolution | Invariant? |
 |---|---|---|
 | Risk model | Lead/follow; no protocol-level rollback | **Yes** |
-| Trust model | Counterparties already know each other; discovery OOB | **Yes** |
+| Trust model | Holders trust voucher **issuers** (redemption) and **banks** (settlement); holders need not trust — or even identify — each other | **Yes** |
 | Coordinator pattern | **Coordinator-orchestrated**: a coordinator calls `create_records` on each bank, then sends a `Mandate` per Order per bank; banks never call each other to create or clear records — they exchange settlement signatures directly via `notify_signatures` | **Yes** |
 | Visibility | Each bank owns only the records of the vouchers it issues; foreign records arrive as terms-only bodies via Mandates, their `RecordDetails` staying an opaque hash; peer bank pubkeys come from `Order.bank`; no bank sees the deal's private substance | **Yes** |
 | Record creation | Only the coordinator may create records, and only via `create_records({ giver, receiver, … })` referencing holder Order hashes | **Yes** |

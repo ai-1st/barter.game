@@ -4,7 +4,9 @@ title: What is barter.game?
 
 For 40+ years, every "alternative currency" attempt — LETS, time banks, mutual credit cooperatives — has run into the same wall: **bootstrap**. They needed strangers to trust each other before the system was useful, and strangers don't.
 
-barter.game takes the opposite stance: **trust is local**. The system is for people who already know each other and want to formalize their trades. Friends, freelancer collaborators, club members, event attendees. The protocol gives existing trust a verifiable surface — signed receipts, atomic settlement, no ambiguity about who owes whom.
+barter.game takes the opposite stance: **trust is local — and it attaches to the issuer, not your counterparty.** You trust whoever's promise backs the voucher ("Alice will actually make the logo"), and the bank that settles it. You do *not* need to trust the person on the other side of the trade: banks settle against signed Orders, so that counterparty is interchangeable and usually anonymous — two strangers at an event can swap a mug voucher for a t-shirt voucher without ever exchanging names.
+
+So strangers *can* trade here safely. What the protocol declines to do is tell you whether a promise is any good — there is no reputation score and no arbitration. It gives trust a verifiable surface: signed receipts, atomic settlement, no ambiguity about who owes whom.
 
 ## The core loop
 
@@ -17,7 +19,7 @@ barter.game takes the opposite stance: **trust is local**. The system is for peo
 
 | Traditional alt-currency | barter.game |
 |---|---|
-| Strangers must trust each other | You only trade with people you already know |
+| Strangers must trust each other | Trust the voucher's **issuer** and the **bank** — never your counterparty |
 | Central clearing house | Every user is their own bank; federation is native |
 | Reputation scores and arbitration | Social enforcement; the protocol records, it does not judge |
 | Pre-funded collateral | Mutual credit: issuers go negative, holders go positive, sum = 0 |
