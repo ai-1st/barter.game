@@ -616,6 +616,7 @@ async function renderVouchers(app) {
       <div><strong>${escapeHtml(v.name)}</strong></div>
       <div class="mono small">${escapeHtml(hashDoc(v).slice(0,16))}…</div>
       <div class="small">${v.limit !== undefined ? `limit ${v.limit}` : 'unlimited'} ${v.integer ? '· integer' : ''}</div>
+      ${expiryNote(v.expires)}
       <button class="btn secondary" onclick="showShare('i', '${jsStr(v.pubkey)}', 'Issuer profile — ${jsStr(v.name)}')">Share issuer QR</button>
     </div>
   `).join('') || '<p class="small">No vouchers yet. <a href="#/vouchers/new">Create one.</a></p>'}</div>`;
@@ -629,6 +630,7 @@ function renderCreateVoucher(app) {
       <label for="v-name">Name</label><input id="v-name" placeholder="1 hour consulting">
       <label for="v-desc">Description (markdown)</label><textarea id="v-desc" rows="3"></textarea>
       <label for="v-limit">Supply limit <span class="small">(optional — max you will ever issue)</span></label><input id="v-limit" type="number" min="0" step="any" placeholder="unlimited">
+      <label for="v-expires">Expires <span class="small">(optional — the voucher is void after this date)</span></label><input id="v-expires" type="date">
       <label><input type="checkbox" id="v-int"> Integer amounts only</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateVoucher()">Create & sign</button>
       <p class="small error" id="v-err"></p>
@@ -640,6 +642,7 @@ window.doCreateVoucher = async function() {
   const name = document.getElementById('v-name').value.trim();
   const desc = document.getElementById('v-desc').value.trim();
   const limit = document.getElementById('v-limit').value;
+  const expires = document.getElementById('v-expires').value; // YYYY-MM-DD or ''
   const integer = document.getElementById('v-int').checked;
   const err = document.getElementById('v-err');
   if (!name) { err.textContent = 'Name required'; return; }
@@ -648,6 +651,8 @@ window.doCreateVoucher = async function() {
     const voucher = { type: 'voucher', pubkey: state.user.pubkey, ulid: newUlid(), bank: state.bankPubkey, name };
     if (desc) voucher.description_md = desc;
     if (limit) voucher.limit = Number(limit);
+    // Protocol wants an ISO 8601 datetime; treat the picked day as end-of-day UTC.
+    if (expires) voucher.expires = new Date(expires + 'T23:59:59Z').toISOString();
     if (integer) voucher.integer = true;
     voucher.sig = signDoc(voucher, state.user.privateKey);
 
@@ -744,6 +749,18 @@ function noVouchersNotice() {
 }
 // A usable amount is a finite number greater than zero.
 function badAmount(n) { return !Number.isFinite(n) || n <= 0; }
+
+// Render a voucher's expiry as a small note, flagging it red once past.
+function expiryNote(expires) {
+  if (!expires) return '';
+  const d = new Date(expires);
+  if (isNaN(d)) return '';
+  const day = d.toISOString().slice(0, 10);
+  const past = d.getTime() < Date.now();
+  return past
+    ? `<div class="small error">expired ${escapeHtml(day)}</div>`
+    : `<div class="small">expires ${escapeHtml(day)}</div>`;
+}
 
 async function renderCreateInvoice(app) {
   const vouchers = await knownVouchers();
@@ -1322,6 +1339,7 @@ async function renderLanding(app, kind, value) {
       <div class="card">
         <div>Amount: <strong>${escapeHtml(amount)}${voucherName ? ` ${escapeHtml(voucherName)}` : ''}</strong></div>
         ${voucherName && voucherDoc.description_md ? `<div class="small">${escapeHtml(voucherDoc.description_md)}</div>` : ''}
+        ${voucherDoc ? expiryNote(voucherDoc.expires) : ''}
         <div class="mono small">voucher ${voucherName ? `${escapeHtml(voucherName)} · ` : ''}${escapeHtml(side.voucher.slice(0, 16))}…</div>
       </div>`;
     sessionStorage.setItem('barter_pending', JSON.stringify({ action: env.kind, orderHash: hashDoc(order), kind, value, base }));
