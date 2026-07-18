@@ -254,12 +254,28 @@ function dealBankFor(dealId) {
 
 // ---------------- router ----------------
 
+// Route segment → screen title, so the loading shell can highlight the right
+// nav tab while the async screen fetches.
+const ROUTE_TITLES = {
+  '': 'Dashboard', vouchers: 'Vouchers', orders: 'Orders', invoices: 'Invoices',
+  cheques: 'Cheques', discover: 'Discover', activity: 'Activity',
+  network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal',
+};
+
 function route() {
   const hash = location.hash.slice(1) || '/';
   const [p, ...rest] = hash.split('/').filter(Boolean);
   const app = document.getElementById('app');
-  app.innerHTML = '';
   stopActiveScanner();
+  // Paint an immediate shell (nav + spinner) so a logged-in screen never blanks
+  // while it fetches; the async render replaces it when the data arrives.
+  // Screens that render synchronously just overwrite this with no visible flash.
+  if (state.user && p !== 'land') {
+    app.innerHTML = header(ROUTE_TITLES[p || ''] || '') +
+      `<div class="container"><div class="skeleton" aria-live="polite"><span class="spinner"></span> Loading…</div></div>`;
+  } else {
+    app.innerHTML = '';
+  }
 
   // Landing routes work logged-out (they carry the register CTA themselves).
   if (p === 'land' && rest[0] && rest[1]) return renderLanding(app, rest[0], rest[1]);
