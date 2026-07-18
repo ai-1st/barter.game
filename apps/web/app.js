@@ -139,6 +139,79 @@ async function uiPost(path, body) { return signedRequest('POST', path, body); }
 async function uiPut(path, body) { return signedRequest('PUT', path, body); }
 async function uiDelete(path) { return signedRequest('DELETE', path, null); }
 
+// ---------------- cross-bank calls ----------------
+// A scanned invoice/cheque may live at another bank (the voucher's issuing
+// bank). These variants address an explicit bank base URL + pubkey instead of
+// the bank the SPA is served from.
+
+async function rpcCallAt(base, toPubkey, method, params) {
+  const envelope = {
+    jsonrpc: '2.0', id: newUlid(), method, params,
+    pubkey: state.user.pubkey, to: toPubkey, sig: ''
+  };
+  envelope.sig = signDoc(envelope, state.user.privateKey);
+  const res = await fetch(`${base.replace(/\/$/, '')}/rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(envelope)
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`${data.error.code}: ${data.error.message}`);
+  return data.result;
+}
+
+async function signedRequestAt(base, method, path, body) {
+  const clean = base.replace(/\/$/, '');
+  // The auth doc signs the request's real pathname (+ query) at the target bank.
+  const u = new URL(`${clean}/ui${path}`, location.origin);
+  const authdoc = {
+    pubkey: state.user.pubkey, method, path: u.pathname + u.search,
+    id: newUlid(), ts: Date.now(),
+    body_sha256: body ? sha256Base58(JSON.stringify(body)) : null
+  };
+  const sig = signDoc(authdoc, state.user.privateKey);
+  const token = `${arrayBufferToBase64url(new TextEncoder().encode(canonicalizeWithoutSig(authdoc)))}.${sig}`;
+  const res = await fetch(`${clean}/ui${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-Barter-Auth': token },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json();
+  if (data.code && data.code < 0) throw new Error(`${data.code}: ${data.message}`);
+  return data;
+}
+
+// Where to reach the bank that issues a voucher (order side.bank — pinned in
+// the holder's signed Order). Tries: this bank, the envelope's serving bank,
+// the user's pinned banks, then the Address directory at this bank.
+async function resolveVoucherBank(side, env) {
+  if (side.bank === state.bankPubkey) return { pubkey: state.bankPubkey, url: state.bankUrl };
+  if (env && env.bank === side.bank && env.bank_url) return { pubkey: side.bank, url: env.bank_url };
+  try {
+    const pinned = await uiGet('/banks');
+    const hit = (pinned || []).find(b => b.pubkey === side.bank);
+    if (hit) return { pubkey: side.bank, url: hit.url };
+  } catch { /* fall through */ }
+  try {
+    const addr = await rpcCall('get_address', { pubkey: side.bank });
+    if (addr && addr.url) return { pubkey: side.bank, url: addr.url };
+  } catch { /* fall through */ }
+  throw new Error('this voucher is issued at a bank this app cannot reach — scan the QR from the issuer\'s bank or pin their bank under Network');
+}
+
+// Remember which bank coordinates a deal so the deal screen polls the right
+// place (a claimed cheque's deal lives at the voucher's bank, not ours).
+function rememberDealBank(dealId, bankRef) {
+  try { localStorage.setItem(`barter.dealbank.${dealId}`, JSON.stringify(bankRef)); } catch { /* ignore */ }
+}
+function dealBankFor(dealId) {
+  try {
+    const raw = localStorage.getItem(`barter.dealbank.${dealId}`);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return null;
+}
+
 // ---------------- router ----------------
 
 function route() {
@@ -713,7 +786,13 @@ window.acceptOffer = async function(theirOrderHash, debitMax, creditMax, theirBa
 };
 
 async function renderDeal(app, dealId) {
-  const status = await uiGet(`/deal/${dealId}`).catch(() => null);
+  // A deal proposed at another bank (e.g. a claimed cheque at the voucher's
+  // issuing bank) is polled there, not at the SPA's own bank.
+  const remote = dealBankFor(dealId);
+  const status = await (remote && remote.pubkey !== state.bankPubkey
+    ? signedRequestAt(remote.url, 'GET', `/deal/${dealId}`, null)
+    : uiGet(`/deal/${dealId}`)
+  ).catch(() => null);
   let body = header('Deal') + `<div class="container">`;
   if (!status) {
     body += card('Deal', '<p class="small">Not found</p>');
@@ -1001,26 +1080,34 @@ window.actOnOrder = async function(kind) {
     const side = kind === 'invoice' ? theirOrder.credit : theirOrder.debit;
     const amount = Number(document.getElementById('act-amount').value) || side.max;
 
+    // Everything about this action lives at the VOUCHER'S issuing bank (the
+    // `bank` the signed Order pins for this side): the voucher doc, the
+    // counterparty's Order, my account, the records. That bank may not be the
+    // bank this SPA is logged into — resolve it and address it directly.
+    const vbank = await resolveVoucherBank(side, env);
+
     // My side mirrors theirs: pay an invoice with a debit-only (cheque) Order;
     // claim a cheque with a credit-only (receiving) Order.
-    // Reuse an existing account on this voucher when possible — paying MUST
-    // debit a funded account, and scattering balance across per-deal accounts
-    // would strand it.
+    // Reuse an existing account on this voucher AT THAT BANK when possible —
+    // paying MUST debit a funded account, and scattering balance across
+    // per-deal accounts would strand it.
     let accountHash = null;
     const docs = [];
     try {
-      const pf = await uiGet('/portfolio');
-      const candidates = (pf.holdings || []).filter(h => h.voucher === side.voucher);
+      const mine = await rpcCallAt(vbank.url, vbank.pubkey, 'list_accounts', {});
+      const candidates = (mine.accounts || []).filter(a => a.voucher === side.voucher).map(a => hashDoc(a));
       if (kind === 'invoice') {
-        const funded = candidates.find(h => (h.current - h.pending) >= amount);
-        if (!funded) throw new Error(`insufficient balance: you need ${amount} of this voucher to pay`);
-        accountHash = funded.account;
+        for (const h of candidates) {
+          const bal = await rpcCallAt(vbank.url, vbank.pubkey, 'get_account_balance', { account_hash: h }).catch(() => null);
+          if (bal && (bal.current - bal.pending) >= amount) { accountHash = h; break; }
+        }
+        if (!accountHash) throw new Error(`insufficient balance: you need ${amount} of this voucher at its bank to pay`);
       } else if (candidates.length > 0) {
-        accountHash = candidates[0].account;
+        accountHash = candidates[0];
       }
     } catch (e) {
       if (String(e.message).includes('insufficient balance')) throw e;
-      /* portfolio unavailable — fall through to a fresh account */
+      /* account listing unavailable — fall through to a fresh account */
     }
     if (!accountHash) {
       const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: kind === 'invoice' ? 'paying' : 'receiving', voucher: side.voucher };
@@ -1035,17 +1122,19 @@ window.actOnOrder = async function(kind) {
     order.sig = signDoc(order, state.user.privateKey);
     const myHash = hashDoc(order);
     docs.push(order);
-    await rpcCall('submit_docs', { docs });
+    await rpcCallAt(vbank.url, vbank.pubkey, 'submit_docs', { docs });
 
-    // giver = the debit-only order, receiver = the credit-only order.
+    // giver = the debit-only order, receiver = the credit-only order. The deal
+    // is proposed AT the voucher's bank, which holds both orders.
     const giver = kind === 'invoice' ? myHash : theirHash;
     const receiver = kind === 'invoice' ? theirHash : myHash;
-    const res = await uiPost('/propose_deal', {
+    const res = await signedRequestAt(vbank.url, 'POST', '/propose_deal', {
       offer1: { hash: giver, debit_amount: amount, credit_amount: amount },
       offer2: { hash: receiver, debit_amount: amount, credit_amount: amount },
-      banks: [{ pubkey: state.bankPubkey, url: state.bankUrl }],
+      banks: [{ pubkey: vbank.pubkey, url: vbank.url }],
     });
     sessionStorage.removeItem('barter_pending');
+    rememberDealBank(res.deal_id, vbank);
     location.hash = `#/deal/${res.deal_id}`;
     route();
   } catch (e) {
