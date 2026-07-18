@@ -36,7 +36,7 @@ barter.game/
 ├── tsconfig.json             # Shared TypeScript config (strict, ES2022, bundler resolution)
 ├── deno.json                 # Deno config: import map, test includes, Deno Deploy app
 ├── bun.lock                  # Bun lockfile
-├── README.md ETHOS.md TODOS.md WORKAROUNDS.md
+├── README.md TODOS.md WORKAROUNDS.md
 ├── protocol/                 # THE CONTRACT — invariant protocol spec
 │   ├── README.md             #   overview, trust model, settlement model
 │   ├── base.md               #   BaseDoc, Signature, Address, envelope, replay, discovery doc
@@ -153,7 +153,7 @@ cd website && hugo mod get && hugo --gc --minify
 | `protocol/` directory | **The invariant contract**: `README.md` (overview), `base.md`, `bank-schema.md`, `bank-rpc.md`, `discovery.md`, `post-feed.md`. Every implementation must follow these. | Building or changing a bank, client, or alternative implementation |
 | `scenarios/*.md` | Step-by-step user/coordinator/bank interaction traces, including the builder-event journey | Implementing or debugging specific flows |
 | `README.md` | Project intro, live demo, quickstarts, repo navigation | New to the repo |
-| `ETHOS.md` | Design beliefs and priors | Changing protocol semantics |
+| [`website/content/docs/ethos.md`](./website/content/docs/ethos.md) | Design beliefs and priors (published at https://barter.game/docs/ethos/) | Changing protocol semantics |
 | `apps/bank/README.md` | Bank server: routes, KV key-space, config, deploy | Modifying server code |
 | `apps/web/README.md` | Web SPA: screens, keystore model, transports | Modifying the web UI |
 | `packages/protocol/README.md` | Library API, parity tests, porting guide | Touching protocol primitives |

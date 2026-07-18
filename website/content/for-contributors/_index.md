@@ -8,7 +8,7 @@ barter.game is early. The protocol is small enough to keep in your head. If you 
 
 ## Principles first
 
-Before you open a PR, read [`ETHOS.md`](https://github.com/ai-1st/barter.game/blob/main/ETHOS.md). It is the north star. Every design decision, when the spec runs out, falls back to the ETHOS.
+Before you open a PR, read [the Ethos](/docs/ethos/). It is the north star. Every design decision, when the spec runs out, falls back to the ETHOS.
 
 Key beliefs:
 - **Be your own bank.** Sovereignty is non-negotiable.
@@ -41,7 +41,7 @@ The `TODOS.md` AI agents section is a brainstorm, not a roadmap. If you build on
 
 ## Reading order for contributors
 
-1. [`ETHOS.md`](https://github.com/ai-1st/barter.game/blob/main/ETHOS.md) — what we believe (10 minutes)
+1. [The Ethos](/docs/ethos/) — what we believe (10 minutes)
 2. [the `protocol/` spec](https://github.com/ai-1st/barter.game/blob/main/protocol/README.md) — the invariant contract (45 minutes)
 3. [the reference implementation notes](https://github.com/ai-1st/barter.game/blob/main/apps/bank/README.md) — how we built it (30 minutes)
 4. `packages/protocol/src/` — the code (an afternoon)
