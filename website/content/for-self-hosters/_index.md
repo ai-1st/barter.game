@@ -42,6 +42,10 @@ curl https://<your-app>.<your-org>.deno.net/alice/barter-bank.json
 
 You now have a bank. Tell your friends about it. They open `<your-url>/<bank>/ui`, register, and you're a tiny central bank in a federation of exactly however many people you've invited.
 
+{{< callout type="info" >}}
+**Prefer deploy-on-push?** Link your fork to the app in the Deno Deploy dashboard and every push to `main` builds and ships automatically — no CI config or workflow file needed. That's how the reference banks at `barter-game-banks.ai-1st.deno.net` deploy; the `deno deploy` command above then becomes just the manual escape hatch.
+{{< /callout >}}
+
 ## The "bring your own server" path
 
 Don't want Deno Deploy? No problem. You need four things:

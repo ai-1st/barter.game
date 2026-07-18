@@ -20,7 +20,7 @@ This repo contains:
 | Layer | Technology | Notes |
 |---|---|---|
 | Package manager | Bun | `bun.lock` is the lockfile. Use `bun install`, not `npm install`. |
-| Server runtime | Deno | Deno Deploy in production (deployed via the `deno deploy` CLI; `deploy` block in `deno.json`); stateless, uses Deno KV. |
+| Server runtime | Deno | Deno Deploy in production — **auto-deploys on push to `main`** via the GitHub integration; `deploy` block in `deno.json`. Stateless, uses Deno KV. |
 | Protocol lib | TypeScript (ES modules) | Single source file `packages/protocol/src/index.ts`. Must run identically under Bun, Deno, and browser. |
 | Database | Deno KV | Single store, every key prefixed `[bank_pubkey, ...]`; atomic check-and-set operations. |
 | Crypto | `@noble/ed25519`, `@noble/hashes`, `@scure/base` | Pure-JS, auditable, runs in all targets. |
@@ -164,7 +164,9 @@ cd website && hugo mod get && hugo --gc --minify
 
 ### Deno Deploy
 
-Deployment is via the `deno deploy` CLI using the `deploy` block in `deno.json` (org `ai-1st`, app `barter-game-banks`). There is no GitHub Actions workflow. Set `BANK_<NAME>_PRIV_KEY` env vars in the Deno Deploy dashboard for each bank the process serves.
+**Pushes to `main` deploy automatically.** Deno Deploy's GitHub integration builds this repo on push — there is no GitHub Actions workflow, and none is needed. The absence of `.github/workflows/` does *not* mean deployment is manual; the integration lives in the Deno Deploy dashboard, not in the repo. The `deploy` block in `deno.json` pins the target (org `ai-1st`, app `barter-game-banks`).
+
+Treat a merge to `main` as a production release of the bank. `deno deploy --prod` from the repo root is the manual escape hatch for out-of-band deploys. Set `BANK_<NAME>_PRIV_KEY` env vars in the Deno Deploy dashboard for each bank the process serves.
 
 ### Running a bank locally
 

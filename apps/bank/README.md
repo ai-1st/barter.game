@@ -135,9 +135,14 @@ The web UI is then at `http://localhost:8000/alice/ui`.
 
 ## Deploying
 
-Deployment targets Deno Deploy via the `deno deploy` subcommand; the root
+**Pushing to `main` deploys this bank to production.** Deno Deploy's GitHub
+integration builds the repo on every push — no GitHub Actions workflow is
+involved, so don't read the empty `.github/` as "deploys are manual." The root
 [`deno.json`](../../deno.json) pins the target in its deploy block
-(`{"org": "ai-1st", "app": "barter-game-banks"}`). From the repo root:
+(`{"org": "ai-1st", "app": "barter-game-banks"}`).
+
+For an out-of-band deploy (unpushed work, a rollback), the CLI is the manual
+path — from the repo root:
 
 ```bash
 deno deploy --prod
