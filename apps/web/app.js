@@ -685,9 +685,30 @@ async function renderInvoices(app) {
   app.innerHTML = body;
 }
 
+// A trusted issuer may bank ELSEWHERE — their handle and vouchers only resolve
+// at their own bank, not ours. applyTrust pins that bank, so resolve a pubkey
+// against our bank first, then each pinned bank, and use the first hit.
+async function issuerResolveBases() {
+  const bases = [state.bankUrl || state.basePath];
+  const pinned = await uiGet('/banks').catch(() => []);
+  (pinned || []).forEach(b => { if (b.url && !bases.includes(b.url)) bases.push(b.url); });
+  return bases;
+}
+async function resolveIssuerAt(bases, pubkey) {
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base.replace(/\/$/, '')}/ui/resolve/${pubkey}`).then(x => x.json());
+      if (r && (r.handle || (Array.isArray(r.vouchers) && r.vouchers.length))) {
+        return { ...r, pubkey };
+      }
+    } catch { /* try next base */ }
+  }
+  return { pubkey, vouchers: [] };
+}
+
 // Vouchers the user can pick when authoring orders/invoices/cheques: their own
-// issued vouchers plus those of issuers they trust (resolved at this bank). This
-// replaces pasting raw voucher hashes.
+// issued vouchers plus those of issuers they trust (resolved across their banks).
+// This replaces pasting raw voucher hashes.
 async function knownVouchers() {
   const out = [];
   const seen = new Set();
@@ -698,15 +719,14 @@ async function knownVouchers() {
     seen.add(hash);
     out.push({ hash, name: v.name, issuer });
   };
-  const [mine, trusted] = await Promise.all([
+  const [mine, trusted, bases] = await Promise.all([
     rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []),
     uiGet('/trusted').catch(() => []),
+    issuerResolveBases(),
   ]);
   (mine || []).forEach(v => add(v, 'you'));
-  const resolved = await Promise.all((trusted || []).map(t => {
-    const pk = typeof t === 'string' ? t : t.pubkey;
-    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json()).catch(() => null);
-  }));
+  const resolved = await Promise.all((trusted || []).map(t =>
+    resolveIssuerAt(bases, typeof t === 'string' ? t : t.pubkey)));
   resolved.forEach(r => {
     if (!r || !Array.isArray(r.vouchers)) return;
     const who = r.handle || (r.pubkey || '').slice(0, 8) + '…';
@@ -1478,14 +1498,16 @@ async function renderNetwork(app) {
     uiGet('/trusted').catch(() => []),
     uiGet('/contacts').catch(() => []),
   ]);
-  // Resolve handles for trusted issuers (public endpoint, no auth needed).
-  // Entries are {pubkey, note} (legacy bare strings still tolerated).
-  const resolved = await Promise.all(trusted.map(t => {
+  // Resolve handles/vouchers for trusted issuers across our bank + pinned banks
+  // (a foreign issuer only resolves at their own bank). Entries are
+  // {pubkey, note} (legacy bare strings still tolerated).
+  const bases = [state.bankUrl || state.basePath];
+  (banks || []).forEach(b => { if (b.url && !bases.includes(b.url)) bases.push(b.url); });
+  const resolved = await Promise.all(trusted.map(async t => {
     const pk = typeof t === 'string' ? t : t.pubkey;
     const note = typeof t === 'string' ? '' : (t.note || '');
-    return fetch(`${state.basePath}/ui/resolve/${pk}`).then(r => r.json())
-      .then(r => ({ ...r, pubkey: pk, note }))
-      .catch(() => ({ pubkey: pk, note }));
+    const r = await resolveIssuerAt(bases, pk);
+    return { ...r, pubkey: pk, note };
   }));
 
   app.innerHTML = header('Network') + `<div class="container">
