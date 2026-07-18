@@ -110,7 +110,7 @@ and you can build a bank or client in any language:
 |---|---|
 | [`protocol/README.md`](./protocol/README.md) | Overview: trust model, settlement model (ready → hold → settle), invariants |
 | [`protocol/base.md`](./protocol/base.md) | Identity, canonical JSON (RFC 8785), `BaseDoc`, `Signature`, `Address`, RPC envelope, replay protection |
-| [`protocol/bank-schema.md`](./protocol/bank-schema.md) | Document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Mandate`, `Subscription`, `Balance`) and ledger semantics |
+| [`protocol/bank-schema.md`](./protocol/bank-schema.md) | Document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Mandate`, `Balance`) and ledger semantics |
 | [`protocol/bank-rpc.md`](./protocol/bank-rpc.md) | Bank JSON-RPC methods, pagination, orchestration recipe |
 | [`protocol/discovery.md`](./protocol/discovery.md) | Finding banks, vouchers, issuers, offers, and public holdings |
 | [`protocol/post-feed.md`](./protocol/post-feed.md) | Voucher-anchored post feeds (nostr-like publishing) |

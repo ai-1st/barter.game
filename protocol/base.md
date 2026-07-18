@@ -11,7 +11,7 @@ This file defines the parts of the v1 contract that are not specific to banking 
 - Bank discovery and pubkey pinning
 - Standard vs custom API surface
 
-For Voucher/Account/Record/Order/Offer/Mandate/Subscription/Balance schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
+For Voucher/Account/Record/Order/Offer/Mandate/Balance schemas and ledger semantics, see [`bank-schema.md`](./bank-schema.md). For the bank RPC method definitions, see [`bank-rpc.md`](./bank-rpc.md).
 
 ---
 
@@ -49,7 +49,7 @@ All docs share the `BaseDoc` shell:
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address" | "balance" | "post";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "address" | "balance" | "post";
   pubkey: Base58PubKey;   // owner / signer
   ulid: ULID;              // 26-char Crockford base32, generated at creation
 }
@@ -61,7 +61,7 @@ Encoded fields:
 - `ULID` — `01ABC...` 26-char. Used as both identity and time ordering.
 - `DateString` — `2024-05-02T00:00:00Z` -  ISO 8601 datetime  
 
-The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Record, Order, Offer, Mandate, Subscription, and Balance are defined in [`bank-schema.md`](./bank-schema.md); Post is defined in [`post-feed.md`](./post-feed.md).
+The concrete types defined in this file are `Signature` and `Address`. Voucher, Account, Record, Order, Offer, Mandate, and Balance are defined in [`bank-schema.md`](./bank-schema.md); Post is defined in [`post-feed.md`](./post-feed.md).
 
 ### 3.1 Signature
 

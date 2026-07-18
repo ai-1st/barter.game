@@ -23,7 +23,6 @@ import {
   validateOrder,
   validateRecord,
   validateSignature,
-  validateSubscription,
   validateVoucher,
   ValidationError,
 } from '../src/index.ts';
@@ -521,31 +520,6 @@ describe('validateSignature', () => {
     expect(() => validateSignature({ ...sig, seen: ['!!!'] })).toThrow(
       ValidationError,
     );
-  });
-});
-
-describe('validateSubscription', () => {
-  const sub = {
-    type: 'subscription' as const,
-    pubkey: PUBKEY,
-    ulid: ULID,
-    url: 'https://example.com/notify',
-  };
-
-  test('accepts a minimal valid subscription', () => {
-    expect(() => validateSubscription(sub)).not.toThrow();
-  });
-
-  test('rejects non-http url', () => {
-    expect(() =>
-      validateSubscription({ ...sub, url: 'ftp://example.com' }),
-    ).toThrow(ValidationError);
-  });
-
-  test('rejects bad record hash', () => {
-    expect(() =>
-      validateSubscription({ ...sub, record: '!!!' }),
-    ).toThrow(ValidationError);
   });
 });
 

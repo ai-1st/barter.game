@@ -8,7 +8,6 @@ import type {
   Order,
   BankRecord,
   Signature,
-  Subscription,
   ULID,
   Voucher,
 } from '@barter.game/protocol';
@@ -567,17 +566,6 @@ export async function getAddress(
 ): Promise<Address | null> {
   const r = await bank.kv.get<Address>(k(bank, 'address', pubkey));
   return r.value;
-}
-
-// --- subscriptions --------------------------------------------------------
-
-export async function storeSubscription(
-  bank: Bank,
-  sub: Subscription,
-): Promise<Base58SHA256> {
-  const h = await storeDoc(bank, sub);
-  await bank.kv.set(k(bank, 'subscription', sub.pubkey, sub.ulid), sub);
-  return h;
 }
 
 // --- replay window --------------------------------------------------------

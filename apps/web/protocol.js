@@ -375,23 +375,6 @@ export function validateSignature(d) {
     }
     return d;
 }
-export function validateSubscription(d) {
-    const b = validateBaseDoc(d);
-    if (b.type !== 'subscription') {
-        throw new ValidationError('type must be subscription');
-    }
-    requireFields(b, ['url']);
-    if (typeof b.url !== 'string' || !b.url.startsWith('http')) {
-        throw new ValidationError('subscription url must be an http(s) URL');
-    }
-    if (b.record !== undefined)
-        assertBase58(b.record, 'record');
-    if (b.holder !== undefined)
-        assertBase58(b.holder, 'holder');
-    if (b.voucher !== undefined)
-        assertBase58(b.voucher, 'voucher');
-    return d;
-}
 export function validateAddress(d) {
     const b = validateBaseDoc(d);
     if (b.type !== 'address')

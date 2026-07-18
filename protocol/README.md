@@ -5,7 +5,7 @@
 > If you are building your own bank or client, read this overview first, then see:
 >
 > - [`base.md`](./base.md) — identity, canonical JSON, `BaseDoc`, `Signature`, `Address`, the JSON-RPC envelope, replay protection, and request signing.
-> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Mandate`, `Subscription`, `Balance`) and ledger semantics (state machine, concurrency, balance invariants).
+> - [`bank-schema.md`](./bank-schema.md) — bank document schemas (`Voucher`, `Account`, `Record`, `Order`, `Offer`, `Mandate`, `Balance`) and ledger semantics (state machine, concurrency, balance invariants).
 > - [`bank-rpc.md`](./bank-rpc.md) — the bank JSON-RPC API and REST address-directory endpoints.
 > - [`discovery.md`](./discovery.md) — how parties find banks, vouchers, issuers, offers, and public holdings.
 > - [`post-feed.md`](./post-feed.md) — voucher-anchored post feeds (`Post` doc, publishing, reading, moderation).
@@ -134,13 +134,12 @@ The **coordinator** is the one party that legitimately knows the whole deal — 
 
 > **Invariant:** This visibility boundary is load-bearing. `RecordDetails` bodies MUST NOT be disclosed to other banks; a foreign bank sees a record's details only as an opaque hash.
 
-### 2.4 Signature fan-out — Bank-to-bank direct, relay, and optional subscriptions
+### 2.4 Signature fan-out — Bank-to-bank direct, with client relay
 
 Banks advance on **signatures**, wherever they come from. In the reference flow, banks discover each other via the `bank` fields in Orders and call each other directly using the Address registry:
 
 - **Bank-to-bank direct** (the reference default): a follow bank looks up the lead bank's `Address` doc, then calls its `notify_signatures` endpoint with the signed `hold` / `settle` signatures it needs. The receiver verifies the signatures independently and advances its own records.
 - **Client relay** (the floor): signatures carry their own authority — signer pubkey plus an ed25519 signature over the doc — so *anyone* may deliver them. A client can read one bank's signatures (`get_record_signatures`) and hand them to another (`notify_signatures`). A lost direct call is recovered by relay.
-- **Subscriptions** (optional): clients or watchers MAY create `Subscription` docs to receive push notifications of new signatures. Banks do **not** rely on subscriptions for settlement.
 
 Every received-and-verified signature re-evaluates the bank's advance engine for the records it touches.
 
