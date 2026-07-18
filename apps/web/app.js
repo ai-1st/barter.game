@@ -1664,15 +1664,23 @@ window.removeContact = async function(pk) {
 // ---------------- auto-lock ----------------
 
 let lastActivity = Date.now();
+let lockWarned = false;
 const AUTOLOCK_MS = 10 * 60 * 1000;
+const LOCK_WARN_MS = AUTOLOCK_MS - 60 * 1000; // warn 1 min before locking
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
-  document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
+  document.addEventListener(ev, () => { lastActivity = Date.now(); lockWarned = false; }, { passive: true }));
 setInterval(() => {
-  if (state.user && Date.now() - lastActivity > AUTOLOCK_MS) {
+  if (!state.user) return;
+  const idle = Date.now() - lastActivity;
+  if (idle > AUTOLOCK_MS) {
     toast('Locked after inactivity');
     window.lock();
+  } else if (idle > LOCK_WARN_MS && !lockWarned) {
+    // Warn before wiping the key so an in-progress form isn't lost silently.
+    lockWarned = true;
+    toast('Locking in 1 minute due to inactivity — move to stay signed in', 'error');
   }
-}, 30000);
+}, 15000);
 
 // ---------------- boot ----------------
 
