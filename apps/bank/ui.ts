@@ -175,7 +175,7 @@ export async function handleUiRequest(
       return handleHistory(bank, authPubkey, url);
     }
     if (uiPath === '/orders') {
-      return handleOrders(bank, authPubkey);
+      return handleOrders(bank, authPubkey, url);
     }
 
     if (uiPath === '/discover') {
@@ -536,12 +536,14 @@ async function handleHistory(
   return json(200, { events, next_cursor: null });
 }
 
-async function handleOrders(bank: Bank, pubkey: Base58PubKey): Promise<Response> {
+async function handleOrders(bank: Bank, pubkey: Base58PubKey, url: URL): Promise<Response> {
+  const wantKind = url.searchParams.get('kind'); // 'invoice' | 'cheque' | 'two-sided' | null
   const orders = await listOrdersByHolder(bank, pubkey);
   const out = [];
   for (const o of orders) {
     const hash = hashDoc(o);
     const kind = o.debit ? (o.credit ? 'two-sided' : 'cheque') : 'invoice';
+    if (wantKind && kind !== wantKind) continue;
     const offers = await getOffersForOrder(bank, hash);
     out.push({
       order: hash,
@@ -969,12 +971,19 @@ async function barterEnvelope(
     if (match.kind === 'v' && order.debit) return null;
     if (match.kind === 'q' && order.credit) return null;
     const handle = await getHandleByPubkey(bank, order.pubkey);
+    // Include the referenced Voucher doc so the recipient can see what they are
+    // paying/claiming by name, not just a hash. It is a normal signed doc the
+    // client verifies like any other; omitted when issued at another bank.
+    const side = (match.kind === 'v' ? order.credit : order.debit) as
+      | { voucher?: string }
+      | undefined;
+    const voucher = side?.voucher ? await getVoucher(bank, side.voucher) : null;
     return {
       ...base,
       kind: match.kind === 'v' ? 'invoice' : 'cheque',
       pubkey: order.pubkey,
       handle: handle ?? null,
-      docs: [order],
+      docs: [order, ...(voucher ? [voucher] : [])],
     };
   }
   return { ...base, kind: 'invite', token: match.value, docs: [] };
@@ -1029,8 +1038,11 @@ async function barterHtml(bank: Bank, match: BarterMatch): Promise<Response> {
       <a class="btn" href="${appBase}#/land/i/${escapeHtml(match.value)}">I already have an account</a>
     `;
   } else if (kind === 'invoice' || kind === 'cheque') {
-    const order = (envelope.docs as Array<Record<string, unknown>>)[0]!;
+    const docs = envelope.docs as Array<Record<string, unknown>>;
+    const order = docs[0]!;
     const side = (kind === 'invoice' ? order.credit : order.debit) as Record<string, unknown>;
+    const voucherDoc = docs.find((d) => d.type === 'voucher');
+    const voucherName = voucherDoc?.name ? String(voucherDoc.name) : null;
     const handle = (envelope.handle as string | null) ?? shorten(String(order.pubkey));
     const verb = kind === 'invoice' ? 'Pay' : 'Claim';
     title = `${verb} ${handle} · barter.game`;
@@ -1038,8 +1050,8 @@ async function barterHtml(bank: Bank, match: BarterMatch): Promise<Response> {
       <h2>${kind === 'invoice' ? `Pay ${escapeHtml(handle)}` : `A cheque from ${escapeHtml(handle)}`}</h2>
       <p class="muted">${kind === 'invoice' ? 'This is a request for payment.' : 'You can claim voucher funds from this cheque.'}</p>
       <div class="card">
-        <div>Amount: <b>${side.min === side.max ? escapeHtml(String(side.max)) : `${escapeHtml(String(side.min))}–${escapeHtml(String(side.max))}`}</b></div>
-        <div class="mono muted">voucher ${escapeHtml(shorten(String(side.voucher)))}</div>
+        <div>Amount: <b>${side.min === side.max ? escapeHtml(String(side.max)) : `${escapeHtml(String(side.min))}–${escapeHtml(String(side.max))}`}</b>${voucherName ? ` ${escapeHtml(voucherName)}` : ''}</div>
+        <div class="mono muted">voucher ${voucherName ? `${escapeHtml(voucherName)} · ` : ''}${escapeHtml(shorten(String(side.voucher)))}</div>
         <div class="mono muted">${kind === 'invoice' ? 'payee' : 'payer'} ${escapeHtml(shorten(String(order.pubkey)))}</div>
       </div>
     `;
