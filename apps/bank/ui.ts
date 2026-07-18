@@ -23,6 +23,7 @@ import {
   getRecord,
   getSignaturesForRecord,
   getUiState,
+  getVoucher,
   listAccounts,
   listOrdersByHolder,
   listRecordsByDeal,
@@ -862,7 +863,7 @@ function recordState(sigs: Array<{ action?: string }>): string {
 
 async function handleDealStatus(
   bank: Bank,
-  _authPubkey: Base58PubKey,
+  authPubkey: Base58PubKey,
   dealId: string,
 ): Promise<Response> {
   if (!isValidUlid(dealId)) return json(400, { code: -32602, message: 'invalid deal_id' });
@@ -874,6 +875,12 @@ async function handleDealStatus(
     const h = hashDoc(r.doc);
     const sigs = await getSignaturesForRecord(bank, h);
     const state = recordState(sigs);
+    // Describe what the leg actually MOVES — direction, amount, voucher, and
+    // whether it is the caller's own leg. Every record here is minted by this
+    // bank, so repeating `bank` per leg told the reader nothing.
+    const order = await getOrder(bank, r.doc.order);
+    const side = r.doc.type === 'debit' ? order?.debit : order?.credit;
+    const voucher = side ? await getVoucher(bank, side.voucher) : null;
     legs.push({
       bank: bank.pubkey,
       records: [h],
@@ -881,7 +888,12 @@ async function handleDealStatus(
       ready: sigs.some((s) => s.action === 'ready'),
       hold: sigs.some((s) => s.action === 'hold'),
       settle: sigs.some((s) => s.action === 'settle'),
-      role: 'local',
+      direction: r.doc.type,
+      amount: r.doc.amount,
+      voucher: side?.voucher ?? null,
+      voucher_name: voucher?.name ?? null,
+      holder: r.details.holder,
+      mine: r.details.holder === authPubkey,
     });
   }
   if (legs.length > 0) {

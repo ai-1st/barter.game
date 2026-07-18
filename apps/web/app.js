@@ -199,6 +199,44 @@ async function resolveVoucherBank(side, env) {
   throw new Error('this voucher is issued at a bank this app cannot reach — scan the QR from the issuer\'s bank or pin their bank under Network');
 }
 
+// ---------------- holdings across banks ----------------
+// A voucher lives at its issuing bank, so claiming a foreign cheque puts the
+// balance THERE, not at the bank this SPA is served from. The protocol already
+// exposes this to the holder: `list_accounts` and `get_account_balance` are
+// signed RPCs any bank will answer. Aggregate over this bank + pinned banks.
+
+async function remoteHoldings(bankRef) {
+  const res = await rpcCallAt(bankRef.url, bankRef.pubkey, 'list_accounts', {});
+  const byHash = {};
+  (res.vouchers || []).forEach(v => { byHash[hashDoc(v)] = v; });
+  const out = [];
+  for (const a of (res.accounts || [])) {
+    const account = hashDoc(a);
+    const bal = await rpcCallAt(bankRef.url, bankRef.pubkey, 'get_account_balance', { account_hash: account }).catch(() => null);
+    out.push({
+      bank: bankRef.pubkey,
+      bank_url: bankRef.url,
+      remote: true,
+      voucher: a.voucher,
+      name: (byHash[a.voucher] || {}).name || 'Unknown',
+      account,
+      current: bal ? bal.current : 0,
+      pending: bal ? bal.pending : 0,
+    });
+  }
+  return out;
+}
+
+async function allHoldings() {
+  const local = await uiGet('/portfolio').catch(() => ({ holdings: [] }));
+  const out = (local.holdings || []).map(h => ({ ...h, remote: false }));
+  const banks = await uiGet('/banks').catch(() => []);
+  const remotes = (banks || []).filter(b => b.pubkey && b.pubkey !== state.bankPubkey);
+  const fetched = await Promise.all(remotes.map(b => remoteHoldings(b).catch(() => [])));
+  fetched.forEach(list => out.push(...list));
+  return out;
+}
+
 // Remember which bank coordinates a deal so the deal screen polls the right
 // place (a claimed cheque's deal lives at the voucher's bank, not ours).
 function rememberDealBank(dealId, bankRef) {
@@ -454,13 +492,13 @@ function rememberedHandle() {
 }
 
 async function renderDashboard(app) {
-  const portfolio = await uiGet('/portfolio').catch(() => ({ holdings: [] }));
+  const holdings = await allHoldings().catch(() => []);
   const history = await uiGet('/history?limit=5').catch(() => ({ events: [] }));
   let body = header('Dashboard');
   body += `<div class="container">`;
-  body += card('Balances', `<div class="grid">${portfolio.holdings.map(h => `
+  body += card('Balances', `<div class="grid">${holdings.map(h => `
     <div>
-      <div class="small">${escapeHtml(h.name)}</div>
+      <div class="small">${escapeHtml(h.name)}${h.remote ? ` <span class="chip" title="${escapeHtml(h.bank_url || '')}">@ ${escapeHtml((h.bank || '').slice(0, 8))}…</span>` : ''}</div>
       <div><strong>${h.current}</strong> <span class="small">pending ${h.pending}</span></div>
       <div class="mono small">${escapeHtml(h.account.slice(0,12))}…</div>
     </div>
@@ -797,16 +835,36 @@ async function renderDeal(app, dealId) {
   if (!status) {
     body += card('Deal', '<p class="small">Not found</p>');
   } else {
+    const done = status.state === 'settled' || status.state === 'rejected';
+    const tick = (b) => b ? '✓' : '·';
+    // Every leg below is minted by the SAME bank (the one we polled), so the
+    // bank is named once, not repeated per leg. Each leg says what it MOVES.
+    const legHtml = status.legs.map(l => {
+      const who = l.mine ? 'You' : 'Counterparty';
+      const verb = l.direction === 'credit'
+        ? (l.mine ? 'receive' : 'receives')
+        : (l.mine ? 'give' : 'gives');
+      const what = l.voucher_name || (l.voucher ? l.voucher.slice(0, 10) + '…' : '');
+      const headline = l.direction
+        ? `${who} ${verb} <strong>${l.amount}</strong> ${escapeHtml(what)}`
+        : escapeHtml((l.records && l.records[0] || '').slice(0, 16) + '…');
+      return `<div class="card">
+        <div>${headline}</div>
+        <div class="small">ready ${tick(l.ready)} → hold ${tick(l.hold)} → settle ${tick(l.settle)}</div>
+      </div>`;
+    }).join('');
+    const bankPk = status.legs[0] && status.legs[0].bank ? status.legs[0].bank : '';
     body += card(`Deal ${escapeHtml(dealId.slice(0,12))}…`, `
-      <p>state: <span class="chip">${status.state}</span></p>
-      ${status.legs.map(l => `
-        <div class="card">
-          <div>bank ${escapeHtml(l.bank.slice(0,16))}… · role ${l.role}</div>
-          <div class="small">ready ${l.ready} · hold ${l.hold} · settle ${l.settle}</div>
-        </div>
-      `).join('')}
-      <button class="btn secondary" onclick="location.reload()">Refresh</button>
-      <button class="btn" onclick="relayDeal('${dealId}')">Relay signatures</button>
+      <p>state: <span class="chip state-${escapeHtml(status.state)}">${escapeHtml(status.state)}</span></p>
+      ${status.state === 'settled' ? '<p class="small success">✓ Settled — every leg signed ready → hold → settle. Balances are updated.</p>' : ''}
+      ${status.state === 'rejected' ? '<p class="small error">This deal was rejected; no balances moved.</p>' : ''}
+      ${legHtml}
+      ${bankPk ? `<p class="small">Legs settled at bank <span class="mono">${escapeHtml(bankPk.slice(0,16))}…</span></p>` : ''}
+      ${done
+        ? `<a class="btn" href="#/">Back to balances</a>`
+        : `<p class="small">Waiting for the banks to sign… this page refreshes itself.</p>
+           <button class="btn secondary" onclick="location.reload()">Refresh now</button>
+           <button class="btn secondary" onclick="relayDeal('${escapeHtml(dealId)}')">Relay signatures</button>`}
     `);
   }
   body += `</div>`;
@@ -1037,7 +1095,8 @@ async function renderLanding(app, kind, value) {
     } else {
       app.innerHTML = header(verb) + `<div class="container" style="max-width:480px">${card(env.kind, body + `
         <label>Amount</label><input id="act-amount" type="number" value="${escapeHtml(String(side.max))}" min="${escapeHtml(String(side.min))}" max="${escapeHtml(String(side.max))}">
-        <button class="btn" style="width:100%;margin-top:0.5rem" onclick="actOnOrder('${env.kind}')">${verb} now</button>
+        <button class="btn" id="act-btn" style="width:100%;margin-top:0.5rem" onclick="actOnOrder('${env.kind}')">${verb} now</button>
+        <p class="small" id="act-status"></p>
         <p class="small error" id="act-err"></p>
       `)}</div>`;
     }
@@ -1071,7 +1130,14 @@ window.applyTrust = async function(pubkey, handle) {
 // one-sided Order, submit it, and propose the deal at this bank.
 window.actOnOrder = async function(kind) {
   const err = document.getElementById('act-err');
+  const btn = document.getElementById('act-btn');
+  const statusEl = document.getElementById('act-status');
+  const original = btn ? btn.textContent : '';
+  const step = (t) => { if (statusEl) statusEl.textContent = t; };
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+  if (err) err.textContent = '';
   try {
+    step('Verifying the signed documents…');
     const pending = JSON.parse(sessionStorage.getItem('barter_pending') || '{}');
     const { env } = await fetchBarterEnvelope(pending.kind, pending.value);
     verifyEnvelope(env);
@@ -1084,7 +1150,13 @@ window.actOnOrder = async function(kind) {
     // `bank` the signed Order pins for this side): the voucher doc, the
     // counterparty's Order, my account, the records. That bank may not be the
     // bank this SPA is logged into — resolve it and address it directly.
+    step('Locating the voucher’s bank…');
     const vbank = await resolveVoucherBank(side, env);
+    // Pin a foreign bank so its balances show up on the dashboard afterwards.
+    if (vbank.pubkey !== state.bankPubkey) {
+      await uiPost('/banks', { pubkey: vbank.pubkey, url: vbank.url }).catch(() => {});
+    }
+    step('Preparing your account…');
 
     // My side mirrors theirs: pay an invoice with a debit-only (cheque) Order;
     // claim a cheque with a credit-only (receiving) Order.
@@ -1122,12 +1194,14 @@ window.actOnOrder = async function(kind) {
     order.sig = signDoc(order, state.user.privateKey);
     const myHash = hashDoc(order);
     docs.push(order);
+    step('Submitting your signed order…');
     await rpcCallAt(vbank.url, vbank.pubkey, 'submit_docs', { docs });
 
     // giver = the debit-only order, receiver = the credit-only order. The deal
     // is proposed AT the voucher's bank, which holds both orders.
     const giver = kind === 'invoice' ? myHash : theirHash;
     const receiver = kind === 'invoice' ? theirHash : myHash;
+    step('Proposing the deal — banks will settle it…');
     const res = await signedRequestAt(vbank.url, 'POST', '/propose_deal', {
       offer1: { hash: giver, debit_amount: amount, credit_amount: amount },
       offer2: { hash: receiver, debit_amount: amount, credit_amount: amount },
@@ -1135,9 +1209,12 @@ window.actOnOrder = async function(kind) {
     });
     sessionStorage.removeItem('barter_pending');
     rememberDealBank(res.deal_id, vbank);
+    step('');
     location.hash = `#/deal/${res.deal_id}`;
     route();
   } catch (e) {
+    step('');
+    if (btn) { btn.disabled = false; btn.textContent = original; }
     if (err) err.textContent = e.message; else toast(e.message, 'error');
   }
 };
