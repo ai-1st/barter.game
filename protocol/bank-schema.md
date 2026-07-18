@@ -4,7 +4,6 @@ This file defines the banking entities and the ledger invariants that operate on
 
 - `Voucher`, `Account`
 - `Record`, `Order`, `Offer`, `Mandate`
-- `Subscription` (optional)
 - `Balance` (bank-signed position statement)
 - Per-record, per-bank state machine
 - Concurrency and balance semantics
@@ -19,7 +18,7 @@ All docs share the `BaseDoc` shell defined in [`base.md`](./base.md):
 
 ```ts
 type BaseDoc = {
-  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "subscription" | "address" | "balance" | "post";
+  type: "voucher" | "account" | "credit" | "debit" | "signature" | "order" | "offer" | "mandate" | "address" | "balance" | "post";
   pubkey: Base58PubKey;
   ulid: ULID;
 }
@@ -235,23 +234,7 @@ When a bank receives a Mandate:
 
 The coordinator sends a Mandate per Order per bank; the `records` list is identical across the addressed banks (it is the Order's whole-deal footprint), so every bank checks the same set and a split-brain coordinator is caught by the bank whose slice disagrees.
 
-### 1.7 Subscription
-
-An optional, persistent request for a bank to push signatures that match a filter to a given URL. Subscriptions are **not required for settlement**; banks discover each other via `Order.bank` and the Address registry and call each other directly.
-
-```ts
-Subscription: BaseDoc & {
-  type: "subscription";
-  url: string;              // where to POST matching signatures
-  record?: Base58SHA256;    // watch a single record hash
-  holder?: Base58PubKey;    // watch all records touching this holder at this bank
-  voucher?: Base58SHA256;   // watch all records for this voucher at this bank
-}
-```
-
-When the bank issues or receives a Signature that matches a Subscription, it POSTs a bank-signed `notify_signatures` envelope to `url` fire-and-forget. The receiver verifies the bank signature and the contained Signatures independently.
-
-### 1.8 Balance
+### 1.7 Balance
 
 A bank-signed statement that a specific holder has a specific amount of a specific voucher on a specific account. The ledger stays authoritative — a Balance doc is a **portable attestation** of the position as of its `ulid`, verifiable by anyone against the bank's pubkey without calling the bank.
 
@@ -319,7 +302,7 @@ Each bank runs its own state machine over each record it owns. Records are creat
 
 **Reject semantics.** `reject` is a bank-issued `Signature` (`base.md` §3.1), created and propagated exactly like `ready`/`hold`/`settle` — holders and the coordinator play no role in settlement and MUST NOT be able to trigger a reject. A bank MUST issue `reject` on a mandated record whose precondition failure is **permanent** — order side/account mismatch, amount outside min/max, an uncovered debit with no in-deal credit that could still cover it, or a `Voucher.limit` violation. Transient shortfalls (coverage that a not-yet-held same-deal credit may provide, an aggregate rate that later records may satisfy) are not rejected; the engine waits. A bank MAY additionally `reject` a **stalled** deal on its own **timeout** — a pre-settled record whose deal has made no progress for too long — releasing its holds so the locked accounts are freed for other deals. The protocol fixes **no threshold**: timeout-based rejection is bank policy (liveness recovery), not a protocol-mandated deadline, so there is no permanent hold wedge. A reject on any record cascades: the bank rejects every remaining pre-settled record of the deal, releases its holds, and fans the reject Signatures out to the counter-side banks named by the deal's Orders. Settled records stay settled — there is no rollback.
 
-The coordinator is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders). The coordinator then sends a `Mandate` per Order per bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The coordinator **does** need to ensure every bank eventually receives the signatures its predecessors emit; fan-out subscriptions do this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
+The coordinator is the only party that calls `create_records`. Holders submit Orders (or rely on previously submitted Orders). The coordinator then sends a `Mandate` per Order per bank once record creation is complete. After that, the bank's advance engine takes over, locking when safe, settling when safe, and emitting signatures. The coordinator **does** need to ensure every bank eventually receives the signatures its predecessors emit; direct bank-to-bank `notify_signatures` does this automatically, and `get_record_signatures` + `notify_signatures` is the recovery path.
 
 > **Invariant:** These states, their transitions, and their preconditions are protocol. The storage representation and the event loop that drives self-advancement are implementation details — but a bank MUST NOT settle without its lead/follow precondition met, and MUST NOT apply a record's delta twice.
 

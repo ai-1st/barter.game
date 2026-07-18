@@ -19,9 +19,9 @@ All RPCs are `POST` to `<bank-url>/rpc` with the envelope shape defined in [`bas
 
 ## 2. Bank API
 
-The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to subscribers.
+The bank API is **doc-oriented and signature-driven**. Clients present signed documents and document-creation requests; banks store the documents they are shown, mint bank-owned identifiers (record ULIDs and `pair` values), issue their own signatures, and fan out those signatures to the other banks in the deal.
 
-The API surface below is intentionally small. Wave 1 (ready) is driven by coordinator calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and coordinator `submit_mandate`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied. Banks learn each other's URLs from the Address registry and call each other directly; subscriptions are optional and not required for settlement.
+The API surface below is intentionally small. Wave 1 (ready) is driven by coordinator calls to `create_records` followed by holder `submit_docs` (for Orders/Accounts) and coordinator `submit_mandate`; waves 2–3 (hold, settle) are **bank self-advanced** — the bank's advance engine issues `hold` and `settle` signatures automatically as preconditions are satisfied. Banks learn each other's URLs from the Address registry and call each other directly.
 
 ### 2.1 Doc submission
 
@@ -84,7 +84,6 @@ Across two banks, the coordinator makes one call to each bank, with `giver`/`rec
 
 | Method | Caller | Side effect |
 |---|---|---|
-| `subscribe(subscription)` | creator → bank | Optional. Validate (see `bank-schema.md` §1.7; `subscription.pubkey` = sender); store the doc and its watch keys. Useful for clients/watchers that want push delivery, but banks do not rely on subscriptions to settle. |
 | `notify_signatures(signatures)` | peer bank (direct) or any relayer → bank | Verify each signature against its signer pubkey; store the valid ones; re-run the advance engine for every deal they touch. Invalid entries are skipped, not fatal. |
 
 ### 2.4 Read
@@ -160,7 +159,7 @@ The coordinator builds the deal by discovering compatible Orders (via their disc
 4. **create_records** on every participating bank, referencing the two Order hashes plus `amount` / `counter_amount` and a shared `deal_id`. Each bank mints the debit/credit record pair for the voucher it issues; for a same-bank swap the coordinator calls twice with `giver`/`receiver` swapped (see §2.2).
 5. **submit_mandate.** For each (Order, bank) the coordinator builds a `Mandate` naming that Order and listing **every record satisfying it across all banks**, signs it, and sends it **with all the record bodies** to the bank. The list is the same at every addressed bank.
 6. **Banks advance.** Once a bank has both (a) a `Mandate` for an Order and (b) that Order bound to its records (already stored via `submit_docs`), its advance engine issues `ready`, then `hold`, then `settle` automatically as preconditions are met. Because `hold` and `settle` are gated on the deal's **full** record set carrying the right upstream signatures (the `seen` handshake, `base.md` §3.1), banks fan out **every** signature they issue — `ready` and `hold` as well as `settle` — to the peer banks named by the deal's Orders, so each side can see the others' records advance. Banks discover each other via the `bank` fields in the Orders and use the Address registry to call each other directly; `notify_signatures` is the canonical bank-to-bank delivery path.
-7. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`). Subscriptions are optional and only useful for watchers or clients that want push delivery.
+7. **Relay fallback.** If direct bank-to-bank delivery fails, any party can relay signatures by hand (`get_record_signatures` → `notify_signatures`).
 
 Unsigned orchestration data (grouping, topology) is **not authority**: every gate that moves money — Order resolution, per-record ready, hold preconditions, settle proofs, Mandate clearance — flows from signed artifacts. A client lying about grouping or topology can only fragment or stall *its own* deal.
 

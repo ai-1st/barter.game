@@ -107,7 +107,7 @@ list_public_balances({ holder?: Base58PubKey, voucher?: Base58SHA256,
 ```
 
 Each item is a bank-signed `Balance` document
-([`bank-schema.md`](./bank-schema.md) §1.8) — a portable, verifiable statement
+([`bank-schema.md`](./bank-schema.md) §1.7) — a portable, verifiable statement
 that *holder X has amount N of voucher V on account A*. This enables the
 "I scanned a QR and learned that X holds Y vouchers from Z — I'll get a few
 myself" flow: the QR is just a pointer; the balance facts arrive bank-signed.

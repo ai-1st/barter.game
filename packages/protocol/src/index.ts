@@ -23,7 +23,6 @@ export type DocType =
   | 'order'
   | 'offer'
   | 'mandate'
-  | 'subscription'
   | 'address';
 
 export type BaseDoc = {
@@ -121,14 +120,6 @@ export type Signature = BaseDoc & {
   reason?: string;
 };
 
-export type Subscription = BaseDoc & {
-  type: 'subscription';
-  url: string;
-  record?: Base58SHA256;
-  holder?: Base58PubKey;
-  voucher?: Base58SHA256;
-};
-
 export type Address = BaseDoc & {
   type: 'address';
   url: string;
@@ -142,7 +133,6 @@ export type AnyDoc =
   | Offer
   | Mandate
   | Signature
-  | Subscription
   | Address;
 
 // --- canonical JSON (RFC 8785 / JCS) --------------------------------------
@@ -563,21 +553,6 @@ export function validateSignature(d: unknown): Signature {
     for (const s of b.seen) assertBase58(s, 'seen[]');
   }
   return d as Signature;
-}
-
-export function validateSubscription(d: unknown): Subscription {
-  const b = validateBaseDoc(d) as Record<string, unknown>;
-  if (b.type !== 'subscription') {
-    throw new ValidationError('type must be subscription');
-  }
-  requireFields(b, ['url']);
-  if (typeof b.url !== 'string' || !b.url.startsWith('http')) {
-    throw new ValidationError('subscription url must be an http(s) URL');
-  }
-  if (b.record !== undefined) assertBase58(b.record, 'record');
-  if (b.holder !== undefined) assertBase58(b.holder, 'holder');
-  if (b.voucher !== undefined) assertBase58(b.voucher, 'voucher');
-  return d as Subscription;
 }
 
 export function validateAddress(d: unknown): Address {

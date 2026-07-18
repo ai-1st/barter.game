@@ -4,7 +4,6 @@ import { submitMandate } from './handlers/submit_mandate.ts';
 import { createRecords } from './handlers/create_records.ts';
 import { notifySignatures } from './handlers/notify_signatures.ts';
 import { getRecordSignatures } from './handlers/get_record_signatures.ts';
-import { subscribe } from './handlers/subscribe.ts';
 import {
   getVoucher,
   getAccountBalance,
@@ -29,7 +28,6 @@ export const registry: Record<string, Handler> = {
   create_records: createRecords,
   notify_signatures: notifySignatures,
   get_record_signatures: getRecordSignatures,
-  subscribe,
   get_voucher: getVoucher,
   get_account_balance: getAccountBalance,
   list_accounts: listAccounts,
