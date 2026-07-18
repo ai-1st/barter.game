@@ -1294,6 +1294,7 @@ async function renderLanding(app, kind, value) {
         <p class="small">After you sign in you can choose to trust <b>${escapeHtml(handle)}</b>.</p>
         <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
         <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>
+        ${otherBankCta('i', value, env.bank_url)}
       `)}</div>`;
     } else {
       app.innerHTML = header('Profile') + `<div class="container" style="max-width:480px">${card('Issuer profile', body + `
@@ -1328,6 +1329,7 @@ async function renderLanding(app, kind, value) {
       app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card(env.kind, body + `
         <a class="btn" style="display:block;text-align:center" href="#/register">Register &amp; ${verb.toLowerCase()}</a>
         <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in &amp; ${verb.toLowerCase()}</a>
+        ${otherBankCta(kind, value, env.bank_url)}
       `)}</div>`;
     } else {
       app.innerHTML = header(verb) + `<div class="container" style="max-width:480px">${card(env.kind, body + `
@@ -1357,7 +1359,8 @@ async function renderLanding(app, kind, value) {
       sessionStorage.setItem('barter_pending', JSON.stringify({ action: 'view', kind: 'o', value }));
       app.innerHTML = `<div class="container" style="max-width:420px;padding-top:4vh">${card('offer', inner + `
         <a class="btn" style="display:block;text-align:center" href="#/register">Register to continue</a>
-        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>`)}</div>`;
+        <a class="btn secondary" style="display:block;text-align:center;margin-top:0.5rem" href="#/unlock">Log in to continue</a>
+        ${otherBankCta('o', value, env.bank_url)}`)}</div>`;
     } else if (twoSided) {
       window.__landingOffer = o;
       app.innerHTML = header('Offer') + `<div class="container" style="max-width:480px">${card('offer', inner + `
@@ -1381,6 +1384,24 @@ async function renderLanding(app, kind, value) {
 
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
     ${card('Barter Link', `<p>Kind: ${escapeHtml(env.kind)}</p>${verified}<p><a href="#/">Home</a></p>`)}</div>`;
+}
+
+// Redirect a recipient who banks ELSEWHERE to the same landing on their own
+// bank, carrying the source bank as the scan origin so the doc still resolves.
+// (The cross-bank claim then works via actOnOrder, which addresses the voucher's
+// issuing bank directly.) Same-origin sessionStorage carries the origin across
+// the redirect in the current path-based federation.
+window.useOtherBank = function(kind, value, sourceUrl) {
+  const url = window.prompt('Enter your bank\'s URL (e.g. https://…/alice):', '');
+  if (!url) return;
+  const clean = url.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(clean)) { toast('Enter a full https:// bank URL', 'error'); return; }
+  try { if (sourceUrl) sessionStorage.setItem('barter_scan_origin', sourceUrl); } catch { /* ignore */ }
+  location.href = `${clean}/ui/app#/land/${kind}/${value}`;
+};
+function otherBankCta(kind, value, sourceUrl) {
+  return `<p class="small" style="text-align:center;margin-top:0.75rem">
+    <a href="#" onclick="useOtherBank('${jsStr(kind)}','${jsStr(value)}','${jsStr(sourceUrl || '')}');return false">Use my account at another bank</a></p>`;
 }
 
 // Add an issuer to the trusted list (+ their bank to known banks). The pubkey,
