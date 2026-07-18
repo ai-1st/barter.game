@@ -4,8 +4,9 @@
 :root {
   --bg: #F3F1EC;
   --fg: #1A1712;
-  --muted: #78736A;
-  --faint: #A8A399;
+  /* --muted/--faint darkened for WCAG AA contrast on the page background */
+  --muted: #6B665D;
+  --faint: #857F74;
   --accent: #3D34D6;
   --accent-soft: #ECEBFB;
   --accent2: #1C7C54;
@@ -17,9 +18,11 @@
   --card: #FFFFFF;
   --border: #EAE7DF;
   --hair: #F1EEE7;
+  --header-bg: rgba(255, 255, 255, 0.86);
   --display: 'Space Grotesk', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -119,7 +122,7 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
   gap: 0.75rem;
   flex-wrap: wrap;
   padding: 0.7rem 1rem;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--header-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
@@ -162,7 +165,7 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 }
 .nav a:hover { color: var(--fg); text-decoration: none; }
 .nav a.active { color: var(--accent); background: var(--accent-soft); }
-.mono { font-family: var(--mono); font-size: 0.8rem; }
+.mono { font-family: var(--mono); font-size: 0.8rem; overflow-wrap: anywhere; }
 .small { font-size: 0.85rem; color: var(--muted); }
 .error { color: var(--danger); }
 .success { color: var(--accent2); }
@@ -183,6 +186,8 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 .chip.state-rejected { background: var(--danger-soft); color: var(--danger); }
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 .flex { display: flex; gap: 1rem; align-items: center; }
+/* let long mono content (URLs, pubkeys) shrink/wrap instead of forcing overflow */
+.flex > * { min-width: 0; }
 .flex.col { flex-direction: column; align-items: stretch; }
 .scan { width: 100%; max-width: 320px; aspect-ratio: 1; background: white; padding: 0.5rem; border-radius: 12px; }
 .modal-overlay {
@@ -236,7 +241,16 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 }
 .stack { display: flex; flex-direction: column; gap: 0.7rem; margin-top: 1.6rem; }
 .stack .btn { width: 100%; padding: 0.95rem; font-size: 1rem; border-radius: 14px; }
-.footnote { font-family: var(--mono); font-size: 0.68rem; color: var(--faint); line-height: 1.5; }
+.footnote { font-family: var(--mono); font-size: 0.75rem; color: var(--faint); line-height: 1.5; }
+
+/* touch: larger nav tap targets, and 16px inputs so iOS doesn't zoom on focus */
+@media (max-width: 1099px) {
+  .nav { gap: 0.25rem; }
+  .nav a { padding: 0.6rem 0.75rem; font-size: 0.88rem; }
+}
+@media (max-width: 640px) {
+  input, textarea, select { font-size: 16px; }
+}
 
 /* loading shell */
 .skeleton { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); font-size: 0.9rem; padding: 1.2rem 0; }
@@ -267,3 +281,32 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 .skip-link:focus { top: 0.5rem; text-decoration: none; outline: 2px solid #fff; }
 /* a heading focused by the router should not draw a persistent outline */
 h1:focus, h2:focus, h3:focus { outline: none; }
+
+/* Dark theme — follows the OS setting; placed last so its body-background
+   override wins over the base rule. QR/scan surfaces stay light on purpose
+   (a QR must be dark-on-light to scan). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15130E;
+    --fg: #ECE9E1;
+    --muted: #A8A399;
+    --faint: #7C776D;
+    --accent: #9089F0;
+    --accent-soft: #262349;
+    --accent2: #6FCF97;
+    --green-soft: #1C3025;
+    --danger: #E58A72;
+    --danger-soft: #38231C;
+    --amber: #D8AA5A;
+    --amber-soft: #342A17;
+    --card: #201D17;
+    --border: #322E25;
+    --hair: #262219;
+    --header-bg: rgba(28, 25, 19, 0.86);
+  }
+  body {
+    background: radial-gradient(120% 100% at 50% -10%, #1D1A13 0%, #15130E 55%, #100E0A 100%) fixed;
+  }
+  ::selection { background: #3a356b; }
+  .btn.secondary:hover { background: #2A2620; }
+}
