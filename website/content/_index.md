@@ -8,7 +8,7 @@ layout: hextra-home
   {{< hextra/hero-subtitle >}}A federated mutual-credit ledger. Mint personal currencies, trade them with people you trust, and settle cryptographically — no central authority, no middleman.{{< /hextra/hero-subtitle >}}
 {{< /hextra/hero-container >}}
 
-<div class="hx-mt-20 hx-mb-20">
+<div class="hx:mt-20 hx:mb-20">
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
     title="For Event Managers"
@@ -49,7 +49,7 @@ layout: hextra-home
 {{< /hextra/feature-grid >}}
 </div>
 
-<div class="hx-mt-20 hx-mb-20 hx-text-center">
+<div class="content hx:mt-20 hx:mb-20">
 
 ## How it works in one paragraph
 
@@ -59,7 +59,7 @@ Every user and every bank is an **ed25519 keypair**. Voucher, Account, Signature
 
 </div>
 
-<div class="hx-mt-20 hx-mb-20"">
+<div class="content hx:mt-20 hx:mb-20">
 
 ## See it work
 
