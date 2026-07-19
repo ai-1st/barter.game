@@ -147,11 +147,13 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 .logo-mark.large { width: 60px; height: 60px; border-radius: 17px; box-shadow: 0 14px 30px -10px rgba(61, 52, 214, 0.6); }
 .logo-mark.large span { width: 22px; height: 22px; border-width: 3.4px; border-radius: 6px; }
 .brand { flex: 1; }
-/* Below the one-row breakpoint the nav drops to its own full-width row,
-   keeping brand + Lock together on the first row. */
-.nav { display: flex; gap: 0.15rem; flex-wrap: wrap; order: 3; flex-basis: 100%; }
+.header-actions { display: flex; gap: 0.5rem; align-items: center; }
+.nav-toggle { display: none; }
+/* Desktop: nav laid out inline. Below 1100px it collapses into the Menu drawer
+   (see the media query lower down), replacing the old 3-row wrap. */
+.nav { display: flex; gap: 0.15rem; flex-wrap: wrap; }
 @media (min-width: 1100px) {
-  .nav { order: 0; flex: 1; flex-basis: auto; justify-content: flex-end; }
+  .nav { flex: 1; flex-basis: auto; justify-content: flex-end; }
   .brand { flex: 0 1 auto; }
 }
 .nav a {
@@ -243,13 +245,97 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 .stack .btn { width: 100%; padding: 0.95rem; font-size: 1rem; border-radius: 14px; }
 .footnote { font-family: var(--mono); font-size: 0.75rem; color: var(--faint); line-height: 1.5; }
 
-/* touch: larger nav tap targets, and 16px inputs so iOS doesn't zoom on focus */
-@media (max-width: 1099px) {
-  .nav { gap: 0.25rem; }
-  .nav a { padding: 0.6rem 0.75rem; font-size: 0.88rem; }
-}
 @media (max-width: 640px) {
-  input, textarea, select { font-size: 16px; }
+  input, textarea, select { font-size: 16px; } /* stops iOS zoom on focus */
+}
+
+/* ---- mobile navigation: Menu drawer (< 1100px) + bottom bar (<= 760px) ---- */
+
+/* Bottom bar + New sheet are desktop-hidden; shown only on phones. */
+.bottomnav, .sheet-overlay { display: none; }
+
+@media (max-width: 1099px) {
+  /* The header nav collapses behind the Menu button and opens as a drawer. */
+  .nav {
+    display: none;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 0.15rem;
+    padding: 0.5rem;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 24px 40px -22px rgba(20, 18, 12, 0.4);
+    max-height: 72vh;
+    overflow-y: auto;
+  }
+  .nav.open { display: flex; }
+  .nav a { padding: 0.8rem 0.85rem; font-size: 1rem; border-radius: 10px; }
+  .nav-toggle { display: inline-flex; }
+}
+
+@media (max-width: 760px) {
+  /* Fixed quick-access bar. */
+  .bottomnav {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 40;
+    justify-content: space-around;
+    align-items: stretch;
+    background: var(--header-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    padding: 0.3rem 0.4rem calc(0.3rem + env(safe-area-inset-bottom));
+  }
+  .bn-item {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    gap: 0.15rem;
+    min-height: 54px;
+    padding: 0.35rem 0.2rem;
+    background: none; border: none;
+    color: var(--muted);
+    font: inherit; font-size: 0.66rem; font-weight: 600;
+    text-decoration: none; cursor: pointer; border-radius: 10px;
+  }
+  .bn-item svg { width: 24px; height: 24px; }
+  .bn-item.active { color: var(--accent); }
+  /* the New (+) button reads as the primary action */
+  .bn-new { color: var(--accent); }
+  .bn-new svg {
+    width: 38px; height: 38px; padding: 7px;
+    background: var(--accent); color: #fff;
+    border-radius: 13px;
+    box-shadow: 0 10px 20px -8px rgba(61, 52, 214, 0.85);
+    margin-top: -14px; /* lift above the bar */
+  }
+  /* clear the fixed bar so it never covers page content */
+  #app { padding-bottom: 74px; }
+
+  /* "New" bottom sheet */
+  .sheet-overlay { position: fixed; inset: 0; z-index: 45; background: rgba(14, 13, 11, 0.45); }
+  .sheet-overlay.open { display: block; }
+  .sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--bg);
+    border-top-left-radius: 20px; border-top-right-radius: 20px;
+    padding: 0.75rem 0.75rem calc(0.9rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -24px 48px -24px rgba(20, 18, 12, 0.5);
+  }
+  .sheet-title { font-family: var(--display); font-weight: 600; font-size: 0.95rem; margin: 0.2rem 0.3rem 0.6rem; }
+  .sheet-item {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem;
+    width: 100%; margin-bottom: 0.5rem;
+    padding: 0.8rem 0.9rem; border-radius: 13px;
+    background: var(--card); border: 1px solid var(--border);
+    color: var(--fg); font: inherit; font-weight: 600; text-align: left;
+    text-decoration: none; cursor: pointer;
+  }
+  .sheet-item .small { font-weight: 400; }
+  .sheet-item.cancel { align-items: center; justify-content: center; margin-top: 0.15rem; background: none; border: none; color: var(--muted); }
 }
 
 /* loading shell */
