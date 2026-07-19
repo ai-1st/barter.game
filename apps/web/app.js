@@ -259,7 +259,7 @@ function dealBankFor(dealId) {
 const ROUTE_TITLES = {
   '': 'Dashboard', vouchers: 'Vouchers', orders: 'Orders', invoices: 'Invoices',
   cheques: 'Cheques', discover: 'Discover', registry: 'Registry', activity: 'Activity',
-  network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal',
+  network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal', posts: 'Posts',
 };
 
 function route() {
@@ -305,6 +305,7 @@ function dispatch(app, p, rest) {
   if (p === 'cheques') return renderCheques(app);
   if (p === 'discover') return renderDiscover(app);
   if (p === 'registry') return renderRegistry(app);
+  if (p === 'posts') return renderPostsSoon(app);
   if (p === 'deal' && rest[0]) return renderDeal(app, rest[0]);
   if (p === 'activity') return renderActivity(app);
   if (p === 'network') return renderNetwork(app);
@@ -325,6 +326,32 @@ function moveFocusToMain() {
 }
 window.skipToContent = function() { moveFocusToMain(); };
 
+// Voucher post feeds aren't built yet (they need their own protocol doc shape);
+// the "New → Post" action lands here with an honest explanation rather than a
+// dead end.
+function renderPostsSoon(app) {
+  app.innerHTML = header('Posts') + `<div class="container" style="max-width:560px">
+    ${card('Posts — coming soon', `
+      <p class="small">Voucher <b>post feeds</b> aren't available yet. The plan: issuers, and people you trust, can publish short posts attached to a voucher — and you'll see them in a feed for the vouchers you hold or follow. A lightweight, spam-resistant way to hear from the issuers behind your currencies.</p>
+      <p class="small">Until then you can mint vouchers, trade, and manage your network.</p>
+      <a class="btn secondary" href="#/vouchers/new">Mint a voucher instead</a>
+    `)}
+  </div>`;
+}
+
+// Close the mobile sheet/drawer on Escape (registered once, not per render).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const s = document.getElementById('new-sheet');
+  if (s && s.classList.contains('open')) { s.classList.remove('open'); return; }
+  const nav = document.getElementById('mainnav');
+  if (nav && nav.classList.contains('open')) {
+    nav.classList.remove('open');
+    const btn = document.querySelector('.nav-toggle');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+});
+
 window.addEventListener('hashchange', route);
 // Exposed so inline "Retry"/"Refresh" controls can re-render the current screen
 // in place (no full page reload, which would wipe the in-memory key).
@@ -333,27 +360,84 @@ window.route = route;
 // ---------------- UI components ----------------
 
 function header(title) {
+  const on = (t) => title === t ? ' class="active"' : '';
   return `<a href="#" class="skip-link" onclick="skipToContent();return false">Skip to content</a>
   <div class="header">
     <div class="brand">
       <div class="logo-mark"><span></span></div>
       <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>
     </div>
-    <nav class="nav">
-      <a href="#/" ${title==='Dashboard'?'class="active"':''}>Home</a>
-      <a href="#/vouchers" ${title==='Vouchers'?'class="active"':''}>Vouchers</a>
-      <a href="#/orders" ${title==='Orders'?'class="active"':''}>Orders</a>
-      <a href="#/invoices" ${title==='Invoices'?'class="active"':''}>Invoices</a>
-      <a href="#/cheques" ${title==='Cheques'?'class="active"':''}>Cheques</a>
-      <a href="#/discover" ${title==='Discover'?'class="active"':''}>Discover</a>
-      <a href="#/activity" ${title==='Activity'?'class="active"':''}>Activity</a>
-      <a href="#/network" ${title==='Network'?'class="active"':''}>Network</a>
-      <a href="#/scan" ${title==='Scan'?'class="active"':''}>Scan</a>
-      <a href="#/settings">Settings</a>
+    <nav class="nav" id="mainnav">
+      <a href="#/"${on('Dashboard')}>Home</a>
+      <a href="#/vouchers"${on('Vouchers')}>Vouchers</a>
+      <a href="#/orders"${on('Orders')}>Orders</a>
+      <a href="#/invoices"${on('Invoices')}>Invoices</a>
+      <a href="#/cheques"${on('Cheques')}>Cheques</a>
+      <a href="#/discover"${on('Discover')}>Discover</a>
+      <a href="#/registry"${on('Registry')}>Registry</a>
+      <a href="#/activity"${on('Activity')}>Activity</a>
+      <a href="#/network"${on('Network')}>Network</a>
+      <a href="#/scan"${on('Scan')}>Scan</a>
+      <a href="#/settings"${on('Settings')}>Settings</a>
     </nav>
-    <button class="btn secondary" onclick="lock()">Lock</button>
-  </div>`;
+    <div class="header-actions">
+      <button class="btn secondary nav-toggle" onclick="toggleNav()" aria-controls="mainnav" aria-expanded="false" aria-label="Open menu">Menu</button>
+      <button class="btn secondary" onclick="lock()">Lock</button>
+    </div>
+  </div>
+  ${bottomNav(title)}`;
 }
+
+// Persistent mobile bottom bar (quick access) + the "New" action sheet. Hidden
+// on desktop via CSS; the top nav collapses into the Menu drawer on small
+// screens for the full screen list.
+function bottomNav(title) {
+  const act = (t) => title === t ? ' active' : '';
+  const ic = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+    discover: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.2 5.3-5.3 2.2 2.2-5.3z"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13"/></svg>',
+    scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M4 12h16"/></svg>',
+  };
+  return `
+  <div class="sheet-overlay" id="new-sheet" onclick="if(event.target===this)closeSheets()">
+    <div class="sheet" role="menu" aria-label="Create new">
+      <div class="sheet-title">Create</div>
+      <a href="#/invoices/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Invoice <span class="small">request a payment</span></a>
+      <a href="#/cheques/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Cheque <span class="small">send someone funds</span></a>
+      <a href="#/posts/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Post <span class="small">to a voucher feed</span></a>
+      <a href="#/vouchers/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Voucher <span class="small">mint your own</span></a>
+      <button class="sheet-item cancel" onclick="closeSheets()">Cancel</button>
+    </div>
+  </div>
+  <nav class="bottomnav" aria-label="Quick actions">
+    <a href="#/" class="bn-item${act('Dashboard')}">${ic.home}<span>Home</span></a>
+    <a href="#/discover" class="bn-item${act('Discover')}">${ic.discover}<span>Discover</span></a>
+    <button class="bn-item bn-new" onclick="toggleNewSheet(event)" aria-haspopup="true" aria-label="Create new">${ic.plus}<span>New</span></button>
+    <a href="#/scan" class="bn-item${act('Scan')}">${ic.scan}<span>Scan</span></a>
+  </nav>`;
+}
+
+window.toggleNav = function() {
+  const nav = document.getElementById('mainnav');
+  const btn = document.querySelector('.nav-toggle');
+  if (!nav) return;
+  const open = nav.classList.toggle('open');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+};
+window.toggleNewSheet = function(e) {
+  if (e) e.stopPropagation();
+  const s = document.getElementById('new-sheet');
+  if (s) s.classList.toggle('open');
+};
+window.closeSheets = function() {
+  const s = document.getElementById('new-sheet');
+  if (s) s.classList.remove('open');
+  const nav = document.getElementById('mainnav');
+  if (nav) nav.classList.remove('open');
+  const btn = document.querySelector('.nav-toggle');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+};
 
 function card(title, body) { return `<div class="card"><h3>${escapeHtml(title)}</h3>${body}</div>`; }
 
