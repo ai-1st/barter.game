@@ -230,7 +230,10 @@ async function remoteHoldings(bankRef) {
 }
 
 async function allHoldings() {
-  const local = await uiGet('/portfolio').catch(() => ({ holdings: [] }));
+  // The LOCAL portfolio is load-bearing: let its failure propagate so the
+  // dashboard shows an error rather than a false "no balances yet". Only the
+  // remote per-bank reads below degrade to nothing.
+  const local = await uiGet('/portfolio');
   const out = (local.holdings || []).map(h => ({ ...h, remote: false }));
   const banks = await uiGet('/banks').catch(() => []);
   const remotes = (banks || []).filter(b => b.pubkey && b.pubkey !== state.bankPubkey);
@@ -846,8 +849,9 @@ async function knownVouchers() {
     seen.add(hash);
     out.push({ hash, name: v.name, issuer });
   };
+  let coreFailed = false;
   const [mine, trusted, bases] = await Promise.all([
-    rpcCall('list_vouchers', { filter: 'mine' }).catch(() => []),
+    rpcCall('list_vouchers', { filter: 'mine' }).catch(() => { coreFailed = true; return []; }),
     uiGet('/trusted').catch(() => []),
     issuerResolveBases(),
   ]);
@@ -859,6 +863,9 @@ async function knownVouchers() {
     const who = r.handle || (r.pubkey || '').slice(0, 8) + '…';
     r.vouchers.forEach(v => add(v, who));
   });
+  // Flag a real load failure so callers can distinguish "you have none" from
+  // "the bank is down" (see the Create forms).
+  out.failed = coreFailed;
   return out;
 }
 function voucherChooser(id, vouchers, selected) {
@@ -914,7 +921,7 @@ async function renderCreateInvoice(app) {
       <label for="i-amount">Amount to receive</label><input id="i-amount" type="number" min="0" step="any" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice(this)">Create invoice</button>
       <p class="small error" id="i-err"></p>
-    ` : noVouchersNotice())}
+    ` : (vouchers.failed ? loadError('your vouchers') : noVouchersNotice()))}
   </div>`;
 }
 
@@ -976,7 +983,7 @@ async function renderCreateCheque(app) {
       <label for="q-amount">Amount to pay</label><input id="q-amount" type="number" min="0" step="any" value="10">
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque(this)">Create cheque</button>
       <p class="small error" id="q-err"></p>
-    ` : noVouchersNotice())}
+    ` : (vouchers.failed ? loadError('your vouchers') : noVouchersNotice()))}
   </div>`;
 }
 
@@ -1039,7 +1046,7 @@ async function renderCreateOrder(app) {
       <label><input type="checkbox" id="o-pub" checked> List publicly so others can discover this</label>
       <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder(this)">Create order</button>
       <p class="small error" id="o-err"></p>
-    ` : noVouchersNotice())}
+    ` : (vouchers.failed ? loadError('your vouchers') : noVouchersNotice()))}
   </div>`;
 }
 
@@ -1784,10 +1791,14 @@ async function renderActivity(app) {
 // ---------------- network (banks + trusted issuers + contacts) --------------
 
 async function renderNetwork(app) {
+  // Track load failure so a bank outage doesn't masquerade as "nobody trusted /
+  // no peers / no contacts".
+  let failed = false;
+  const onFail = () => { failed = true; return []; };
   const [banks, trusted, contacts] = await Promise.all([
-    uiGet('/banks').catch(() => []),
-    uiGet('/trusted').catch(() => []),
-    uiGet('/contacts').catch(() => []),
+    uiGet('/banks').catch(onFail),
+    uiGet('/trusted').catch(onFail),
+    uiGet('/contacts').catch(onFail),
   ]);
   // Resolve handles/vouchers for trusted issuers across our bank + pinned banks
   // (a foreign issuer only resolves at their own bank). Entries are
@@ -1815,7 +1826,7 @@ async function renderNetwork(app) {
         </div>
         ${r.note ? `<p class="small" style="margin:0.3rem 0 0;font-style:italic">&ldquo;${escapeHtml(r.note)}&rdquo;</p>` : ''}
       </div>
-    `).join('') || '<p class="small">Nobody trusted yet. Scan a friend&#39;s profile QR to start.</p>')}
+    `).join('') || (failed ? loadError('your network') : '<p class="small">Nobody trusted yet. Scan a friend&#39;s profile QR to start.</p>'))}
     ${card('Add trusted issuer', `
       <label for="n-trust-pk">Issuer pubkey</label><input id="n-trust-pk" placeholder="base58 pubkey">
       <label for="n-trust-note">Note <span class="small">(optional)</span></label>
@@ -1829,7 +1840,7 @@ async function renderNetwork(app) {
           <span class="mono small">${escapeHtml(b.pubkey.slice(0, 16))}… · ${escapeHtml(b.url)}</span>
           <button class="btn danger" onclick="removeBank('${jsStr(b.pubkey)}')">Remove</button>
         </div>
-      `).join('') || '<p class="small">No peer banks pinned</p>'}
+      `).join('') || (failed ? loadError('known banks') : '<p class="small">No peer banks pinned</p>')}
       <label for="n-bank-url">Bank URL</label><input id="n-bank-url" placeholder="https://…/bankname">
       <button class="btn" onclick="addBank()">Pin bank</button>
       <p class="small error" id="n-bank-err"></p>
@@ -1839,7 +1850,7 @@ async function renderNetwork(app) {
         <span>${escapeHtml(c.handle || '')} <span class="mono small">${escapeHtml((c.pubkey || '').slice(0, 16))}…</span></span>
         <button class="btn danger" onclick="removeContact('${jsStr(c.pubkey)}')">Remove</button>
       </div>
-    `).join('') || '<p class="small">No contacts</p>')}
+    `).join('') || (failed ? loadError('contacts') : '<p class="small">No contacts</p>'))}
   </div>`;
 }
 
