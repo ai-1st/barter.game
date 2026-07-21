@@ -381,16 +381,27 @@ function renderPostsSoon(app) {
   </div>`;
 }
 
-// Close the mobile sheet/drawer on Escape (registered once, not per render).
+// Keyboard handling for the mobile sheet/drawer (registered once): Escape
+// closes and restores focus; Tab is trapped inside the open sheet.
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
   const s = document.getElementById('new-sheet');
-  if (s && s.classList.contains('open')) { s.classList.remove('open'); return; }
-  const nav = document.getElementById('mainnav');
-  if (nav && nav.classList.contains('open')) {
-    nav.classList.remove('open');
-    const btn = document.querySelector('.nav-toggle');
-    if (btn) btn.setAttribute('aria-expanded', 'false');
+  const sheetOpen = s && s.classList.contains('open');
+  if (e.key === 'Escape') {
+    if (sheetOpen) { closeSheets(); const b = document.querySelector('.bn-new'); if (b) b.focus(); return; }
+    const nav = document.getElementById('mainnav');
+    if (nav && nav.classList.contains('open')) {
+      nav.classList.remove('open');
+      const btn = document.querySelector('.nav-toggle');
+      if (btn) { btn.setAttribute('aria-expanded', 'false'); btn.focus(); }
+    }
+    return;
+  }
+  if (e.key === 'Tab' && sheetOpen) {
+    const items = s.querySelectorAll('.sheet-item');
+    if (!items.length) return;
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 });
 
@@ -474,15 +485,32 @@ window.toggleNav = function() {
 window.toggleNewSheet = function(e) {
   if (e) e.stopPropagation();
   const s = document.getElementById('new-sheet');
-  if (s) s.classList.toggle('open');
+  if (!s) return;
+  const opening = !s.classList.contains('open');
+  // Only one overlay at a time: opening the sheet closes the Menu drawer.
+  const nav = document.getElementById('mainnav');
+  if (nav) nav.classList.remove('open');
+  const navBtn = document.querySelector('.nav-toggle');
+  if (navBtn) navBtn.setAttribute('aria-expanded', 'false');
+  s.classList.toggle('open', opening);
+  const newBtn = document.querySelector('.bn-new');
+  if (newBtn) newBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  if (opening) {
+    const first = s.querySelector('.sheet-item');
+    if (first) first.focus();
+  } else if (newBtn) {
+    newBtn.focus(); // restore focus to the trigger on close
+  }
 };
 window.closeSheets = function() {
   const s = document.getElementById('new-sheet');
   if (s) s.classList.remove('open');
   const nav = document.getElementById('mainnav');
   if (nav) nav.classList.remove('open');
-  const btn = document.querySelector('.nav-toggle');
-  if (btn) btn.setAttribute('aria-expanded', 'false');
+  const navBtn = document.querySelector('.nav-toggle');
+  if (navBtn) navBtn.setAttribute('aria-expanded', 'false');
+  const newBtn = document.querySelector('.bn-new');
+  if (newBtn) newBtn.setAttribute('aria-expanded', 'false');
 };
 
 function card(title, body) { return `<div class="card"><h3>${escapeHtml(title)}</h3>${body}</div>`; }
