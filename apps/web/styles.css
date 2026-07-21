@@ -351,6 +351,17 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
+/* visually hidden but available to screen readers and programmatic focus */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* skip link — hidden until keyboard-focused */
 .skip-link {
   position: absolute;
