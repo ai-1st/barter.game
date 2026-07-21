@@ -899,7 +899,7 @@ async function knownVouchers() {
     const hash = hashDoc(v);
     if (seen.has(hash)) return;
     seen.add(hash);
-    out.push({ hash, name: v.name, issuer });
+    out.push({ hash, name: v.name, issuer, integer: !!v.integer });
   };
   let coreFailed = false;
   const [mine, trusted, bases] = await Promise.all([
@@ -922,8 +922,13 @@ async function knownVouchers() {
 }
 function voucherChooser(id, vouchers, selected) {
   return `<select id="${id}">${vouchers.map(v =>
-    `<option value="${escapeHtml(v.hash)}"${v.hash === selected ? ' selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.issuer)}</option>`
+    `<option value="${escapeHtml(v.hash)}" data-int="${v.integer ? '1' : ''}"${v.hash === selected ? ' selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.issuer)}</option>`
   ).join('')}</select>`;
+}
+// True when the currently-selected voucher in a chooser is issued in whole units.
+function chooserIsInteger(selectId) {
+  const sel = document.getElementById(selectId);
+  return !!(sel && sel.selectedOptions[0] && sel.selectedOptions[0].dataset.int === '1');
 }
 // hash → voucher name, for showing names (not raw hashes) in the Invoices/
 // Cheques/Orders lists. Best-effort: unknown vouchers fall back to a short hash.
@@ -983,6 +988,7 @@ window.doCreateInvoice = async function(btn) {
   const amount = Number(document.getElementById('i-amount').value);
   const err = document.getElementById('i-err');
   if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
+  if (chooserIsInteger('i-voucher') && !Number.isInteger(amount)) { err.textContent = 'This voucher is issued in whole units only — enter a whole number'; return; }
   const release = lockBtn(btn);
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
@@ -1045,6 +1051,7 @@ window.doCreateCheque = async function(btn) {
   const amount = Number(document.getElementById('q-amount').value);
   const err = document.getElementById('q-err');
   if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
+  if (chooserIsInteger('q-voucher') && !Number.isInteger(amount)) { err.textContent = 'This voucher is issued in whole units only — enter a whole number'; return; }
   const release = lockBtn(btn);
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
@@ -1113,6 +1120,8 @@ window.doCreateOrder = async function(btn) {
   const err = document.getElementById('o-err');
   if (dv === cv) { err.textContent = 'Pick two different vouchers — you cannot swap a voucher for itself'; return; }
   if (badAmount(dmax) || badAmount(cmax)) { err.textContent = 'Both amounts must be greater than zero'; return; }
+  if (chooserIsInteger('o-dv') && !Number.isInteger(dmax)) { err.textContent = 'The voucher you give is in whole units only — enter a whole number'; return; }
+  if (chooserIsInteger('o-cv') && !Number.isInteger(cmax)) { err.textContent = 'The voucher you receive is in whole units only — enter a whole number'; return; }
   // Rate is derived from the two amounts, not hand-typed — they can never disagree.
   const rate = dmax / cmax;
   const release = lockBtn(btn);
