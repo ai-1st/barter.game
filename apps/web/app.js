@@ -262,25 +262,51 @@ const ROUTE_TITLES = {
   network: 'Network', scan: 'Scan', settings: 'Settings', deal: 'Deal', posts: 'Posts',
 };
 
+// route() is a coalescing scheduler: many actions do `location.hash = X; route()`,
+// and changing the hash ALSO fires the hashchange listener — so a naive route()
+// rendered twice per navigation (and, on the deal screen, armed two pollers).
+// Collapsing to one render per microtask fixes that; renderRoute does the work.
+let routeQueued = false;
+let lastRenderedHash = null;
+let dealTimer = null; // the single live deal-refresh timer (see renderDeal)
 function route() {
+  if (routeQueued) return;
+  routeQueued = true;
+  // A macrotask (not queueMicrotask): the `location.hash = X` in a handler queues
+  // its hashchange as a macrotask, so the coalescing window must span one too —
+  // otherwise `hash = X; route()` still renders twice.
+  setTimeout(() => { routeQueued = false; renderRoute(); }, 0);
+}
+
+function renderRoute() {
   const hash = location.hash.slice(1) || '/';
   const [p, ...rest] = hash.split('/').filter(Boolean);
   const app = document.getElementById('app');
   stopActiveScanner();
-  // Paint an immediate shell (nav + spinner) so a logged-in screen never blanks
-  // while it fetches; the async render replaces it when the data arrives.
-  // Screens that render synchronously just overwrite this with no visible flash.
-  if (state.user && p !== 'land') {
-    app.innerHTML = header(ROUTE_TITLES[p || ''] || '') +
-      `<div class="container"><div class="skeleton" aria-live="polite"><span class="spinner"></span> Loading…</div></div>`;
-  } else {
-    app.innerHTML = '';
+  // Any pending deal poll belongs to the screen we're leaving/refreshing — drop
+  // it so pollers never stack; renderDeal re-arms exactly one.
+  if (dealTimer) { clearTimeout(dealTimer); dealTimer = null; }
+
+  // An in-place refresh (same hash — e.g. the deal screen's 3s self-poll, or a
+  // "Retry" button) must NOT flash the skeleton or steal focus; only a genuine
+  // navigation does.
+  const isRefresh = hash === lastRenderedHash;
+  lastRenderedHash = hash;
+
+  if (!isRefresh) {
+    if (state.user && p !== 'land') {
+      app.innerHTML = header(ROUTE_TITLES[p || ''] || '') +
+        `<div class="container"><div class="skeleton" aria-live="polite"><span class="spinner"></span> Loading…</div></div>`;
+    } else {
+      app.innerHTML = '';
+    }
   }
 
-  // After the (possibly async) screen renders, move focus to its heading so
-  // keyboard/screen-reader users land on the new content — not stuck at <body>
-  // — and the screen title is announced.
-  Promise.resolve(dispatch(app, p, rest)).then(moveFocusToMain).catch(() => {});
+  // After a genuine navigation, move focus to the screen heading so
+  // keyboard/screen-reader users land on the new content. Skip on refresh.
+  Promise.resolve(dispatch(app, p, rest))
+    .then(() => { if (!isRefresh) moveFocusToMain(); })
+    .catch(() => {});
 }
 
 function dispatch(app, p, rest) {
@@ -319,6 +345,10 @@ function dispatch(app, p, rest) {
 function moveFocusToMain() {
   const app = document.getElementById('app');
   if (!app || app.querySelector('.skeleton')) return; // still loading; render will re-focus
+  // Don't steal focus from a field a screen just focused on purpose (e.g. the
+  // login password input) — that field is where the user needs to be.
+  const active = document.activeElement;
+  if (active && app.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
   const h = app.querySelector('h1, h2, h3');
   if (!h) return;
   h.setAttribute('tabindex', '-1');
@@ -361,7 +391,11 @@ window.route = route;
 
 function header(title) {
   const on = (t) => title === t ? ' class="active"' : '';
+  // A visually-hidden screen heading: gives every screen (the list screens have
+  // no other heading) an <h1> for the router's focus-to-heading + skip-link to
+  // land on, and announces the screen name to screen readers.
   return `<a href="#" class="skip-link" onclick="skipToContent();return false">Skip to content</a>
+  <h1 class="sr-only">${escapeHtml(title || 'barter.game')}</h1>
   <div class="header">
     <div class="brand">
       <div class="logo-mark"><span></span></div>
@@ -1209,7 +1243,7 @@ async function renderDeal(app, dealId) {
       <p class="small">Connecting to the bank… this can take a moment right after a deal is proposed. This page keeps retrying.</p>
       <button class="btn secondary" onclick="route()">Retry now</button>`);
     app.innerHTML = body + `</div>`;
-    setTimeout(() => { if (location.hash === `#/deal/${dealId}`) route(); }, 3000);
+    dealTimer = setTimeout(() => { if (location.hash === `#/deal/${dealId}`) route(); }, 3000);
     return;
   }
   {
@@ -1247,7 +1281,7 @@ async function renderDeal(app, dealId) {
   body += `</div>`;
   app.innerHTML = body;
   if (status && status.state !== 'settled' && status.state !== 'rejected') {
-    setTimeout(() => { if (location.hash === `#/deal/${dealId}`) route(); }, 3000);
+    dealTimer = setTimeout(() => { if (location.hash === `#/deal/${dealId}`) route(); }, 3000);
   }
 }
 
