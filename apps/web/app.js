@@ -751,13 +751,13 @@ function renderCreateVoucher(app) {
       <label for="v-limit">Supply limit <span class="small">(optional — max you will ever issue)</span></label><input id="v-limit" type="number" min="0" step="any" placeholder="unlimited">
       <label for="v-expires">Expires <span class="small">(optional — the voucher is void after this date)</span></label><input id="v-expires" type="date">
       <label><input type="checkbox" id="v-int"> Integer amounts only</label>
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateVoucher()">Create & sign</button>
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateVoucher(this)">Create & sign</button>
       <p class="small error" id="v-err"></p>
     `)}
   </div>`;
 }
 
-window.doCreateVoucher = async function() {
+window.doCreateVoucher = async function(btn) {
   const name = document.getElementById('v-name').value.trim();
   const desc = document.getElementById('v-desc').value.trim();
   const limit = document.getElementById('v-limit').value;
@@ -766,6 +766,7 @@ window.doCreateVoucher = async function() {
   const err = document.getElementById('v-err');
   if (!name) { err.textContent = 'Name required'; return; }
   if (limit && (!Number.isFinite(Number(limit)) || Number(limit) <= 0)) { err.textContent = 'Supply limit must be a positive number, or left blank'; return; }
+  const release = lockBtn(btn);
   try {
     const voucher = { type: 'voucher', pubkey: state.user.pubkey, ulid: newUlid(), bank: state.bankPubkey, name };
     if (desc) voucher.description_md = desc;
@@ -784,6 +785,7 @@ window.doCreateVoucher = async function() {
     route();
     toast('Voucher created');
   } catch (e) {
+    release();
     err.textContent = e.message;
   }
 };
@@ -791,6 +793,7 @@ window.doCreateVoucher = async function() {
 async function renderInvoices(app) {
   let orders = { orders: [] }, failed = false;
   try { orders = await uiGet('/orders?kind=invoice'); } catch { failed = true; }
+  const names = await voucherNameMap();
   // Guard against non-invoice rows: a bank that ignores ?kind= (or older data)
   // could return cheques/two-sided orders, which have no credit side.
   const invoices = (orders.orders || []).filter(o => o.credit);
@@ -799,7 +802,7 @@ async function renderInvoices(app) {
   body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/invoices/new">New invoice</a></div>`;
   body += failed ? loadError('your invoices') : (invoices.map(o => `
     <div class="card">
-      <div>Receive ${escapeHtml(String(o.credit.max))} of ${escapeHtml(o.credit.voucher.slice(0,12))}…</div>
+      <div>Receive ${escapeHtml(String(o.credit.max))} ${vName(names, o.credit.voucher)}</div>
       <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
       <div class="small">state: ${escapeHtml(String(o.state))}</div>
       <button class="btn secondary" onclick="showShare('v', '${jsStr(o.order)}', 'Invoice — scan to pay')">Share QR</button>
@@ -863,6 +866,26 @@ function voucherChooser(id, vouchers, selected) {
     `<option value="${escapeHtml(v.hash)}"${v.hash === selected ? ' selected' : ''}>${escapeHtml(v.name)} — ${escapeHtml(v.issuer)}</option>`
   ).join('')}</select>`;
 }
+// hash → voucher name, for showing names (not raw hashes) in the Invoices/
+// Cheques/Orders lists. Best-effort: unknown vouchers fall back to a short hash.
+async function voucherNameMap() {
+  const m = {};
+  (await knownVouchers().catch(() => [])).forEach(v => { m[v.hash] = v.name; });
+  return m;
+}
+function vName(map, hash) {
+  return hash ? escapeHtml(map[hash] || hash.slice(0, 10) + '…') : '';
+}
+// Disable a submit button while its async handler runs, so a double-click (or a
+// slow round-trip) can't fire the same create twice. Returns a release fn to
+// call on error; on success the handler navigates away and the button is gone.
+function lockBtn(btn) {
+  if (!btn) return () => {};
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+  return () => { btn.disabled = false; btn.textContent = label; };
+}
 function noVouchersNotice() {
   return `<p class="small">No vouchers to choose from yet. <a href="#/vouchers/new">Create one</a> or <a href="#/network">trust an issuer</a> first.</p>`;
 }
@@ -889,18 +912,19 @@ async function renderCreateInvoice(app) {
       <label for="i-voucher">Voucher to receive</label>${voucherChooser('i-voucher', vouchers)}
       <label for="i-acct">Account name <span class="small">(where the payment lands)</span></label><input id="i-acct" value="receiving">
       <label for="i-amount">Amount to receive</label><input id="i-amount" type="number" min="0" step="any" value="10">
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice()">Create invoice</button>
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateInvoice(this)">Create invoice</button>
       <p class="small error" id="i-err"></p>
     ` : noVouchersNotice())}
   </div>`;
 }
 
-window.doCreateInvoice = async function() {
+window.doCreateInvoice = async function(btn) {
   const voucherHash = document.getElementById('i-voucher').value.trim();
   const acctName = document.getElementById('i-acct').value.trim();
   const amount = Number(document.getElementById('i-amount').value);
   const err = document.getElementById('i-err');
   if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
+  const release = lockBtn(btn);
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
     account.sig = signDoc(account, state.user.privateKey);
@@ -910,11 +934,14 @@ window.doCreateInvoice = async function() {
       lead: false };
     order.sig = signDoc(order, state.user.privateKey);
     const orderHash = hashDoc(order);
-    const res = await rpcCall('submit_docs', { docs: [order, account], publish_offers: [orderHash] });
+    await rpcCall('submit_docs', { docs: [order, account], publish_offers: [orderHash] });
     location.hash = '#/invoices';
     route();
-    toast('Invoice created. Offer: ' + (res.offers[0] || '').slice(0,12));
+    toast('Invoice created — share its QR so someone can pay it');
+    // Pop the shareable QR straight away, mirroring the cheque flow.
+    showShare('v', orderHash, 'Invoice — scan to pay');
   } catch (e) {
+    release();
     err.textContent = e.message;
   }
 };
@@ -922,13 +949,14 @@ window.doCreateInvoice = async function() {
 async function renderCheques(app) {
   let orders = { orders: [] }, failed = false;
   try { orders = await uiGet('/orders?kind=cheque'); } catch { failed = true; }
+  const names = await voucherNameMap();
   const cheques = (orders.orders || []).filter(o => o.debit && !o.credit);
   let body = header('Cheques') + `<div class="container">`;
   body += `<div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/cheques/new">New cheque</a></div>`;
   body += `<p class="small">A cheque lets someone claim a fixed amount of your voucher. Share its QR with the recipient.</p>`;
   body += failed ? loadError('your cheques') : (cheques.map(o => `
     <div class="card">
-      <div>Pay out ${escapeHtml(String(o.debit.max))} of ${escapeHtml(o.debit.voucher.slice(0,12))}…</div>
+      <div>Pay out ${escapeHtml(String(o.debit.max))} ${vName(names, o.debit.voucher)}</div>
       <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
       <div class="small">state: ${escapeHtml(String(o.state))}</div>
       <button class="btn secondary" onclick="showShare('q', '${jsStr(o.order)}', 'Cheque — scan to claim')">Share QR</button>
@@ -946,18 +974,19 @@ async function renderCreateCheque(app) {
       <label for="q-voucher">Voucher to pay out</label>${voucherChooser('q-voucher', vouchers)}
       <label for="q-acct">Account name <span class="small">(paid from)</span></label><input id="q-acct" value="spending">
       <label for="q-amount">Amount to pay</label><input id="q-amount" type="number" min="0" step="any" value="10">
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque()">Create cheque</button>
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateCheque(this)">Create cheque</button>
       <p class="small error" id="q-err"></p>
     ` : noVouchersNotice())}
   </div>`;
 }
 
-window.doCreateCheque = async function() {
+window.doCreateCheque = async function(btn) {
   const voucherHash = document.getElementById('q-voucher').value.trim();
   const acctName = document.getElementById('q-acct').value.trim();
   const amount = Number(document.getElementById('q-amount').value);
   const err = document.getElementById('q-err');
   if (badAmount(amount)) { err.textContent = 'Enter an amount greater than zero'; return; }
+  const release = lockBtn(btn);
   try {
     const account = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: acctName, voucher: voucherHash };
     account.sig = signDoc(account, state.user.privateKey);
@@ -974,6 +1003,7 @@ window.doCreateCheque = async function() {
     // Pop the shareable QR straight away — the point of a cheque is to send it.
     showShare('q', orderHash, 'Cheque — scan to claim');
   } catch (e) {
+    release();
     err.textContent = e.message;
   }
 };
@@ -981,13 +1011,14 @@ window.doCreateCheque = async function() {
 async function renderOrders(app) {
   let orders = { orders: [] }, failed = false;
   try { orders = await uiGet('/orders'); } catch { failed = true; }
+  const names = await voucherNameMap();
   app.innerHTML = header('Orders') + `<div class="container">
     <div class="flex" style="margin-bottom:1rem"><a class="btn" href="#/orders/new">New order</a></div>
     ${failed ? loadError('your orders') : (orders.orders.map(o => `
       <div class="card">
         <div>${o.kind === 'two-sided' ? 'Swap' : escapeHtml(String(o.kind))}${o.lead ? ' · settles first' : ''}</div>
         <div class="mono small">${escapeHtml(o.order.slice(0,16))}…</div>
-        <div class="small">${o.debit ? `give up to ${escapeHtml(String(o.debit.max))}` : ''} ${o.credit ? `· receive up to ${escapeHtml(String(o.credit.max))}` : ''}</div>
+        <div class="small">${o.debit ? `give up to ${escapeHtml(String(o.debit.max))} ${vName(names, o.debit.voucher)}` : ''} ${o.credit ? `· receive up to ${escapeHtml(String(o.credit.max))} ${vName(names, o.credit.voucher)}` : ''}</div>
         ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${jsStr(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
         ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${jsStr(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
       </div>
@@ -1006,13 +1037,13 @@ async function renderCreateOrder(app) {
       <label for="o-cmax">Amount you receive (up to)</label><input id="o-cmax" type="number" min="0" step="any" value="90">
       <label><input type="checkbox" id="o-lead"> Settle my side first <span class="small">(the counterparty may not reciprocate)</span></label>
       <label><input type="checkbox" id="o-pub" checked> List publicly so others can discover this</label>
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder()">Create order</button>
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="doCreateOrder(this)">Create order</button>
       <p class="small error" id="o-err"></p>
     ` : noVouchersNotice())}
   </div>`;
 }
 
-window.doCreateOrder = async function() {
+window.doCreateOrder = async function(btn) {
   const dv = document.getElementById('o-dv').value.trim();
   const dmax = Number(document.getElementById('o-dmax').value);
   const cv = document.getElementById('o-cv').value.trim();
@@ -1024,6 +1055,7 @@ window.doCreateOrder = async function() {
   if (badAmount(dmax) || badAmount(cmax)) { err.textContent = 'Both amounts must be greater than zero'; return; }
   // Rate is derived from the two amounts, not hand-typed — they can never disagree.
   const rate = dmax / cmax;
+  const release = lockBtn(btn);
   try {
     const dAccount = { type: 'account', pubkey: state.user.pubkey, ulid: newUlid(), name: 'giving', voucher: dv };
     dAccount.sig = signDoc(dAccount, state.user.privateKey);
@@ -1042,6 +1074,7 @@ window.doCreateOrder = async function() {
     route();
     toast(pub ? 'Order created and listed publicly' : 'Order created');
   } catch (e) {
+    release();
     err.textContent = e.message;
   }
 };
