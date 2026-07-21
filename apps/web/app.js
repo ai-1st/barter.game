@@ -451,7 +451,7 @@ function bottomNav(title) {
       <div class="sheet-title">Create</div>
       <a href="#/invoices/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Invoice <span class="small">request a payment</span></a>
       <a href="#/cheques/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Cheque <span class="small">send someone funds</span></a>
-      <a href="#/posts/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Post <span class="small">to a voucher feed</span></a>
+      <a href="#/orders/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Swap <span class="small">trade one voucher for another</span></a>
       <a href="#/vouchers/new" class="sheet-item" role="menuitem" onclick="closeSheets()">Voucher <span class="small">mint your own</span></a>
       <button class="sheet-item cancel" onclick="closeSheets()">Cancel</button>
     </div>
@@ -1080,6 +1080,7 @@ async function renderOrders(app) {
         <div class="small">${o.debit ? `give up to ${escapeHtml(String(o.debit.max))} ${vName(names, o.debit.voucher)}` : ''} ${o.credit ? `· receive up to ${escapeHtml(String(o.credit.max))} ${vName(names, o.credit.voucher)}` : ''}</div>
         ${o.kind === 'invoice' ? `<button class="btn secondary" onclick="showShare('v', '${jsStr(o.order)}', 'Invoice — scan to pay')">Share QR</button>` : ''}
         ${o.kind === 'cheque' ? `<button class="btn secondary" onclick="showShare('q', '${jsStr(o.order)}', 'Cheque — scan to claim')">Share QR</button>` : ''}
+        ${o.kind === 'two-sided' ? `<button class="btn secondary" onclick="showShare('o', '${jsStr(o.order)}', 'Swap — scan to trade')">Share QR</button>` : ''}
       </div>
     `).join('') || '<p class="small">No orders yet.</p>')}
   </div>`;
@@ -1427,8 +1428,11 @@ window.downloadBackup = async function() {
 
 // Build the public Barter Link for a kind/value at this bank and show it as a
 // QR + copyable link. REFERENCE mode links per the spec's QR byte budget.
-window.showShare = function(kind, value, title) {
-  const link = `${state.bankUrl}/${kind}/${value}`;
+window.showShare = function(kind, value, title, baseUrl) {
+  // baseUrl lets a foreign entity's QR (e.g. a trusted issuer who banks
+  // elsewhere) point at THEIR bank, where it actually resolves — not ours.
+  const base = (baseUrl || state.bankUrl).replace(/\/+$/, '');
+  const link = `${base}/${kind}/${value}`;
   let dataUrl = '';
   try { dataUrl = qrDataUrl(link); } catch (e) { toast(e.message, 'error'); return; }
   const opener = document.activeElement; // return focus here on close
@@ -1730,7 +1734,14 @@ window.actOnOrder = async function(kind) {
     const theirOrder = env.docs.find(d => d.type === 'order');
     const theirHash = hashDoc(theirOrder);
     const side = kind === 'invoice' ? theirOrder.credit : theirOrder.debit;
-    const amount = Number(document.getElementById('act-amount').value) || side.max;
+    // Validate against the order's min–max instead of silently coercing a blank
+    // or out-of-range value to the max.
+    const raw = document.getElementById('act-amount').value.trim();
+    const amount = raw === '' ? side.max : Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter a valid amount');
+    if (amount < (side.min || 0) || amount > side.max) {
+      throw new Error(`Amount must be between ${side.min || 0} and ${side.max}`);
+    }
 
     // Everything about this action lives at the VOUCHER'S issuing bank (the
     // `bank` the signed Order pins for this side): the voucher doc, the
@@ -1872,7 +1883,7 @@ async function renderNetwork(app) {
             <span class="small">${(r.vouchers || []).length} voucher(s)</span></span>
           <span>
             <button class="btn secondary" data-pk="${escapeHtml(r.pubkey)}" data-note="${escapeHtml(r.note || '')}" onclick="editTrustNote(this)">Note</button>
-            <button class="btn secondary" onclick="showShare('i', '${jsStr(r.pubkey)}', 'Issuer profile')">QR</button>
+            <button class="btn secondary" onclick="showShare('i', '${jsStr(r.pubkey)}', 'Issuer profile', '${jsStr(r.bank_url || '')}')">QR</button>
             <button class="btn danger" onclick="untrust('${jsStr(r.pubkey)}')">Remove</button>
           </span>
         </div>

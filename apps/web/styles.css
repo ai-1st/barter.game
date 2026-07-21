@@ -186,6 +186,9 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 .chip.state-held { background: var(--amber-soft); color: var(--amber); }
 .chip.state-settled { background: var(--green-soft); color: var(--accent2); }
 .chip.state-rejected { background: var(--danger-soft); color: var(--danger); }
+/* in-progress states between created and settled */
+.chip.state-open { background: var(--accent-soft); color: var(--accent); }
+.chip.state-approved, .chip.state-mandated, .chip.state-pending { background: var(--amber-soft); color: var(--amber); }
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 .flex { display: flex; gap: 1rem; align-items: center; }
 /* let long mono content (URLs, pubkeys) shrink/wrap instead of forcing overflow */
