@@ -1721,8 +1721,12 @@ window.useOtherBank = function(kind, value, sourceUrl) {
   if (!url) return;
   const clean = url.trim().replace(/\/+$/, '');
   if (!/^https?:\/\//.test(clean)) { toast('Enter a full https:// bank URL', 'error'); return; }
+  // Carry the source bank as a ?src= query param so it survives a cross-ORIGIN
+  // redirect (sessionStorage is per-origin). Also set sessionStorage as a
+  // same-origin fallback. boot seeds the scan origin from ?src=.
   try { if (sourceUrl) sessionStorage.setItem('barter_scan_origin', sourceUrl); } catch { /* ignore */ }
-  location.href = `${clean}/ui/app#/land/${kind}/${value}`;
+  const q = sourceUrl ? `?src=${encodeURIComponent(sourceUrl)}` : '';
+  location.href = `${clean}/ui/app${q}#/land/${kind}/${value}`;
 };
 function otherBankCta(kind, value, sourceUrl) {
   return `<p class="small" style="text-align:center;margin-top:0.75rem">
@@ -2019,6 +2023,14 @@ setInterval(() => {
 }, 15000);
 
 // ---------------- boot ----------------
+
+// A cross-bank landing redirect carries the source bank as ?src= (see
+// useOtherBank) — seed the scan origin from it so a foreign doc resolves even
+// across origins, where sessionStorage wouldn't have carried over.
+try {
+  const src = new URLSearchParams(location.search).get('src');
+  if (src && /^https?:\/\//.test(src)) sessionStorage.setItem('barter_scan_origin', src);
+} catch { /* ignore */ }
 
 fetchConfig().then(() => route()).catch(e => {
   document.getElementById('app').innerHTML = `<div class="container"><p class="error">Failed to load bank config: ${e.message}</p></div>`;
