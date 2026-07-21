@@ -94,6 +94,15 @@ async function fetchConfig() {
   return cfg;
 }
 
+// Build an Error from a bank error WITHOUT the numeric JSON-RPC code prefix —
+// users should see the human message ("handle taken"), not "-32008: handle
+// taken". The code is kept as a property for any logic that needs it.
+function bankError(code, message) {
+  const e = new Error(message || `Request failed (${code})`);
+  e.code = code;
+  return e;
+}
+
 async function rpcCall(method, params, toPubkey) {
   const id = newUlid();
   const envelope = {
@@ -109,7 +118,7 @@ async function rpcCall(method, params, toPubkey) {
     body: JSON.stringify(envelope)
   });
   const data = await res.json();
-  if (data.error) throw new Error(`${data.error.code}: ${data.error.message}`);
+  if (data.error) throw bankError(data.error.code, data.error.message);
   return data.result;
 }
 
@@ -130,7 +139,7 @@ async function signedRequest(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   });
   const data = await res.json();
-  if (data.code && data.code < 0) throw new Error(`${data.code}: ${data.message}`);
+  if (data.code && data.code < 0) throw bankError(data.code, data.message);
   return data;
 }
 
@@ -156,7 +165,7 @@ async function rpcCallAt(base, toPubkey, method, params) {
     body: JSON.stringify(envelope)
   });
   const data = await res.json();
-  if (data.error) throw new Error(`${data.error.code}: ${data.error.message}`);
+  if (data.error) throw bankError(data.error.code, data.error.message);
   return data.result;
 }
 
@@ -177,7 +186,7 @@ async function signedRequestAt(base, method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   });
   const data = await res.json();
-  if (data.code && data.code < 0) throw new Error(`${data.code}: ${data.message}`);
+  if (data.code && data.code < 0) throw bankError(data.code, data.message);
   return data;
 }
 
@@ -570,12 +579,15 @@ function renderRegister(app) {
 }
 
 window.doRegister = async function() {
-  const handle = document.getElementById('r-handle').value.trim();
+  // Lowercase to match the bank's rule (it requires lowercase), so a stray
+  // capital doesn't bounce a raw "-32600 handle must be…" back at the user.
+  const handle = document.getElementById('r-handle').value.trim().toLowerCase();
   const pass = document.getElementById('r-pass').value;
   const pass2 = document.getElementById('r-pass2').value;
   const ack = document.getElementById('r-ack').checked;
   const err = document.getElementById('r-err');
   if (!handle) { err.textContent = 'Choose a handle'; return; }
+  if (!/^[a-z0-9_-]{2,32}$/.test(handle)) { err.textContent = 'Handle must be 2–32 characters, using only a–z, 0–9, _ or -'; return; }
   if (pass.length < MIN_PASSWORD) { err.textContent = `Password must be at least ${MIN_PASSWORD} characters`; return; }
   if (pass !== pass2) { err.textContent = 'Passwords do not match'; return; }
   if (!ack) { err.textContent = 'Please acknowledge there is no password recovery'; return; }
@@ -589,10 +601,13 @@ window.doRegister = async function() {
       body: JSON.stringify({ handle, pubkey: pubkeyBase58, keystore, proof })
     });
     const data = await res.json();
-    if (data.code) throw new Error(`${data.code}: ${data.message}`);
+    if (data.code) throw bankError(data.code, data.message);
     rememberHandle(handle);
     state.user = { handle, pubkey: pubkeyBase58, privateKey };
-    state.uiState = await uiGet('/state');
+    // The account exists now; a transient /state blip must not bounce the user
+    // back to a register error (a retry would hit "handle taken"). Fall back to
+    // a default state, exactly like doUnlock.
+    state.uiState = await uiGet('/state').catch(() => ({ pubkey: pubkeyBase58, trusted: [], contacts: [], banks: [], catalog: [], drafts: [], prefs: {}, rev: 0 }));
     toast(`Welcome, ${handle}`);
     if (resumePendingAction()) return;
     location.hash = '#/';
@@ -604,16 +619,54 @@ window.doRegister = async function() {
 
 function renderConnect(app) {
   app.innerHTML = `<div class="container" style="max-width:420px;padding-top:8vh">
-    ${card('Connect existing key', `
-      <label>Base58 private key / seed</label>
+    ${card('Restore from recovery kit', `
+      <p class="small">Have the <b>recovery kit</b> file you downloaded from Settings? Load it and enter its password to restore your account — no bank lookup needed.</p>
+      <label for="c-kit">Recovery kit (.json)</label><input id="c-kit" type="file" accept="application/json,.json">
+      <label for="c-kit-pass">Password</label><input id="c-kit-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+      <button class="btn" style="width:100%;margin-top:1rem" onclick="restoreFromKit(this)">Restore</button>
+      <p class="small error" id="c-kit-err"></p>
+    `)}
+    ${card('Or paste a raw key', `
+      <label for="c-key">Base58 private key / seed</label>
       <textarea id="c-key" rows="3" placeholder="paste 32-byte base58 seed"></textarea>
-      <p class="small">Or load encrypted backup by handle below after importing.</p>
-      <button class="btn" style="width:100%;margin-top:1rem" onclick="doConnect()">Connect</button>
+      <button class="btn secondary" style="width:100%;margin-top:1rem" onclick="doConnect()">Connect</button>
       <p class="small error" id="c-err"></p>
     `)}
     <p style="text-align:center"><a href="#/">Back</a></p>
   </div>`;
 }
+
+// Restore an account from a downloaded recovery kit: decrypt its keystore with
+// the password locally (no bank round-trip), so it works even if the account's
+// bank is unreachable.
+window.restoreFromKit = async function(btn) {
+  const fileEl = document.getElementById('c-kit');
+  const pass = document.getElementById('c-kit-pass').value;
+  const err = document.getElementById('c-kit-err');
+  const file = fileEl.files && fileEl.files[0];
+  if (!file) { err.textContent = 'Choose your recovery kit file'; return; }
+  if (!pass) { err.textContent = 'Enter the password you set for this account'; return; }
+  const release = lockBtn(btn);
+  try {
+    let kit;
+    try { kit = JSON.parse(await file.text()); } catch { throw new Error('That file is not a valid recovery kit'); }
+    if (!kit || !kit.keystore || !kit.pubkey) throw new Error('That file is not a barter.game recovery kit');
+    let seed;
+    try { seed = await decryptSeed(kit.keystore, pass); } catch { throw new Error('Wrong password for this recovery kit'); }
+    const { pubkeyBase58 } = publicKeyOf(seed);
+    if (pubkeyBase58 !== kit.pubkey) throw new Error('Wrong password for this recovery kit');
+    const handle = kit.handle || pubkeyBase58.slice(0, 8);
+    rememberHandle(handle);
+    state.user = { handle, pubkey: pubkeyBase58, privateKey: seed };
+    state.uiState = await uiGet('/state').catch(() => ({ pubkey: pubkeyBase58, trusted: [], contacts: [], banks: [], catalog: [], drafts: [], prefs: {}, rev: 0 }));
+    toast(`Welcome back, ${handle}`);
+    location.hash = '#/';
+    route();
+  } catch (e) {
+    release();
+    err.textContent = e.message;
+  }
+};
 
 window.doConnect = async function() {
   const keyStr = document.getElementById('c-key').value.trim();
@@ -624,7 +677,6 @@ window.doConnect = async function() {
     const { pubkeyBase58 } = publicKeyOf(privateKey);
     state.user = { pubkey: pubkeyBase58, privateKey, handle: pubkeyBase58.slice(0, 8) };
     state.uiState = await uiGet('/state').catch(() => null);
-    const handle = await uiGet('/state').then(s => null).catch(() => null);
     location.hash = '#/';
     route();
   } catch (e) {
