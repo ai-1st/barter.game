@@ -424,7 +424,7 @@ function header(title) {
       <div class="logo-mark"><span></span></div>
       <div><strong>${escapeHtml(state.bankName)}</strong> <span class="mono small">${escapeHtml(state.user?.pubkey.slice(0, 12) || '')}…</span></div>
     </div>
-    <nav class="nav" id="mainnav">
+    <nav class="nav" id="mainnav" aria-label="Primary">
       <a href="#/"${on('Dashboard')}>Home</a>
       <a href="#/vouchers"${on('Vouchers')}>Vouchers</a>
       <a href="#/orders"${on('Orders')}>Orders</a>
@@ -442,7 +442,12 @@ function header(title) {
       <button class="btn secondary" onclick="lock()">Lock</button>
     </div>
   </div>
-  ${bottomNav(title)}`;
+  ${bottomNav(title)}
+  <main id="main-region">`;
+  // NOTE: the <main> is intentionally left open — each screen appends its
+  // content right after header(), so the content becomes main's children and
+  // the parser auto-closes main at the end of #app. This wraps the screen body
+  // (not the nav) in a single main landmark without touching every render.
 }
 
 // Persistent mobile bottom bar (quick access) + the "New" action sheet. Hidden

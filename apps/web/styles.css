@@ -6,7 +6,7 @@
   --fg: #1A1712;
   /* --muted/--faint darkened for WCAG AA contrast on the page background */
   --muted: #6B665D;
-  --faint: #857F74;
+  --faint: #6E685E;
   --accent: #3D34D6;
   --accent-soft: #ECEBFB;
   --accent2: #1C7C54;
@@ -390,7 +390,7 @@ h1:focus, h2:focus, h3:focus { outline: none; }
     --bg: #15130E;
     --fg: #ECE9E1;
     --muted: #A8A399;
-    --faint: #7C776D;
+    --faint: #928C7F;
     --accent: #9089F0;
     --accent-soft: #262349;
     --accent2: #6FCF97;
