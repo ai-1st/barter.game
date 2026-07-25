@@ -5,6 +5,9 @@ the demo look inhabited, and — because driving them exercises every screen and
 every RPC — to shake out what is broken. Three real bugs fell out; see
 [Gaps and defects](#gaps-and-defects).
 
+Current as of `main` **`ece1949`** — checked against every branch in the repo,
+not just `main`.
+
 **Target:** the deployed banks, not localhost.
 
 ```
@@ -269,10 +272,25 @@ recorded here.
 other through those posts. That is not buildable today** — none of it is
 implemented, anywhere.
 
+The **spec** for post feeds landed in `ceb379a docs(protocol): post feeds —
+embedded reply_to/repost, author+voucher feeds, media (#19)`, and it is
+detailed. But that commit touched exactly two files — `protocol/post-feed.md`
+and `protocol/bank-rpc.md`. **Nothing was implemented.** Easy to conflate: the
+spec is real and thorough, the feature does not exist.
+
+Verified across every branch in the repo, not just `main` — no `Post` doc type
+or `list_posts` exists anywhere:
+
 - No `Post` type and no `'post'` in `DocType` (`packages/protocol/src/index.ts`).
 - No handler, no RPC method, no KV key namespace (`apps/bank/`).
 - The UI route exists but renders a literal "Posts — coming soon" card
   (`apps/web/app.js`, `renderPostsSoon`).
+
+`UX-REPORT.md` §3 says the same thing in the repo's own words:
+
+> **Post / voucher feeds** — Whole surface unbuilt (write via `submit_docs`,
+> `list_posts`, trust-based read filtering, issuer reposts). Protocol docs now
+> exist on `docs/post-feed-embeds-and-feeds`.
 
 Probed live rather than assumed — `./scripts/emu post mira@alice <voucher> "…"`:
 
@@ -359,6 +377,11 @@ hold +1 sourdough at bank bob, but the alice UI shows her only the legal-advice
 leg — so a cross-bank trader sees half their position and the Home "Balances"
 card silently understates what they own.
 
+Distinct from the "public-holdings discovery" item in `UX-REPORT.md` §3 — that
+is about seeing *other people's* balances (`list_public_balances`,
+`Account.public`). This is a user unable to see **their own** holdings at a bank
+they have already pinned.
+
 The hardcoded `unreachable: []` and the whole `/banks` pinning mechanism imply
 this was meant to fan out. The bank cannot do it itself: `list_accounts` keys
 off the envelope sender, so a peer bank calling it gets *its own* accounts, not
@@ -399,15 +422,20 @@ Effect: the ledger is correct but invisible. A user can see *what* they hold and
 never *how they got there*, which for a mutual-credit ledger is most of the
 story.
 
-### 5. Contacts are readable and removable in the UI, but cannot be added
+### 5. Contacts cannot be added from the UI — *known and deliberate*
 
-`/ui/contacts` supports GET/POST/DELETE, and the Network screen renders the
-list with Remove buttons — but nothing in `apps/web/` ever POSTs to it, so in
-normal use the list is always empty and the UI is dead weight.
+Not a new finding. `UX-REPORT.md` §3 already records it under **Deliberately
+not done**:
 
-Confirmed by populating contacts from the CLI: mira's Network screen then
-rendered tomas, priya and kai correctly, with no way to have created them from
-the browser. Either add an "Add contact" form or drop the feature.
+> **Add-a-contact** (Network → Contacts lists and removes, but can't add).
+> Skipped because the feature's purpose is undefined — contacts aren't used by
+> any flow. Either give contacts a job or drop the section.
+
+Recorded here only because driving the users demonstrated the other half: the
+endpoint works fine. Contacts POSTed from the CLI render correctly on mira's
+Network screen (tomas, priya, kai), so the gap really is just the missing
+browser affordance, not a broken API. The "give it a job or drop it" call still
+stands.
 
 ### 6. Registration requires 8 characters (client-side only)
 
