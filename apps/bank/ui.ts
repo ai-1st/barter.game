@@ -2,10 +2,13 @@ import {
   base58Encode,
   canonicalize,
   canonicalizeWithoutSig,
+  extForContentType,
   hashDoc,
   isValidBase58,
   isValidUlid,
+  MEDIA_EXT_TYPES,
   newUlid,
+  parseMediaRef,
   signDoc,
   verifyDoc,
   type Base58PubKey,
@@ -1380,13 +1383,20 @@ async function mediaRoute(
 
   if (request.method === 'GET') {
     if (!hash) throw new UiError(400, -32602, 'media hash required');
-    const blob = await getMedia(bank, hash);
+    // The path segment is a MediaRef "<hash>.<ext>" (canonical) or a bare
+    // hash (legacy). The extension names the Content-Type, so the immutable
+    // URL is statically servable through any caching CDN with no byte
+    // sniffing (post-feed.md §5); a bare hash falls back to the type recorded
+    // at upload.
+    const ref = parseMediaRef(hash);
+    const contentHash = ref ? ref.hash : hash;
+    const blob = await getMedia(bank, contentHash);
     if (!blob) throw new UiError(404, -32005, 'unknown media');
     // Re-verify the bytes hash to the requested value before serving (§5).
     const verifyBuf = new Uint8Array(blob.bytes.length);
     verifyBuf.set(blob.bytes);
     const digest = await crypto.subtle.digest('SHA-256', verifyBuf);
-    if (base58Encode(new Uint8Array(digest)) !== hash) {
+    if (base58Encode(new Uint8Array(digest)) !== contentHash) {
       throw new UiError(500, -32603, 'stored media failed its content hash');
     }
     const outBuf = new Uint8Array(blob.bytes.length);
@@ -1394,7 +1404,7 @@ async function mediaRoute(
     return new Response(outBuf, {
       status: 200,
       headers: {
-        'Content-Type': blob.meta.content_type,
+        'Content-Type': ref ? MEDIA_EXT_TYPES[ref.ext] : blob.meta.content_type,
         'Content-Length': String(blob.meta.size),
         // Content-addressed and immutable, so cache hard.
         'Cache-Control': 'public, max-age=31536000, immutable',
@@ -1406,9 +1416,16 @@ async function mediaRoute(
     await requireAuth(bank, request, basePath);
     const body = await request.json() as Record<string, unknown>;
     const b64 = body.data_base64;
-    const contentType = typeof body.content_type === 'string' ? body.content_type : 'application/octet-stream';
     if (typeof b64 !== 'string' || b64.length === 0) {
       throw new UiError(400, -32602, 'data_base64 required');
+    }
+    // The uploader names the format: an `ext` directly, or a content_type it
+    // maps from. The response's `ref` is what docs should carry.
+    let ext = typeof body.ext === 'string' ? body.ext.toLowerCase() : '';
+    const contentType = typeof body.content_type === 'string' ? body.content_type : '';
+    if (!ext && contentType) ext = extForContentType(contentType) ?? '';
+    if (ext && !(ext in MEDIA_EXT_TYPES)) {
+      throw new UiError(400, -32602, `unsupported media ext: ${ext}`);
     }
     let bytes: Uint8Array;
     try {
@@ -1422,8 +1439,17 @@ async function mediaRoute(
     if (bytes.length > MEDIA_MAX_BYTES) {
       throw new UiError(413, -32000, `media exceeds ${MEDIA_MAX_BYTES} bytes`);
     }
-    const stored = await storeMedia(bank, bytes, contentType);
-    return json(201, { hash: stored, size: bytes.length, content_type: contentType });
+    const stored = await storeMedia(
+      bank,
+      bytes,
+      ext ? MEDIA_EXT_TYPES[ext] : (contentType || 'application/octet-stream'),
+    );
+    return json(201, {
+      hash: stored,
+      ref: ext ? `${stored}.${ext}` : stored,
+      size: bytes.length,
+      content_type: ext ? MEDIA_EXT_TYPES[ext] : (contentType || 'application/octet-stream'),
+    });
   }
 
   throw new UiError(405, -32601, 'method not allowed');

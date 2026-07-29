@@ -25,12 +25,15 @@ import {
   base58Decode,
   base58Encode,
   canonicalizeWithoutSig,
+  collectMediaRefs,
   genKeyPair,
   hashDoc,
+  MEDIA_EXT_TYPES,
   newUlid,
   publicKeyOf,
   signDoc,
   verifyPostTree,
+  type Post,
 } from '@barter.game/protocol';
 
 const BASE = Deno.env.get('BARTER_BASE') ?? 'https://barter-game-banks.ai-1st.deno.net';
@@ -229,6 +232,68 @@ any> {
     throw new Error(`${method} ${path}@${b.name}: ${data.code} ${data.message}`);
   }
   return data;
+}
+
+/* ------------------------------------------------------- media vault (§5) */
+
+/** Upload bytes to a bank's vault; returns the "<hash>.<ext>" ref. */
+async function uploadMedia(
+  user: User,
+  b: BankRef,
+  bytes: Uint8Array,
+  ext: string,
+): Promise<string> {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  const body = { data_base64: btoa(bin), ext };
+  const text = JSON.stringify(body);
+  const authdoc = {
+    pubkey: user.pubkey,
+    method: 'POST',
+    path: `/${b.name}/media`,
+    id: newUlid(),
+    ts: Date.now(),
+    body_sha256: await sha256Base58Str(text),
+  };
+  const sig = signDoc(authdoc, user.privateKey);
+  const token = `${b64url(new TextEncoder().encode(canonicalizeWithoutSig(authdoc)))}.${sig}`;
+  const res = await fetch(`${b.url}/media`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Barter-Auth': token },
+    body: text,
+  });
+  const data = await res.json();
+  if (data && typeof data.code === 'number' && data.code < 0) {
+    throw new Error(`media upload@${b.name}: ${data.code} ${data.message}`);
+  }
+  return data.ref as string;
+}
+
+async function uploadMediaFile(user: User, b: BankRef, path: string): Promise<string> {
+  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  if (!(ext in MEDIA_EXT_TYPES)) throw new Error(`unsupported media extension: .${ext}`);
+  return uploadMedia(user, b, Deno.readFileSync(path), ext);
+}
+
+/**
+ * Make bank `to` hold every media ref `tree` commits to, copying missing
+ * blobs from bank `from`. The accepting bank refuses a post whose blobs it
+ * does not hold (post-feed.md §5), so a cross-bank repost/reply starts here.
+ */
+async function copyTreeMedia(user: User, tree: Post, from: BankRef, to: BankRef): Promise<void> {
+  for (const ref of collectMediaRefs(tree)) {
+    const have = await fetch(`${to.url}/media/${ref}`);
+    await have.body?.cancel();
+    if (have.ok) continue;
+    const dl = await fetch(`${from.url}/media/${ref}`);
+    if (!dl.ok) throw new Error(`cannot copy ${ref} from ${from.name}`);
+    const bytes = new Uint8Array(await dl.arrayBuffer());
+    const dot = ref.lastIndexOf('.');
+    await uploadMedia(user, to, bytes, dot > 0 ? ref.slice(dot + 1) : 'png');
+    console.log(`  copied ${ref.slice(0, 16)}… ${from.name} → ${to.name}`);
+  }
 }
 
 /* ------------------------------------------------------------------ users */
@@ -611,16 +676,31 @@ async function cmdPost(
     voucher: voucherHash,
     body_md: text,
   };
-  // --icon / --square release new artwork for the voucher; the post text
-  // becomes its description. Issuer-only, enforced by the bank.
+  // --icon / --square release new artwork for the voucher; the files upload
+  // to the target bank's vault and the post carries their refs. The post text
+  // becomes the description. Issuer-only, enforced by the bank.
   if (opts.icon || opts.square) {
     post.voucher_meta = true;
-    if (opts.icon) post.icon_svg = Deno.readTextFileSync(opts.icon).trim();
-    if (opts.square) post.square_svg = Deno.readTextFileSync(opts.square).trim();
+    if (opts.icon) post.icon = await uploadMediaFile(user, b, opts.icon);
+    if (opts.square) post.square = await uploadMediaFile(user, b, opts.square);
+  }
+  // --attach adds feed images (comma-separated files), stored by hash.
+  if (opts.attach) {
+    const media: string[] = [];
+    for (const f of opts.attach.split(',')) media.push(await uploadMediaFile(user, b, f.trim()));
+    post.media = media;
   }
   const parentHash = opts.reply ?? opts.repost;
   if (parentHash) {
-    const parent = await rpc(user, b, 'get_post', { post_hash: parentHash });
+    // --from names the bank the parent lives at (defaults to the bank being
+    // posted to). A cross-bank embed drags its media refs along, so the
+    // blobs are copied to the target bank first — same rule the web app
+    // follows (post-feed.md §5).
+    const src = opts.from ? await bank(opts.from) : b;
+    const parent = await rpc(user, src, 'get_post', { post_hash: parentHash });
+    if (src.url !== b.url) {
+      await copyTreeMedia(user, parent as unknown as Post, src, b);
+    }
     post[opts.reply ? 'reply_to' : 'repost'] = parent;
   }
   post.sig = signDoc(post, user.privateKey);
@@ -856,7 +936,10 @@ try {
   balance  <handle@bank> <bankName> <accountHash>
   resolve  <handle@bank> <pubkey>
   post     <handle@bank> <voucherHash> "<text>" [--reply <hash>] [--repost <hash>] [--at <bank>]
-                                                 [--icon <file.svg>] [--square <file.svg>]
+                                                 [--from <bank>] [--attach <files,comma-sep>]
+                                                 [--icon <file>] [--square <file>]
+           icon/square/attach upload to the vault and post refs "<hash>.<ext>";
+           --from names the parent's bank for cross-bank reply/repost (blobs are copied over)
   meta     <handle@bank> <voucherHash>            (show the voucher's current meta)
   posts    <handle@bank> <authorPubkey> [voucherHash|all] [bankName]
   feed     <handle@bank> [voucherHash|all]

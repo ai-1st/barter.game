@@ -12,7 +12,9 @@ import {
   storeVoucher,
 } from '../db.ts';
 import {
+  collectMediaRefs,
   hashDoc,
+  mediaRefHash,
   newUlid,
   offerSideFromOrderSide,
   signDoc,
@@ -64,6 +66,14 @@ export async function submitDocs(
           throw new RpcError(-32000, 'voucher bank mismatch');
         }
         await verifyOrFail(raw, v.sig, v.pubkey);
+        // Images live in the vault, not the doc — the doc only carries refs,
+        // and the blobs must already be here (upload precedes the doc, same
+        // rule as post media, post-feed.md §5).
+        for (const ref of v.images ?? []) {
+          if (!(await hasMedia(bank, mediaRefHash(ref)))) {
+            throw new RpcError(-32005, `voucher image not stored at this bank: ${ref}`);
+          }
+        }
         const h = await storeVoucher(bank, v);
         if (!stored.includes(h)) stored.push(h);
         break;
@@ -131,8 +141,13 @@ export async function submitDocs(
         if (!verifyPostTree(p)) {
           throw new RpcError(-32001, 'embedded post signature invalid');
         }
-        for (const m of p.media ?? []) {
-          if (!(await hasMedia(bank, m))) {
+        // Every ref in the WHOLE embedded tree, not just the outer post: a
+        // repost/reply carries its ancestors, and serving a thread whose
+        // images 404 here would silently break exactly the posts a bank
+        // amplifies. This is also what makes cross-bank reposting explicit —
+        // the reposting client must copy the blobs over first (§5).
+        for (const m of collectMediaRefs(p)) {
+          if (!(await hasMedia(bank, mediaRefHash(m)))) {
             throw new RpcError(-32005, `media not stored at this bank: ${m}`);
           }
         }
@@ -151,6 +166,8 @@ export async function submitDocs(
         if (p.voucher_meta === true) {
           await putVoucherMeta(bank, {
             voucher: p.voucher,
+            icon: p.icon,
+            square: p.square,
             icon_svg: p.icon_svg,
             square_svg: p.square_svg,
             // The post's own text becomes the voucher's description.
