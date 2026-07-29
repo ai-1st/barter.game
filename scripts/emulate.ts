@@ -26,6 +26,7 @@ import {
   base58Encode,
   canonicalizeWithoutSig,
   collectMediaRefs,
+  extForContentType,
   genKeyPair,
   hashDoc,
   MEDIA_EXT_TYPES,
@@ -273,7 +274,10 @@ async function uploadMedia(
 
 async function uploadMediaFile(user: User, b: BankRef, path: string): Promise<string> {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-  if (!(ext in MEDIA_EXT_TYPES)) throw new Error(`unsupported media extension: .${ext}`);
+  // Own-key check: `in` would bless prototype keys like "constructor".
+  if (!Object.hasOwn(MEDIA_EXT_TYPES, ext)) {
+    throw new Error(`unsupported media extension: .${ext}`);
+  }
   return uploadMedia(user, b, Deno.readFileSync(path), ext);
 }
 
@@ -283,7 +287,9 @@ async function uploadMediaFile(user: User, b: BankRef, path: string): Promise<st
  * does not hold (post-feed.md §5), so a cross-bank repost/reply starts here.
  */
 async function copyTreeMedia(user: User, tree: Post, from: BankRef, to: BankRef): Promise<void> {
-  for (const ref of collectMediaRefs(tree)) {
+  const refs = collectMediaRefs(tree);
+  if (refs.length > 64) throw new Error('tree references too many media blobs to copy');
+  for (const ref of refs) {
     const have = await fetch(`${to.url}/media/${ref}`);
     await have.body?.cancel();
     if (have.ok) continue;
@@ -291,7 +297,13 @@ async function copyTreeMedia(user: User, tree: Post, from: BankRef, to: BankRef)
     if (!dl.ok) throw new Error(`cannot copy ${ref} from ${from.name}`);
     const bytes = new Uint8Array(await dl.arrayBuffer());
     const dot = ref.lastIndexOf('.');
-    await uploadMedia(user, to, bytes, dot > 0 ? ref.slice(dot + 1) : 'png');
+    // A legacy bare-hash ref carries no extension — derive it from the type
+    // the source served, never a guess.
+    const ext = dot > 0
+      ? ref.slice(dot + 1)
+      : extForContentType((dl.headers.get('Content-Type') ?? '').split(';')[0]);
+    if (!ext) throw new Error(`${ref} is not an image type the vault stores`);
+    await uploadMedia(user, to, bytes, ext);
     console.log(`  copied ${ref.slice(0, 16)}… ${from.name} → ${to.name}`);
   }
 }

@@ -686,7 +686,9 @@ export function parseMediaRef(
   if (dot <= 0 || dot === ref.length - 1) return null;
   const hash = ref.slice(0, dot);
   const ext = ref.slice(dot + 1).toLowerCase();
-  if (!(ext in MEDIA_EXT_TYPES)) return null;
+  // Own-key check, not `in`: a plain object inherits Object.prototype, so
+  // `in` would bless "constructor" or "__proto__" as extensions.
+  if (!Object.hasOwn(MEDIA_EXT_TYPES, ext)) return null;
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,60}$/.test(hash)) return null;
   return { hash, ext };
 }
@@ -718,8 +720,19 @@ export function collectMediaRefs(post: Post): MediaRef[] {
   return [...out];
 }
 
-/** Bank-policy cap on how many images a Voucher doc may carry. */
+/**
+ * Protocol-level cap on how many images a Voucher doc may carry — enforced by
+ * `validateVoucher` at every bank, so it must be documented, not policy
+ * (bank-schema.md §1.1).
+ */
 export const MAX_VOUCHER_IMAGES = 8;
+
+/**
+ * Protocol-level cap on `media` entries per post. A repost embeds its whole
+ * ancestor tree and the accepting bank checks (and a reposting client copies)
+ * every ref in it, so an uncapped list is a copy-amplification lever.
+ */
+export const MAX_POST_MEDIA = 12;
 
 /**
  * Maximum `reply_to`/`repost` nesting a validator will walk (post-feed.md §6:
@@ -765,6 +778,9 @@ export function validatePost(d: unknown, depth = 0): Post {
   if (b.media !== undefined) {
     if (!Array.isArray(b.media)) {
       throw new ValidationError('media must be an array');
+    }
+    if (b.media.length > MAX_POST_MEDIA) {
+      throw new ValidationError(`media: at most ${MAX_POST_MEDIA} per post`);
     }
     // Canonical form is "<hash>.<ext>"; a bare base58 hash remains valid so
     // that posts signed before extensions existed still verify when embedded.

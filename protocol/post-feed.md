@@ -36,6 +36,21 @@ interface Post extends BaseDoc {
 type MediaRef = string;    // "<base58(sha256(bytes))>.<ext>" — see §5
 ```
 
+**Legacy forms (normative).** Posts signed before media extensions existed
+carry `media` entries that are **bare base58 hashes** (no extension); such
+entries remain valid forever — signed docs are immutable, and any validator
+walking an embedded tree MUST accept them. Likewise, early meta releases used
+inline-SVG fields `icon_svg` / `square_svg` (bounded `<svg>` strings) instead
+of refs; the fields are deprecated in favor of `icon`/`square` but remain
+valid and still feed a release when the ref fields are absent.
+
+**Meta releases merge, artwork-wise.** A release that carries any artwork
+(`icon`/`square`, or the legacy inline fields) defines the voucher's look
+completely. A release that carries none is a **description update**: the bank
+keeps the current artwork (from the previous release, or the Voucher doc's
+own `images`) — otherwise a text-only release would silently strip a live
+currency of its face.
+
 Posts are ordinary content-addressed docs: canonicalized, hashed, signed by
 their author. Every post anchors to exactly one Voucher — the feed is the
 voucher's, not the author's. Like all signed docs a post is irrevocable; what a
@@ -217,9 +232,11 @@ scan (Deno KV: a reverse range, or an inverted-ULID key):
 - `post_by_author_voucher/<pubkey>/<voucher>/<ulid>` → hash — serves
   `list_posts(pubkey, voucher)`.
 
-Media blobs are stored in the vault by content hash alone (`media/<sha256>` →
-bytes); the extension lives in the ref, not the store, and names the
-Content-Type at serve time (§5). Blobs are served by the REST GET in §5. Endorsement signatures are
+Media blobs are stored in the vault keyed by content hash (`media/<sha256>` →
+bytes, plus size/chunking metadata and the upload-time content type). The
+ref's extension names the Content-Type for canonical `"<hash>.<ext>"` GETs;
+the recorded type serves legacy bare-hash GETs (§5). Blobs are served by the
+REST GET in §5. Endorsement signatures are
 indexed by their target post hash (`post_sig/<post_hash>/<sig_hash>`), exactly
 like `record_sig` for records, so `get_post_signatures` is a prefix scan.
 

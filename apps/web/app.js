@@ -545,14 +545,39 @@ async function uploadMediaFile(file) {
  */
 async function copyTreeMedia(post, sourceBankUrl) {
   const refs = collectMediaRefs(post);
+  if (refs.length > 64) throw new Error('This thread references too many attachments to copy');
+  // The parent's serving bank first, then every bank we know — a pre-existing
+  // embed may reference blobs its own bank never held (they live where the
+  // ORIGINAL post was stored), and content addressing makes any holder a
+  // valid source.
+  const known = await feedBanks().catch(() => []);
+  const sources = [sourceBankUrl, ...known.map(b => b.url)]
+    .filter(Boolean).filter((u, i, a) => a.indexOf(u) === i);
   for (const ref of refs) {
-    const ours = await fetch(mediaSrc(null, ref)).then(r => r.ok).catch(() => false);
+    const ours = await fetch(mediaSrc(null, ref))
+      .then(r => { if (r.body) r.body.cancel(); return r.ok; }).catch(() => false);
     if (ours) continue;
-    const res = await fetch(mediaSrc(sourceBankUrl, ref));
-    if (!res.ok) throw new Error(`Couldn't copy attachment ${ref.slice(0, 12)}… from its home bank`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const dot = ref.lastIndexOf('.');
-    await uploadMediaBytes(bytes, dot > 0 ? ref.slice(dot + 1) : 'png');
+    let copied = false;
+    for (const src of sources) {
+      try {
+        const res = await fetch(mediaSrc(src, ref));
+        if (!res.ok) { if (res.body) res.body.cancel(); continue; }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const dot = ref.lastIndexOf('.');
+        // A legacy bare-hash ref carries no extension — take the type the
+        // source actually served, never a guess.
+        const ext = dot > 0 ? ref.slice(dot + 1)
+          : EXT_BY_MIME[(res.headers.get('Content-Type') || '').split(';')[0].trim()];
+        if (!ext) throw new Error(`Attachment ${ref.slice(0, 12)}… is not an image type this bank stores`);
+        await uploadMediaBytes(bytes, ext);
+        copied = true;
+        break;
+      } catch (e) {
+        if (e && /is not an image type/.test(e.message || '')) throw e;
+        /* try the next source */
+      }
+    }
+    if (!copied) throw new Error(`Couldn't copy attachment ${ref.slice(0, 12)}… from any bank you know`);
   }
 }
 

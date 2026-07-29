@@ -1401,13 +1401,25 @@ async function mediaRoute(
     }
     const outBuf = new Uint8Array(blob.bytes.length);
     outBuf.set(blob.bytes);
+    // A legacy bare-hash blob serves the type recorded at upload — but only
+    // if that type is one the vault knowingly stores. Anything else (e.g. a
+    // text/html blob stored before uploads were gated) downgrades to
+    // octet-stream rather than becoming a page on the bank's origin.
+    const storedType = Object.values(MEDIA_EXT_TYPES).includes(blob.meta.content_type)
+      ? blob.meta.content_type
+      : 'application/octet-stream';
     return new Response(outBuf, {
       status: 200,
       headers: {
-        'Content-Type': ref ? MEDIA_EXT_TYPES[ref.ext] : blob.meta.content_type,
+        'Content-Type': ref ? MEDIA_EXT_TYPES[ref.ext] : storedType,
         'Content-Length': String(blob.meta.size),
         // Content-addressed and immutable, so cache hard.
         'Cache-Control': 'public, max-age=31536000, immutable',
+        // Belt and suspenders for a user-supplied-content origin: never let
+        // the browser sniff a different type, and never let an SVG (or any
+        // blob opened top-level) run script or touch this origin.
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
       },
     });
   }
@@ -1420,12 +1432,17 @@ async function mediaRoute(
       throw new UiError(400, -32602, 'data_base64 required');
     }
     // The uploader names the format: an `ext` directly, or a content_type it
-    // maps from. The response's `ref` is what docs should carry.
+    // maps from. Either way it must resolve to a type the vault knowingly
+    // stores — a caller-chosen Content-Type must never reach storage, or the
+    // unauthenticated GET becomes a way to host arbitrary pages (text/html)
+    // on the bank's origin. Own-key check: `in` would bless prototype keys
+    // like "constructor".
     let ext = typeof body.ext === 'string' ? body.ext.toLowerCase() : '';
     const contentType = typeof body.content_type === 'string' ? body.content_type : '';
     if (!ext && contentType) ext = extForContentType(contentType) ?? '';
-    if (ext && !(ext in MEDIA_EXT_TYPES)) {
-      throw new UiError(400, -32602, `unsupported media ext: ${ext}`);
+    if (!ext || !Object.hasOwn(MEDIA_EXT_TYPES, ext)) {
+      throw new UiError(400, -32602,
+        `unsupported media type — send ext or content_type for one of: ${Object.keys(MEDIA_EXT_TYPES).join(', ')}`);
     }
     let bytes: Uint8Array;
     try {
@@ -1439,16 +1456,12 @@ async function mediaRoute(
     if (bytes.length > MEDIA_MAX_BYTES) {
       throw new UiError(413, -32000, `media exceeds ${MEDIA_MAX_BYTES} bytes`);
     }
-    const stored = await storeMedia(
-      bank,
-      bytes,
-      ext ? MEDIA_EXT_TYPES[ext] : (contentType || 'application/octet-stream'),
-    );
+    const stored = await storeMedia(bank, bytes, MEDIA_EXT_TYPES[ext]);
     return json(201, {
       hash: stored,
-      ref: ext ? `${stored}.${ext}` : stored,
+      ref: `${stored}.${ext}`,
       size: bytes.length,
-      content_type: ext ? MEDIA_EXT_TYPES[ext] : (contentType || 'application/octet-stream'),
+      content_type: MEDIA_EXT_TYPES[ext],
     });
   }
 
