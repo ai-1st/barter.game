@@ -195,6 +195,7 @@ Four standalone e2e scripts run against a live server (start one first):
 | [`e2e-crossbank.ts`](./e2e-crossbank.ts) | Bilateral swap across two banks — co-located by default, or two separate deployments via `E2E_BANK_A_URL` / `E2E_BANK_B_URL` (`deno run --allow-net --allow-env ...`) |
 | [`e2e-reject.ts`](./e2e-reject.ts) | An uncoverable debit must reject the whole deal, not stall it |
 | [`e2e-replay.ts`](./e2e-replay.ts) | A replayed settle signature from another deal must be refused by the seen-chain |
+| [`e2e-federation.ts`](./e2e-federation.ts) | Two users on two SEPARATE deployments (e.g. Deno Deploy and AWS): registration on each, cross-boundary discovery and feeds, blob copy + repost, then a bilateral swap. Needs `E2E_BANK_A_URL` / `E2E_BANK_B_URL`; run it both ways round — either bank may coordinate |
 | [`e2e-posts.ts`](./e2e-posts.ts) | Voucher post feeds: write/read, `"all"` vs per-voucher, `before` pagination, reply/repost embedding, media upload + unauthenticated fetch, and the four rejections (unknown voucher, wrong sender, forged embedded ancestor, unstored media) |
 
 ## Known constraints
