@@ -2,18 +2,21 @@
 # Deploy the AWS banks: build the Lambda bundle, sam deploy, then sync the
 # static web client into the assets bucket and invalidate CloudFront.
 #
+# Usage: AWS_PROFILE=<profile> ./deploy.sh
+#
 # Prereqs:
 #   - AWS credentials for the target account (AWS_PROFILE or env)
-#   - bank keys in SSM:  aws ssm put-parameter --type SecureString \
-#       --name /barter/banks/alice --value "$(deno run apps/bank/genkey.ts | cut -d= -f2 | head -1)"
-#   - first run: sam deploy --guided (writes samconfig.toml)
+#   - bank keys in SSM, one SecureString per bank:
+#       aws ssm put-parameter --type SecureString --name /barter/banks/alice \
+#         --value "$(deno run ../bank/genkey.ts | grep PRIV | cut -d= -f2)"
+#   - stack/region settings live in samconfig.toml
 set -euo pipefail
 cd "$(dirname "$0")"
 
 STACK="${STACK_NAME:-barter-banks}"
 
 echo "==> build"
-npm run build >/dev/null 2>&1 || bun run build
+bun run build
 
 echo "==> sam deploy ($STACK)"
 sam deploy --stack-name "$STACK" "$@"
