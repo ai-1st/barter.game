@@ -1133,8 +1133,8 @@ async function renderWelcome(app) {
   const cfg = await fetchConfig().catch(() => null);
   app.innerHTML = `<div class="container welcome">
     <div class="logo-mark large"><span></span></div>
-    <h1>Be your own<br>bank.</h1>
-    <p class="lede">Mint a currency only you can issue — <b>1 logo</b>, <b>1 hour of consulting</b>, <b>1 home-cooked dinner</b> — and settle it with people who already trust you.</p>
+    <h1>Mint your own<br>currency.</h1>
+    <p class="lede">A currency only you can issue — <b>1 logo</b>, <b>1 hour of consulting</b>, <b>1 home-cooked dinner</b> — settled with people who already trust you.</p>
     ${cfg ? `<div class="bank-pill">
       <div class="ic">◈</div>
       <div>
