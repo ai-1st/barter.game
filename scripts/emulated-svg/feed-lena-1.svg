@@ -318,21 +318,23 @@
 
 <!-- ============ OILY RAG draped over the bench edge ============ -->
 <g>
-<path d="M 740 662 C 734 632 758 610 788 618 C 810 624 824 604 850 612 C 878 620 898 640 894 664 C 900 700 898 728 890 762 C 876 780 862 758 842 774 C 824 788 810 766 790 780 C 772 792 762 772 750 756 C 740 726 736 692 740 662 Z" fill="#3E5C76" stroke="#23201D" stroke-width="6"/>
-<path d="M 740 662 C 734 632 758 610 788 618 C 810 624 824 604 850 612 C 878 620 898 640 894 664 C 850 652 792 654 740 662 Z" fill="#FBF6EF" opacity="0.16"/>
-<path d="M 766 640 C 758 686 768 724 758 762" fill="none" stroke="#23201D" stroke-width="4" opacity="0.38"/>
-<path d="M 802 622 C 810 672 798 718 806 776" fill="none" stroke="#FBF6EF" stroke-width="4" opacity="0.3"/>
-<path d="M 848 618 C 840 668 854 712 846 772" fill="none" stroke="#23201D" stroke-width="4" opacity="0.32"/>
-<path d="M 880 644 C 886 690 876 724 884 760" fill="none" stroke="#FBF6EF" stroke-width="4" opacity="0.22"/>
+<path d="M 740 668 C 734 636 756 614 786 622 C 806 628 822 606 850 616 C 878 626 896 646 890 668 C 894 700 890 722 884 748 Q 866 764 846 756 Q 824 748 810 766 L 794 802 C 786 782 774 770 758 758 C 746 744 738 700 740 668 Z" fill="#3E5C76" stroke="#23201D" stroke-width="6"/>
+<path d="M 740 668 C 734 636 756 614 786 622 C 806 628 822 606 850 616 C 878 626 896 646 890 668 C 848 656 788 660 740 668 Z" fill="#FBF6EF" opacity="0.16"/>
+<path d="M 762 644 C 756 686 764 716 756 744" fill="none" stroke="#23201D" stroke-width="4" opacity="0.38"/>
+<path d="M 800 630 C 808 674 796 714 800 764" fill="none" stroke="#FBF6EF" stroke-width="4" opacity="0.3"/>
+<path d="M 844 622 C 836 668 850 704 848 752" fill="none" stroke="#23201D" stroke-width="4" opacity="0.32"/>
+<path d="M 876 650 C 882 690 876 718 882 744" fill="none" stroke="#FBF6EF" stroke-width="4" opacity="0.22"/>
+<path d="M 803 770 L 796 794" fill="none" stroke="#23201D" stroke-width="3.5" opacity="0.35"/>
 <g stroke="#FBF6EF" stroke-width="2.4" opacity="0.22">
-<path d="M 756 682 l 16 -7"/><path d="M 780 736 l 16 -7"/><path d="M 818 656 l 16 -7"/>
-<path d="M 862 692 l 16 -7"/><path d="M 836 712 l 14 -6"/>
+<path d="M 754 686 l 16 -7"/><path d="M 812 730 l 16 -7"/><path d="M 822 650 l 16 -7"/>
+<path d="M 862 688 l 14 -6"/><path d="M 782 706 l 14 -6"/>
 </g>
-<path d="M 792 706 C 800 690 826 686 842 696 C 856 706 850 724 832 728 C 812 732 794 722 792 706 Z" fill="#E4753A" opacity="0.75"/>
-<path d="M 858 730 C 872 722 886 732 880 744 C 872 754 854 746 858 730 Z" fill="#23201D" opacity="0.4"/>
-<path d="M 770 744 C 780 738 790 746 784 756 C 776 764 764 754 770 744 Z" fill="#23201D" opacity="0.35"/>
-<circle cx="822" cy="748" r="5" fill="#F0B429" opacity="0.5"/>
-<circle cx="864" cy="668" r="4" fill="#F0B429" opacity="0.4"/>
+<path d="M 772 692 C 768 676 786 664 806 668 C 820 671 826 682 838 684 C 850 687 848 702 836 708 C 822 715 806 710 794 714 C 782 718 774 706 772 692 Z" fill="#E4753A" opacity="0.75"/>
+<path d="M 762 718 C 770 712 778 720 772 727 C 766 732 758 725 762 718 Z" fill="#E4753A" opacity="0.6"/>
+<path d="M 848 706 C 862 698 876 708 870 720 C 862 730 844 722 848 706 Z" fill="#23201D" opacity="0.4"/>
+<path d="M 776 734 C 786 728 794 736 788 746 C 780 754 770 744 776 734 Z" fill="#23201D" opacity="0.32"/>
+<circle cx="838" cy="734" r="5" fill="#F0B429" opacity="0.5"/>
+<circle cx="866" cy="662" r="4" fill="#F0B429" opacity="0.35"/>
 </g>
 
 <!-- ============ WHEEL leaning on the bench ============ -->

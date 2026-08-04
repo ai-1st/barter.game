@@ -9,6 +9,7 @@ import {
   publicKeyOf,
   sha256Base58,
   signDoc,
+  validatePost,
   verifyDoc,
   verifyPostTree,
 } from './protocol.js';
@@ -432,6 +433,11 @@ async function loadFeed(voucherFilter, limit = 30) {
     try { hash = hashDoc(p); } catch { return; }
     if (byHash.has(hash)) return;
     // Fail closed: an unverifiable post is dropped, not rendered with a warning.
+    // Shape is checked as well as signature — a signature only proves the
+    // author meant those bytes, not that `voucher` is a hash rather than an
+    // array of markup. This is the same validator the bank applies on intake,
+    // so an honest bank cannot be storing anything this rejects.
+    try { validatePost(p); } catch { return; }
     try { if (!verifyPostTree(p)) return; } catch { return; }
     byHash.set(hash, { post: p, bankUrl: src });
   });
