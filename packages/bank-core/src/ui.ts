@@ -1293,7 +1293,7 @@ function webManifest(bank: Bank, basePath: string): Record<string, unknown> {
     id: root,
     name: `barter.game — ${bank.name}`,
     short_name: 'barter.game',
-    description: 'Federated mutual-credit ledger. Be your own bank.',
+    description: 'Federated mutual-credit ledger. Mint your own currency.',
     start_url: root,
     scope: root,
     display: 'standalone',

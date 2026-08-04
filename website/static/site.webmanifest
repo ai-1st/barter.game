@@ -1,7 +1,7 @@
 {
   "name": "barter.game",
   "short_name": "barter.game",
-  "description": "A federated mutual-credit ledger. Be your own bank.",
+  "description": "A federated mutual-credit ledger. Mint your own currency.",
   "start_url": "/",
   "display": "browser",
   "theme_color": "#3D34D6",
